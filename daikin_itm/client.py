@@ -1871,6 +1871,16 @@ class _Session:  # pylint: disable=too-many-public-methods
         finally:
             await self.close_screen(s)
 
+    async def select_row(self, screen: int, part: int, row: int) -> Reply:
+        """Select a list row, as the browser does.
+
+        A list sends its selection as an array of rows (the web UI's
+        onSelectedMultiItem); the iTM ignores a plain number there.
+        """
+        return await self.send(
+            screen, part, EventType.CLICK, DataType.INTARRAY, 1, array=(row,)
+        )
+
     async def _select_listed(
         self, screen: int, part: int, column: int, name: str, what: str
     ) -> None:
@@ -1879,9 +1889,7 @@ class _Session:  # pylint: disable=too-many-public-methods
         if row is None:
             msg = f"{what}: {name!r} not found"
             raise ItmCommandError(msg)
-        await self.send(
-            screen, part, EventType.CLICK, DataType.INTARRAY, 1, array=(row,)
-        )
+        await self.select_row(screen, part, row)
 
     async def _click_enabled(self, screen: int, part: int, what: str) -> Reply:
         """Click a button, but never one the iTM reports disabled (that hangs it)."""

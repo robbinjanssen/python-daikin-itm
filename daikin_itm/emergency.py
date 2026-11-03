@@ -108,7 +108,7 @@ def _row(names: list[str], name: str, what: str) -> int:
 
 
 async def _select(s: _Session, screen: int, part: int, row: int) -> None:
-    await s.send(screen, part, EventType.CLICK, DataType.INT, row)
+    await s.select_row(screen, part, row)
 
 
 async def _open(s: _Session) -> None:

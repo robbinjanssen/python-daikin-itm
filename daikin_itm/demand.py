@@ -424,7 +424,7 @@ async def _click(s: _Session, screen: int, part: int, what: str) -> Reply:
 
 async def _select(s: _Session, screen: int, part: int, row: int) -> None:
     """Select a list row (a display choice, like a tap in the browser)."""
-    await s.send(screen, part, EventType.CLICK, DataType.INT, row)
+    await s.select_row(screen, part, row)
 
 
 async def _close(s: _Session, screen: int, part: int) -> None:

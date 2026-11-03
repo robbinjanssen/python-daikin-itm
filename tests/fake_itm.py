@@ -192,6 +192,32 @@ class FakeGroup:
     reference: int = 2  # 0 fixed, 1 operating, 2 average
 
 
+# Lists of the dealer-option, demand, emergency stop and service screens, by (screen,
+# part): their fakes read a selected row as a number, translated from INTARRAY.
+ROW_LISTS = {
+    (3301, 1),
+    (3307, 2),
+    (3308, 2),
+    (3309, 2),
+    (3311, 2),
+    (3311, 8),
+    (1514, 2),
+    (200, 2),
+    (201, 1),
+    (203, 2),
+    (203, 8),
+    (400, 3),
+    (500, 3),
+    (503, 1),
+    (600, 2),
+    (900, 1),
+    (902, 2),
+    (902, 10),
+    (904, 1),
+    (3100, 2),
+    (1517, 2),
+}
+
 # A history row: time, kind, number, content, name, source, port, address, id, code.
 HISTORY_ROWS: list[list[str]] = [
     [
@@ -605,7 +631,16 @@ class FakeITM:  # pylint: disable=too-many-instance-attributes
         if ev["event"] == 10:  # logout
             self.session = None
             return self._reply(None, [])
-        return self._reply(self.session, self._event(ev))
+        return self._reply(self.session, self._list_or_event(ev))
+
+    def _list_or_event(self, ev: dict[str, Any]) -> list[Update]:
+        if ev["event"] == 1 and (ev["screen"], ev["part"]) in ROW_LISTS:
+            # A list takes its selection as INTARRAY (the web UI's
+            # onSelectedMultiItem); the real iTM ignores a plain INT there.
+            if ev["dtype"] != 8 or not ev["array"]:
+                return []
+            ev = {**ev, "dtype": 1, "number": ev["array"][0]}
+        return self._event(ev)
 
     def _login(self, s: str) -> str:
         n = int(s[:4])

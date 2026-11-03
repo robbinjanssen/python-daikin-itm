@@ -33,7 +33,6 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from .exceptions import ItmCommandError
 from .menu import MenuScreen
-from .protocol import DataType, EventType
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -193,7 +192,7 @@ async def _cancel(s: _Session, screen: int, cancel: int, what: str) -> None:
 async def _read_attributes(s: _Session, point: PointRegistration) -> PointAttributes:
     """Select a point, open its attributes with Edit, read them, Cancel."""
     what = f"read the attributes of {point.name!r}"
-    await s.send(REGISTRY, RG_LIST, EventType.CLICK, DataType.INT, point.row)
+    await s.select_row(REGISTRY, RG_LIST, point.row)
     before = set(s.state.screens)
     reply = await _click(s, REGISTRY, RG_EDIT, what)
     opened = [u.screen for u in reply.screens if u.update == "OPEN"]

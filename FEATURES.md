@@ -27,7 +27,7 @@ live); and the °F and decimal comma display settings (the date format and 12-ho
 clock are validated live). Pre-cool/pre-heat, time and management point parts of
 screen 7 belong to schedule events, not to a unit.
 
-172 screens, each counted by its best status (read or write). Covered: 136 (validated on a real iTM: 78, dry run only: 0, simulated iTM only: 58); probed only: 0; needs a licence or another iTM: 0; out of scope: 36; not covered: 0.
+172 screens, each counted by its best status (read or write). Covered: 139 (validated on a real iTM: 81, dry run only: 0, simulated iTM only: 58); probed only: 0; needs a licence or another iTM: 0; out of scope: 33; not covered: 0.
 
 | Screen | Class | Read | Write | Notes |
 | ---: | :---- | :--: | :---: | :---- |
@@ -130,16 +130,16 @@ screen 7 belong to schedule events, not to a unit.
 | 2700 | `ScSysInspection` | V | V | maintenance flags |
 | 2800 | `ScMngMain` | V | X | service: management point data registration list (read only, validated; writes out of scope) |
 | 2801 | `ScMngTypeSelection` | - | X | service: management point data registration (installer) |
-| 2802 | `ScMngSettingIndoor` | - | X | service: management point data registration (installer) |
+| 2802 | `ScMngSettingIndoor` | V | X | service: an indoor unit's registration (read only with details, validated; writes out of scope) |
 | 2803 | `ScMngSettingOutdoor` | - | X | service: management point data registration (installer) |
-| 2804 | `ScMngSettingHrvChiller` | - | X | service: management point data registration (installer) |
+| 2804 | `ScMngSettingHrvChiller` | V | X | service: a ventilation unit's registration (read only with details, validated; writes out of scope) |
 | 2805 | `ScMngSettingDi` | - | X | service: management point data registration (installer) |
 | 2806 | `ScMngSettingD3DiDio` | - | X | service: management point data registration (installer) |
 | 2807 | `ScMngSettingExternalDi` | - | X | service: management point data registration (installer) |
 | 2808 | `ScMngSettingExternalDio` | - | X | service: management point data registration (installer) |
 | 2809 | `ScMngSettingExternalAi` | - | X | service: management point data registration (installer) |
 | 2810 | `ScMngSettingExternalAo` | - | X | service: management point data registration (installer) |
-| 2811 | `ScMngSettingPseudoAi` | - | X | service: management point data registration (installer) |
+| 2811 | `ScMngSettingPseudoAi` | V | X | service: an internal analog input's registration (read only with details, validated; writes out of scope) |
 | 2812 | `ScMngSettingPi` | - | X | service: management point data registration (installer) |
 | 2813 | `ScMngSettingExternalPi` | - | X | service: management point data registration (installer) |
 | 2814 | `ScMngSettingPseudoPi` | - | X | service: management point data registration (installer) |

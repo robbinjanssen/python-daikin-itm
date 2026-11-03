@@ -295,7 +295,7 @@ async def _open_sub(s: _Session, screen: int, button: int, sub: int, what: str) 
 
 
 async def _select(s: _Session, screen: int, part: int, row: int) -> None:
-    await s.send(screen, part, EventType.CLICK, DataType.INT, row)
+    await s.select_row(screen, part, row)
 
 
 async def _select_rows(s: _Session, screen: int, part: int, rows: list[int]) -> None:

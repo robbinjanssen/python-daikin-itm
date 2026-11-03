@@ -648,8 +648,8 @@ def _row_holding(rows: list[tuple[str, ...]], name: str, what: str) -> int:
 
 
 async def _select(s: _Session, screen: int, part: int, row: int) -> None:
-    """Select a row of a single-select list (CLICK + INT, as the browser)."""
-    await s.send(screen, part, EventType.CLICK, DataType.INT, row)
+    """Select a list row."""
+    await s.select_row(screen, part, row)
 
 
 async def _select_multi(s: _Session, screen: int, part: int, row: int) -> None:

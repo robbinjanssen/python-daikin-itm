@@ -96,7 +96,9 @@ class FakeRegistryITM(FakeITM):  # pylint: disable=too-many-instance-attributes
         if part in FORBIDDEN:
             self._refuse(REGISTRY, part, "never pressed by a read")
         if part == 1 and ev["dtype"] == 1:
-            self.rg_selected = ev["number"]
+            return [("UPDATE", REGISTRY, [], [])]  # the real iTM ignores a plain number
+        if part == 1 and ev["dtype"] == 8 and ev["array"]:
+            self.rg_selected = ev["array"][0]
             return [("UPDATE", REGISTRY, [], [(5, "ENABLED", 1)])]
         if part == 5:
             if self.rg_selected is None:
