@@ -43,7 +43,7 @@ def test_login_reply_decodes_completely() -> None:
         for p in s.parts
         if p.type == "ICONPANEL"
     )
-    assert [i[0] for i in icons["icons"]][:3] == ["Building", "Server room", "Offices"]
+    assert [i[0] for i in icons["icons"]][:3] == ["Building", "Zone 1", "Zone 2"]
 
 
 def test_truncated_tail_is_tolerated() -> None:
@@ -93,20 +93,20 @@ def test_units_from_captured_session() -> None:
         if x["tag"].startswith("unit "):
             u = unit_from_panel(state)
             units[u.name] = u
-    assert len(units) == 16
+    assert len(units) == 12
     u = units["1:1-00"]
     assert (u.power, u.running, u.setpoint, u.room_temperature, u.mode) == (
         "Start",
         True,
-        21,
-        20.4,
-        "heat",
+        23,
+        22.4,
+        "cool",
     )
-    assert units["1:1-02"].running is False
-    assert units["1:1-02"].mode == "cool"
-    assert units["1:1-10"].setback
-    assert units["1:1-10"].power == "SB Laag"
-    assert units["1:1-04"].setpoint_range == (20, 21, 22, 23, 24, 25)
+    assert units["1:1-01"].running is False
+    assert units["1:1-01"].mode == "heat"
+    assert units["1:1-03"].setback
+    assert units["1:1-03"].power == "SB Low"
+    assert units["1:1-06"].setpoint_range == (16, 17, 18, 19, 20, 21, 22, 23, 24)
 
 
 def test_poll_reply_decodes() -> None:

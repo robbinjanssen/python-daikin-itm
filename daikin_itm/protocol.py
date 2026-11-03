@@ -73,6 +73,14 @@ class DataType(IntEnum):
     NONE = 0
     INT = 1
     STRING = 2
+    FLOAT = 4  # a number input: [integer part, thousandths]
+    INTARRAY = 8  # a list selection: the selected rows
+    SETTEMP_C = 16  # a temperature input in °C: [integer part, thousandths]
+    SETTEMP_F = 32  # a temperature input in °F
+    TIME = 64  # a date/time input: [year, month 0-11, day, hour, minute, second]
+    DATE = 128  # a date input: [year, month 0-11, day]
+    HOURMIN = 256  # a time of day input: [hour, minute]
+    IPADDRESS = 512  # an IP address input: the four numbers
 
 
 class ScreenID(IntEnum):
@@ -85,6 +93,9 @@ class ScreenID(IntEnum):
     OPERATION = 4
     SETTINGS = 7  # "Gedetailleerde instellingen" dialog, from the operation panel
     DETAILS = 9  # "Gedetailleerde info": name, ID, type, port, address, description
+    ERROR_INFORMATION = (
+        10  # from the main menu bar's error button, while an error is on
+    )
     LOGIN = 1203
 
 
