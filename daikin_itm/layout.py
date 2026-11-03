@@ -5,7 +5,7 @@ place of the icon or list view, and its "Standaard scherm" (part 1) shows the
 standard view again; that is how the browser switches between them (the two are
 toggle buttons on the main menu bar). The layout view's parts: 0 the title, 1 the
 layout panel (PNTLAYOUT and PNTLAYOUT_STATE), 2 the list of linked layout screens,
-3 Terug (back to the parent layout screen), 4 the legend, 5-9 the operation window
+3 Back (to the parent layout screen), 4 the legend, 5-9 the operation window
 labels and buttons.
 
 A layout panel item is an icon (a management point, by its icon ID, mode and size)
@@ -17,7 +17,7 @@ read for its name, like the icon view does.
 
 Seen on a real iTM (read only): the main menu bar's part 2 is hidden (VISIBLED 0)
 but opens the layout view; without a configured layout it shows an empty screen
-switch list, Terug disabled (ENABLED 0), the labels "Bedieningsvenst." and "Open",
+switch list, Back disabled (ENABLED 0), the labels "Operation Window" and "Unlock",
 and no layout panel. Assumed (not seen on a real iTM): a configured layout sends
 its panel as PNTLAYOUT on opening, and selecting an icon fills the operation panel.
 """
@@ -72,7 +72,7 @@ class Layout:
     image: str | None = None  # the background image's name, as sent
     items: tuple[LayoutItem, ...] = ()
     screens: tuple[str, ...] = ()  # the screen switch list's entries
-    back_enabled: bool | None = None  # Terug: only within a linked screen
+    back_enabled: bool | None = None  # Back: only within a linked screen
 
     @property
     def points(self) -> tuple[LayoutItem, ...]:

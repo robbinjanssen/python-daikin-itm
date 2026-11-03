@@ -38,7 +38,7 @@ POINTS, POINT_SETTINGS = MenuScreen.POINTS, MenuScreen.POINT_SETTINGS
 ZN_LIST, ZN_ADD, ZN_DELETE, ZN_MEMBERS, ZN_SETTINGS, ZN_MOVE = 4, 6, 7, 8, 9, 10
 MB_LIST, MB_ADD, MB_REMOVE, MB_AVAILABLE, MB_OK, MB_CANCEL = 2, 7, 8, 11, 12, 13
 MB_UP, MB_DOWN, MB_JUMP = 3, 4, 5
-# Member order (1602, "Volgorde Instellen", opened by the member list's Jump): the
+# Member order (1602, the order setup screen, opened by the member list's Jump): the
 # members' list, OK (hands the order back to 1601), Cancel.
 ORDER, OR_LIST, OR_OK, OR_CANCEL = 1602, 1, 2, 3
 MV_LIST, MV_OK, MV_CANCEL = 4, 5, 6

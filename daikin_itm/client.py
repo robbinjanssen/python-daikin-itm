@@ -2416,8 +2416,8 @@ class _Session:  # pylint: disable=too-many-public-methods
     async def create_schedule(self, name: str) -> None:
         """Press Add, rename the new program, OK (and confirm).
 
-        The iTM opens the editor on a new, disabled program without events ("Nieuw
-        Schema 001"); nothing exists until OK.
+        The iTM opens the editor on a new, disabled program without events (with a
+        default name); nothing exists until OK.
         """
         await self.open_menu_screen(MB_SCHEDULE, MenuScreen.SCHEDULE)
         e = MenuScreen.SCHEDULE_EDITOR
@@ -2945,7 +2945,7 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
 
     @asynccontextmanager
     async def _own_session(self) -> AsyncIterator[_Session]:
-        """Log in through the login screen's "Gebr Instell" into 1205 (own settings).
+        """Log in through the login screen's "User Settings" into 1205 (own settings).
 
         Leaving 1205 ends the session (or, if the iTM keeps it, a logout does).
         """
@@ -5417,7 +5417,7 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
             await self._system_write(lambda s: s.set_language(code))
         except SessionEnded:
             # The language belongs to the logged-in web user: once it changes, the
-            # iTM ends that user's session ("Webgebr. is verwijderd of gewijzigd").
+            # iTM ends that user's session ("web user deleted or changed").
             if self.dry_run:
                 raise
         if self.dry_run:

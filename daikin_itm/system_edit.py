@@ -534,9 +534,9 @@ async def set_remote_management(
 
 # -- the logged-in user's own settings (1205) ----------------------------------------
 #
-# Seen on a real iTM: the login screen (1203) has a second button next to "Aanmelden"
-# (part 5, "Gebr Instell"); pressed without credentials it answers "Kan niet
-# aanmelden". Everything else here follows the web UI's script.js and is tested
+# Seen on a real iTM: the login screen (1203) has a second button next to "Login"
+# (part 5, "User Settings"); pressed without credentials it answers "Cannot log
+# in". Everything else here follows the web UI's script.js and is tested
 # against the simulated iTM only: ScMainLogin.onClick sends the same payload (name
 # length, name, SHA-256 of the password) for both its buttons, so part 5 logs in
 # straight into ScWebUserSetup (1205). Assumed, not seen: that 1205 opens on that
@@ -546,7 +546,7 @@ async def set_remote_management(
 
 
 async def open_own_settings(s: _Session, username: str, password: str) -> None:
-    """Log in through the login screen's "Gebr Instell": it opens 1205.
+    """Log in through the login screen's "User Settings": it opens 1205.
 
     ``s`` is a fresh session that is not logged in. The credentials are sent like
     the browser sends them (the password only as its SHA-256 digest).
