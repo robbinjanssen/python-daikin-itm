@@ -253,10 +253,7 @@ def _refuse_dialogs(reply: Reply, what: str) -> None:
 
 async def _click(s: _Session, screen: int, part: int, what: str) -> Reply:
     """Click a part, never one the iTM reports disabled (that hangs it)."""
-    if s.state.get(screen, part, "ENABLED") == 0:
-        msg = f"{what}: the iTM has this button disabled"
-        raise ItmCommandError(msg)
-    return await s.send(screen, part)
+    return await s.click(screen, part, what)
 
 
 async def _write_enabled(

@@ -77,12 +77,12 @@ EVENTS = MenuScreen.SCHEDULE_EVENTS
 EVENT = MenuScreen.SCHEDULE_EVENT
 PICKER = 110  # ScSchPntAreaSel: the point/zone picker of an event
 
-# Event list (107): add, delete, OK and Cancel.
+# Event list (107).
 EV_ADD, EV_DELETE, EV_OK, EV_CANCEL = 5, 7, 9, 10
-# Event screen (109): OK, the time and target "change" buttons, the setpoint input.
+# Event screen (109).
 EVT_OK, EVT_TIME_BUTTON, EVT_TARGET_BUTTON, EVT_SETPOINT_BUTTON = 5, 44, 47, 23
 EVT_FAN_UP = 29
-# Picker (110): its tab (0 points, 1 zones), the two lists, OK and Cancel.
+# Picker (110): tab 0 is points, 1 zones.
 PK_TAB, PK_POINTS, PK_ZONES, PK_OK, PK_CANCEL = 1, 2, 5, 3, 4
 # Editor (104): special day rename, and the calendar rule controls.
 SE_SPECIAL_RENAME = 103
@@ -118,7 +118,7 @@ class EventSpec:  # pylint: disable=too-many-instance-attributes
 
     time: str  # "HH:MM"
     target: str  # a management point (e.g. "1:1-09") or a zone name
-    zone: bool = False  # the target is a zone, not a point
+    zone: bool = False
     power: PowerState | None = None  # ON, OFF, SETBACK_LOW or SETBACK_HIGH
     mode: str | None = None
     setpoint: float | None = None  # °C
@@ -759,7 +759,7 @@ async def delete_calendar_rule(s: _Session, program: str, rule: CalendarRule) ->
 SCH_COPY, SCH_CALENDAR_COPY = 9, 12
 SE_COPY_DAY, SE_CLEAR_DAY, SE_COPY_SPECIAL, SE_CLEAR_SPECIAL = 71, 72, 100, 101
 EV_COPY = 6
-# Day copy (108) and calendar copy (106): the target list, OK and Cancel.
+# Day copy (108) and calendar copy (106).
 DAY_COPY, DC_TARGETS, DC_OK, DC_CANCEL = 108, 4, 5, 6
 CALENDAR_COPY, CC_TARGETS, CC_OK, CC_CANCEL = 106, 4, 15, 16
 

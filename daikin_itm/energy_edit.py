@@ -72,8 +72,7 @@ EQ_FROM, EQ_TO, EQ_TARGET_TEXT = 2, 5, 8
 ST_OK = 3
 # The energy type list (3205) and group list (3207): (3204 button, list screen).
 LISTS = {False: (en.DS_TYPES, en.TYPE_LIST), True: (en.DS_GROUPS, en.GROUP_LIST)}
-# Rule copy (False) and calendar copy (True): the rule list's button, the screen, its
-# source text, target list, OK and Cancel.
+# Rule copy (False) and calendar copy (True).
 COPIES = {
     False: (en.RL_COPY, en.COPY_SELECT, en.CS_FROM, en.CS_LIST, en.CS_OK, en.CS_CANCEL),
     True: (
@@ -112,9 +111,7 @@ class ActualChange:
 
 
 def _ensure_enabled(s: _Session, screen: int, part: int, what: str) -> None:
-    if s.state.get(screen, part, "ENABLED") == 0:
-        msg = f"{what}: the iTM does not offer this here"
-        raise ItmCommandError(msg)
+    s.refuse_disabled(screen, part, what)
 
 
 async def _number(
@@ -723,7 +720,23 @@ async def copy_rule(  # pylint: disable=too-many-locals
         raise ItmCommandError(msg)
     try:
         await _select_rule(s, await _rule_list(s), name)
-        await en.open_below(s, en.RULES, button, screen)
+        reply = await en.click(s, en.RULES, button, label)
+        prompts = [
+            u
+            for u in reply.screens
+            if u.update == "DLG_OPEN" and u.data[1] == "CHARINPUT"
+        ]
+        if prompts:
+            await s.send(prompts[0].screen, prompts[0].data[0], EventType.CLICK2)
+            msg = (
+                f"{label}: the iTM asks for a new rule's name instead; copying to a "
+                "new rule is not supported yet"
+            )
+            raise ItmCommandError(msg)
+        await s.wait_for_progress(reply)
+        if screen not in s.state.screens:
+            msg = f"{label}: screen {screen} did not open: {reply.dialogs()}"
+            raise ItmCommandError(msg)
         shown = html.unescape(str(s.state.get(screen, source, "TEXT") or "")).strip()
         if shown and shown != name.strip():
             msg = f"{label}: the copy screen copies from {shown!r}"
@@ -776,9 +789,13 @@ async def _enter_time(s: _Session, button: int, value: str, what: str) -> None:
 
 
 async def _check(s: _Session, screen: int, part: int, *, on: bool, what: str) -> None:
-    """Tick or untick a checkbox (a click only when it differs)."""
+    """Tick or untick a checkbox, only when it differs.
+
+    A checkbox takes its new state as a number; the iTM ignores a plain click.
+    """
     if (s.state.get(screen, part, "CHECK_STATE") == 1) != on:
-        await en.click(s, screen, part, what)
+        s.refuse_disabled(screen, part, what)
+        await s.send(screen, part, EventType.CLICK, DataType.INT, int(on))
 
 
 async def _enter_range(s: _Session, r: en.RuleRange) -> None:
@@ -915,7 +932,8 @@ async def set_room_temperature(
 
     The point's row is selected, then the return air temperature's radio button or
     (analog_point named) the analog input's, whose input is picked in 3222 (OK
-    there hands it back); Change applies it to the row and OK saves.
+    there hands it back); Change applies it to the row and OK saves. A dry run
+    plans the input's OK and the Change instead of sending them.
 
     Returns
     -------
@@ -936,12 +954,19 @@ async def set_room_temperature(
             await en.open_below(s, rt, en.RT_ANALOG_BUTTON, en.ANALOG_SELECT)
             row = _row_named(s.state, en.ANALOG_SELECT, en.AS_LIST, analog_point)
             await en.select_row(s, en.ANALOG_SELECT, en.AS_LIST, row)
-            reply = await en.click(s, en.ANALOG_SELECT, en.AS_OK, label)
-            await s._answer_confirm(en.ANALOG_SELECT, reply)
+            reply = await s.write(
+                f"{label}: analog input {analog_point}", en.ANALOG_SELECT, en.AS_OK
+            )
+            if reply is None:
+                await en.close(s, en.ANALOG_SELECT, en.AS_CANCEL)
+            else:
+                await s._answer_confirm(en.ANALOG_SELECT, reply)
             if en.ANALOG_SELECT in s.state.screens:
                 msg = f"{label}: the analog input selection did not close"
                 raise ItmCommandError(msg)
-        await s._answer_confirm(rt, await en.click(s, rt, en.RT_APPLY, label))
+        reply = await s.write(f"apply {label}", rt, en.RT_APPLY)
+        if reply is not None:
+            await s._answer_confirm(rt, reply)
         return await _press_ok(s, label, rt, en.RT_OK, en.RT_CANCEL)
     finally:
         await en.leave_installer(s)

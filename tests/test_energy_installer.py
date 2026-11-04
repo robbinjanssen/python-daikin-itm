@@ -194,10 +194,25 @@ async def test_guard_dry_run_and_read_only(itm: FakeEnergyMoreITM) -> None:
     for call in calls:
         assert await call(dry) is None
     assert [p.split(":")[0] for p in dry.planned] == [
+        "apply room temperature of AC1",
         "room temperature of AC1",
         "collection start month Feb",
         "save energy conversion",
     ]
+    applied = {(3221, 8), (3222, 3)}
+    assert not applied & {(r["screen"], r["part"]) for r in itm.requests}
+    dry.planned.clear()
+    assert (
+        await dry.set_energy_room_temperature(PASSWORD, "AC1", analog_point="AI 2")
+        is None
+    )
+    assert [p.split(":")[0] for p in dry.planned] == [
+        "room temperature of AC1",
+        "apply room temperature of AC1",
+        "room temperature of AC1",
+    ]
+    assert not applied & {(r["screen"], r["part"]) for r in itm.requests}
+    assert itm.room_temp["AC1"] is None
     assert itm.saved == []
     assert saves(itm) == []
     assert_closed(itm)
@@ -234,7 +249,7 @@ async def test_installer_write_refusals(itm: FakeEnergyMoreITM) -> None:
         lambda: c.set_energy_conversion(
             PASSWORD, ConversionType(), allow_service_change=True
         ),
-        "does not offer",
+        "has this disabled",
     )
     await write(
         lambda: c.set_energy_conversion(
@@ -247,7 +262,7 @@ async def test_installer_write_refusals(itm: FakeEnergyMoreITM) -> None:
         lambda: c.set_energy_collection_start(
             PASSWORD, "May", allow_service_change=True
         ),
-        "does not offer",
+        "has this disabled",
     )
     itm.disabled = set()
     original = itm._analog_event

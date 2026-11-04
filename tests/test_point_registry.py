@@ -147,9 +147,6 @@ def test_fake_refuses_forbidden(itm: FakeRegistryITM) -> None:
         itm._attributes_event({"screen": 2802, "part": 21, "dtype": 0})
 
 
-# -- CLI ------------------------------------------------------------------------------
-
-
 @pytest.fixture
 def cli_itm(
     itm: FakeRegistryITM, monkeypatch: pytest.MonkeyPatch, tmp_path: Any

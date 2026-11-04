@@ -282,9 +282,21 @@ async def test_fetch_history(itm: FakeITM) -> None:
 
 
 async def test_fetch_history_pages(itm: FakeITM) -> None:
-    """More pages are read until the iTM repeats one."""
+    """Older pages come from "<", and only while the iTM enables it."""
+    itm.history_page_size = 1
+    pages = await FakeClient(itm).fetch_history(pages=5)
+    assert [p.page for p in pages] == ["1-1/2", "2-2/2"]
+    itm.history_page_size = 100
+    everything = (await FakeClient(itm).fetch_history())[0].entries
+    assert pages[0].entries + pages[1].entries == everything
+
+
+async def test_fetch_history_single_page(itm: FakeITM) -> None:
+    """With one page, no page button is pressed: both are disabled."""
     pages = await FakeClient(itm).fetch_history(pages=3)
-    assert len(pages) == 1  # the fake has a single page
+    assert len(pages) == 1
+    sent = {(r["screen"], r["part"]) for r in itm.requests}
+    assert not {(800, 15), (800, 16)} & sent
 
 
 async def test_history_progress_times_out(itm: FakeITM) -> None:

@@ -56,7 +56,6 @@ def test_captured_day_overview() -> None:
     assert day.events[0].target_kind == "zone"
     assert day.events[0].action.startswith("Start, ")
     assert day.events[0].details is False
-    # Parsed from the text: power, locks, mode and setpoint.
     assert day.events[0].power is PowerState.ON
     assert day.events[0].lock_start_stop is None  # not in the text
     assert day.events[0].lock_mode is RemoteLock.FORBIDDEN
@@ -231,7 +230,7 @@ async def test_fetch_schedule_without_details(itm: FakeITM) -> None:
     program = await FakeClient(itm).fetch_schedule("Always")
     morning = program.weekly[1][0]
     assert morning.details is False
-    assert morning.power is PowerState.ON  # from the text
+    assert morning.power is PowerState.ON
     assert morning.mode is None  # the fake's text says only "Start"
     assert not any(r["screen"] == 109 for r in itm.requests)
     assert itm.open_screens == set()

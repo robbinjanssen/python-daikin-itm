@@ -82,13 +82,12 @@ DS_TYPES, DS_GROUPS, DS_CLOSE = 2, 4, 5
 # list, Create, Copy, Delete, Rename, Edit (-> 3206 / 3208) and Close.
 EL_LIST, EL_CREATE, EL_COPY, EL_DELETE = 2, 4, 5, 6
 EL_RENAME, EL_EDIT, EL_CLOSE = 7, 8, 9
-# Energy type settings (3206): unit and energy type combos, the CO2 factor and the
-# conversion factor (texts, unit labels and their Change), OK, Cancel.
+# Energy type settings (3206).
 TS_UNIT, TS_TYPE, TS_CO2, TS_CO2_UNIT = 2, 4, 6, 7
 TS_CONVERSION, TS_CONVERSION_UNIT, TS_OK, TS_CANCEL = 10, 11, 13, 14
-# Energy group settings (3208): members, available points, energy type, OK, Cancel.
+# Energy group settings (3208).
 GS_MEMBERS, GS_AVAILABLE, GS_TYPE, GS_OK, GS_CANCEL = 2, 8, 10, 11, 12
-# Equipment details (3211): tabs, the day shown, graph, occurrence list, close.
+# Equipment details (3211).
 DT_TABS, DT_DAY, DT_GRAPH, DT_LIST, DT_CLOSE = 1, 4, 7, 11, 9
 # Rule editor (3214): tabs, weekday pattern bars (Sunday first), the special days'
 # radio buttons (their labels are the names) and bars, the calendar list, Cancel.
@@ -131,9 +130,9 @@ IN_ROOM_TEMP, IN_COLLECT, IN_CONVERSION, IN_CLOSE, IN_DATA_CLEAR = 4, 5, 6, 7, 9
 # Cancel. 4-8 are disabled until a row is selected.
 RT_LIST, RT_OWN, RT_ANALOG, RT_ANALOG_TEXT = 2, 4, 5, 6
 RT_ANALOG_BUTTON, RT_APPLY, RT_OK, RT_CANCEL = 7, 8, 9, 10
-# Analog input selection (3222): list, OK, Cancel.
+# Analog input selection (3222).
 AS_LIST, AS_OK, AS_CANCEL = 2, 3, 4
-# Data collection start month (3223): month combo, OK, Cancel.
+# Data collection start month (3223).
 CM_MONTH, CM_OK, CM_CANCEL = 2, 3, 4
 # Energy conversion (3224): name, and the unit texts for 1, 1000 and 1000000, each
 # with its Change (text, button); OK (disabled while nothing changed), Cancel.
@@ -275,7 +274,7 @@ class EnergyType:
     energy_type: str | None = None  # the energy type combo's shown option
     co2_factor: ShownValue | None = None
     co2_unit: str | None = None
-    conversion: ShownValue | None = None  # the conversion factor
+    conversion: ShownValue | None = None
     conversion_unit: str | None = None
 
 
@@ -364,8 +363,8 @@ class EnergyInstallerSettings:
 
     room_temperature: tuple[RoomTemperaturePoint, ...] | None = None
     analog_points: tuple[tuple[str, ...], ...] | None = None  # 3222, when offered
-    collection_start: str | None = None  # the month data collection starts
-    collection_months: tuple[str, ...] = ()  # the months offered
+    collection_start: str | None = None
+    collection_months: tuple[str, ...] = ()
     conversion: ConversionType | None = None
 
 
@@ -628,10 +627,7 @@ async def click(s: _Session, screen: int, part: int, what: str) -> Reply:
     A hidden button works: the planning settings button of the budget screen is
     hidden on a real iTM and opens its screen all the same.
     """
-    if s.state.get(screen, part, "ENABLED") == 0:
-        msg = f"{what}: the iTM does not offer this here"
-        raise ItmCommandError(msg)
-    return await s.send(screen, part)
+    return await s.click(screen, part, what)
 
 
 async def close(s: _Session, screen: int, part: int) -> None:

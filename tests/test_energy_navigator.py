@@ -133,7 +133,6 @@ async def test_budget_with_data(itm: FakeEnergyITM) -> None:
     assert (yearly.type_label, yearly.unit_label) == ("Energy type", "Energy unit")
     assert yearly.graph[:3] == (1, 2, "0")
     assert 100.5 in yearly.graph
-    # Every tab was shown, then the first again.
     tabs = [r["number"] for r in itm.requests if r["event"] == 8]
     assert tabs == [1, 2, 0]
     assert_read_only(itm)
@@ -230,7 +229,7 @@ async def test_unavailable_screens_read_none(itm: FakeEnergyITM) -> None:
 async def test_disabled_button_is_never_clicked(itm: FakeEnergyITM) -> None:
     """A button shown ENABLED 0 is refused before it is sent; screens are closed."""
     itm.disabled = {(3200, 18)}
-    with pytest.raises(ItmCommandError, match="does not offer"):
+    with pytest.raises(ItmCommandError, match="has this disabled"):
         await run(itm, read_planned)
     assert_read_only(itm)
 
@@ -277,8 +276,8 @@ async def test_fake_fails_on_a_write(itm: FakeEnergyITM) -> None:
     assert itm.violations
 
 
-async def test_fake_fails_on_a_disabled_click(itm: FakeEnergyITM) -> None:
-    """And a click on a part it shows as ENABLED 0."""
+async def test_disabled_click_is_refused(itm: FakeEnergyITM) -> None:
+    """A click on a part shown as ENABLED 0 never reaches the iTM."""
     itm.disabled = {(3210, 16)}
 
     async def details(s: Any) -> None:
@@ -286,8 +285,27 @@ async def test_fake_fails_on_a_disabled_click(itm: FakeEnergyITM) -> None:
         await s.send(5, 102)
         await s.send(3210, 16)
 
-    with pytest.raises(AssertionError, match="ENABLED 0"):
+    with pytest.raises(ItmCommandError, match=r"screen 3210 part 16: .* disabled"):
         await run(itm, details)
+
+
+async def test_disabled_write_is_refused_in_a_dry_run(itm: FakeEnergyITM) -> None:
+    """A dry run doesn't plan a click on a disabled part either."""
+    itm.disabled = {(3210, 16)}
+    dry = FakeClient(itm, dry_run=True)
+
+    async def details(s: Any) -> None:
+        await s.open_menu()
+        await s.send(5, 102)
+        await s.write("details", 3210, 16)
+
+    async with dry._session() as s:
+        try:
+            with pytest.raises(ItmCommandError, match="details: the iTM has this"):
+                await details(s)
+        finally:
+            await s.close_menu()
+    assert not dry.planned
 
 
 async def test_fake_fails_on_a_combo_pick(itm: FakeEnergyITM) -> None:

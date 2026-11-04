@@ -36,9 +36,6 @@ def _state(screen: int, parts: list[tuple[int, str, object]]) -> UIState:
     return s
 
 
-# -- languages ----------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     ("label", "mode"),
     [
@@ -92,9 +89,6 @@ def test_unknown_mode_labels_are_reported() -> None:
     assert not Capabilities("a", {}, fan_speed=False).unknown_labels
 
 
-# -- details ------------------------------------------------------------------------
-
-
 def test_zones_without_heading() -> None:
     """A first line that is a path itself is a zone, in any language."""
     s = _state(9, [(14, "TEXT", "Floor 1&gt;Building\nFloor 1&gt;Wing A\n\nx [y]")])
@@ -119,9 +113,6 @@ def test_status_from_details() -> None:
     }
     unknown = status_from_details(_state(9, [(14, "TEXT", "Thermostat Status [?]")]))
     assert unknown["thermo_on"] is None
-
-
-# -- settings dialog ----------------------------------------------------------------
 
 
 def test_settings_from_dialog() -> None:
@@ -183,11 +174,8 @@ async def test_fetch_unit_settings(itm: FakeITM) -> None:
     assert settings.cool_limit.enabled is False
     assert settings.overtime is True
     assert settings.flags["Thermostat Status"] == "ON"
-    assert itm.dialog is None  # cancelled
+    assert itm.dialog is None
     assert itm.session is None
-
-
-# -- power state and temperature unit ---------------------------------------------
 
 
 def test_power_state_from_panel() -> None:
@@ -211,9 +199,6 @@ def test_temperature_unit_from_panel() -> None:
     assert unit.room_temperature == 70.2
     assert unit.temperature_unit == "°F"
     assert unit_from_panel(_state(4, [])).temperature_unit == "°C"
-
-
-# -- read-only mode -----------------------------------------------------------------
 
 
 async def test_read_only_refuses_writes_before_sending(itm: FakeITM) -> None:

@@ -300,7 +300,10 @@ async def test_client_release(itm: FakeEmergencyITM) -> None:
     assert await c.fetch_active_emergency_stops() == ()
     itm.start_stop("Fire alarm")
     assert await c.fetch_active_emergency_stops() == ("Fire alarm",)
-    await c.release_emergency_stop("Fire alarm")
+    with pytest.raises(ItmCommandError, match="allow_safety_change"):
+        await c.release_emergency_stop("Fire alarm")
+    assert await c.fetch_active_emergency_stops() == ("Fire alarm",)
+    await c.release_emergency_stop("Fire alarm", allow_safety_change=True)
     assert await c.fetch_active_emergency_stops() == ()
 
 
@@ -345,7 +348,7 @@ async def test_client_read_back_failures() -> None:
         await c.set_emergency_stop_settings("Fire alarm", stop="Stop and lock")
     itm.start_stop("Fire alarm")
     with pytest.raises(ItmCommandError, match="did not release"):
-        await c.release_emergency_stop("Fire alarm")
+        await c.release_emergency_stop("Fire alarm", allow_safety_change=True)
 
 
 # -- the CLI --------------------------------------------------------------------------
@@ -407,7 +410,10 @@ def test_cli(
     assert itm.active == ["Fire alarm"]
     cli("--dry-run", "emgstop", "set", "Program 3", "--stop", "Stop and lock")
     assert "save emergency stop program Program 3" in capsys.readouterr().out
-    cli("emgstop", "release", "Fire alarm")
+    with pytest.raises(SystemExit, match="allow_safety_change"):
+        cli("emgstop", "release", "Fire alarm")
+    assert itm.active == ["Fire alarm"]
+    cli("emgstop", "release", "Fire alarm", "--allow-safety-change")
     assert itm.active == []
     with pytest.raises(SystemExit, match="error: the client is read-only"):
         cli("--read-only", "emgstop", "add", "Program 5")

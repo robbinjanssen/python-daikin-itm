@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import io
 import zipfile
+import zlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -22,7 +23,7 @@ from .exceptions import ItmError
 
 HISTORY_MEMBER = "t_history.dat"
 CONFIG_MEMBER = "conv.conf"
-MAX_MEMBER_BYTES = 64 * 1024 * 1024  # a member larger than this is refused
+MAX_MEMBER_BYTES = 64 * 1024 * 1024
 FIELDS = 20
 
 # Event codes (field 6), as seen.
@@ -111,6 +112,18 @@ class HistoryExport:
     version: str | None
 
 
+_ARCHIVE_ERRORS = (
+    zipfile.BadZipFile,
+    zipfile.LargeZipFile,
+    zlib.error,
+    RuntimeError,  # encrypted
+    NotImplementedError,  # unknown compression
+    EOFError,
+    OSError,
+    ValueError,
+)
+
+
 def _member(archive: zipfile.ZipFile, name: str) -> bytes | None:
     info = next(
         (i for i in archive.infolist() if i.filename.rsplit("/", 1)[-1] == name), None
@@ -120,8 +133,12 @@ def _member(archive: zipfile.ZipFile, name: str) -> bytes | None:
     if info.file_size > MAX_MEMBER_BYTES:
         msg = f"{name} is too large ({info.file_size} bytes)"
         raise HistoryExportError(msg)
-    with archive.open(info) as member:
-        data = member.read(MAX_MEMBER_BYTES + 1)
+    try:
+        with archive.open(info) as member:
+            data = member.read(MAX_MEMBER_BYTES + 1)
+    except _ARCHIVE_ERRORS as err:
+        msg = f"{name} can't be read from the archive: {err}"
+        raise HistoryExportError(msg) from err
     if len(data) > MAX_MEMBER_BYTES:
         msg = f"{name} is too large"
         raise HistoryExportError(msg)
@@ -162,7 +179,13 @@ def _record(line: str) -> HistoryRecord:
 
 def _timestamp(text: str) -> datetime | None:
     value = _int(text)
-    return datetime.fromtimestamp(value, tz=UTC) if value > 0 else None
+    if value <= 0:
+        return None
+    try:
+        return datetime.fromtimestamp(value, tz=UTC)
+    except (ValueError, OverflowError, OSError) as err:
+        msg = f"the history export has an invalid time: {value}"
+        raise HistoryExportError(msg) from err
 
 
 def parse_history_export(data: bytes) -> HistoryExport:
@@ -184,7 +207,7 @@ def parse_history_export(data: bytes) -> HistoryExport:
     """
     try:
         archive = zipfile.ZipFile(io.BytesIO(data))
-    except zipfile.BadZipFile as err:
+    except _ARCHIVE_ERRORS as err:
         msg = "the history export is no ZIP archive"
         raise HistoryExportError(msg) from err
     with archive:

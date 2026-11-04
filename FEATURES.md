@@ -27,7 +27,7 @@ live); and the °F and decimal comma display settings (the date format and 12-ho
 clock are validated live). Pre-cool/pre-heat, time and management point parts of
 screen 7 belong to schedule events, not to a unit.
 
-172 screens, each counted by its best status (read or write). Covered: 139 (validated on a real iTM: 81, dry run only: 0, simulated iTM only: 58); probed only: 0; needs a licence or another iTM: 0; out of scope: 33; not covered: 0.
+172 screens, each counted by its best status (read or write). Covered: 139 (validated on a real iTM: 92, dry run only: 0, simulated iTM only: 47); probed only: 0; needs a licence or another iTM: 0; out of scope: 33; not covered: 0.
 
 | Screen | Class | Read | Write | Notes |
 | ---: | :---- | :--: | :---: | :---- |
@@ -44,8 +44,8 @@ screen 7 belong to schedule events, not to a unit.
 | 102 | `ScSchConfirm` | V | - | day overview |
 | 103 | `ScSchLegend` | X | X | schedule legend (static help, no data) |
 | 104 | `ScSchEdit` | V | V | program editor: patterns, period, special days, calendar rules, day clear |
-| 106 | `ScSchCalCopy` | - | F | calendar copy (to programs named explicitly) |
-| 107 | `ScSchEventList` | V | V | event list: add, edit, delete; event copy (F) |
+| 106 | `ScSchCalCopy` | - | V | calendar copy (to programs named explicitly) |
+| 107 | `ScSchEventList` | V | V | event list: add, edit, delete, event copy |
 | 108 | `ScSchCopy` | - | V | copy a day's events |
 | 109 | `ScSchEvent` | V | V | event settings |
 | 110 | `ScSchPntAreaSel` | V | V | event target picker (single selection) |
@@ -77,11 +77,11 @@ screen 7 belong to schedule events, not to a unit.
 | 1000 | `ScBootSequence` | X | X | boot sequence |
 | 1100 | `Remote management` | V | F | remote management: status (V); connect/disconnect guarded (F) |
 | 1200 | `ScSysWebAccessUser` | V | V | web users: add, change, delete |
-| 1201 | `ScSysWebAccessRegistScreen` | F | F | a normal web user's allowed screens (refused for administrators: the button is disabled for them) |
+| 1201 | `ScSysWebAccessRegistScreen` | V | F | a normal web user's allowed screens (refused for administrators: the button is disabled for them; read validated on an iTM without graphical screens) |
 | 1202 | `ScSysWebAccessManageArea` | - | V | a web user's managed zones |
 | 1203 | `ScMainLogin` | V | - | login screen |
 | 1204 | `ScSysWebAccessUserSetup` | - | V | web user setup: name, password, type |
-| 1205 | `ScWebUserSetup` | F | F | the logged-in user's own settings: password, language, date/time/decimal formats, icon colour (opened through the login screen's user settings button) |
+| 1205 | `ScWebUserSetup` | V | V | the logged-in user's own settings, opened through the login screen's user settings button: read, icon colour and password (V); language and date/time/decimal formats (F) |
 | 1300 | `ScEmlSetting` | V | V | e-mail notification: activation and addresses |
 | 1301 | `ScEmlAddrEdit` | V | V | e-mail address edit |
 | 1302 | `ScEmlTrial` | - | F | test e-mail (guarded: allow_send) |
@@ -164,22 +164,22 @@ screen 7 belong to schedule events, not to a unit.
 | 3103 | `ScLeakageChkCopy` | F | F | leakage check: schedule copy |
 | 3200 | `ScEnergyNaviPlanManage` | V | - | energy navigator: budget overview per tab (fetch_energy_navigator; validated on empty screens, without a licence) |
 | 3201 | `ScEnergyNaviPlanSetting` | V | - | energy navigator: planning settings (the way to 3202/3203) |
-| 3202 | `ScEnergyNaviEnergyPlanSetting` | V | F | energy navigator: planned consumption per fiscal year (read V; ratio, per-month targets F) |
+| 3202 | `ScEnergyNaviEnergyPlanSetting` | V | F | energy navigator: planned consumption per fiscal year (read V; ratio, disabled while per month, and per-month targets F) |
 | 3203 | `ScEnergyNaviEnergyConsumeSetting` | V | F | energy navigator: actual consumption per fiscal year, CO2 factor (read V; monthly values, CO2 factor F) |
-| 3204 | `ScEnergyNaviDisplaySetting` | F | - | energy navigator: display settings (the way to energy types and groups) |
-| 3205 | `ScEnergyNaviEnergyTypeList` | F | F | energy navigator: energy types (create, rename, delete) |
-| 3206 | `ScEnergyNaviEnergyTypeSetting` | F | - | energy navigator: an energy type's settings |
-| 3207 | `ScEnergyNaviEnergyGroupList` | F | F | energy navigator: energy groups (create, rename, delete) |
-| 3208 | `ScEnergyNaviEnergyGroupSetting` | F | - | energy navigator: an energy group's settings |
+| 3204 | `ScEnergyNaviDisplaySetting` | V | - | energy navigator: display settings (the way to energy types and groups) |
+| 3205 | `ScEnergyNaviEnergyTypeList` | V | V | energy navigator: energy types: create, rename, delete |
+| 3206 | `ScEnergyNaviEnergyTypeSetting` | V | - | energy navigator: an energy type's settings |
+| 3207 | `ScEnergyNaviEnergyGroupList` | V | V | energy navigator: energy groups: create, delete (V); rename (F) |
+| 3208 | `ScEnergyNaviEnergyGroupSetting` | V | - | energy navigator: an energy group's settings |
 | 3209 | `ScEnergyNaviLegendPlanManage` | X | X | energy navigator legend (static help, no data) |
 | 3210 | `ScEnergyNaviEquipmentManage` | V | F | energy navigator: equipment management, sampling period and target (read V; write F) |
 | 3211 | `ScEnergyNaviDetailInfo` | F | - | energy navigator: equipment details (only offered with data) |
 | 3212 | `ScEnergyNaviLegendDriveInfo` | X | X | energy navigator legend (static help, no data) |
-| 3213 | `ScEnergyNaviRuleList` | V | - | energy navigator: management rule list |
-| 3214 | `ScEnergyNaviRuleEdit` | F | - | energy navigator: rule editor (read) |
-| 3215 | `ScEnergyNaviCopySelect` | F | F | energy navigator: rule copy |
+| 3213 | `ScEnergyNaviRuleList` | V | V | energy navigator: management rule list: create, delete (V); rename (F) |
+| 3214 | `ScEnergyNaviRuleEdit` | V | - | energy navigator: rule editor (read) |
+| 3215 | `ScEnergyNaviCopySelect` | F | F | energy navigator: rule copy (on a real iTM Copy first asks a new rule's name; not supported yet) |
 | 3216 | `ScEnergyNaviCalenderCopy` | F | F | energy navigator: calendar copy |
-| 3217 | `ScEnergyNaviRuleSetting` | F | F | energy navigator: rule settings (time ranges per day) |
+| 3217 | `ScEnergyNaviRuleSetting` | V | V | energy navigator: rule settings: time ranges per day (V); their cool/heat setpoints (F) |
 | 3218 | `ScEnergyNaviExtractSetting` | V | F | energy navigator: sampling targets (read V; choosing one F) |
 | 3219 | `ScEnergyNaviDataOutput` | V | F | energy navigator: data output periods (V); exports (F) |
 | 3220 | `ScEnergyNaviTrialSetting` | V | F | energy navigator installer settings (read V; the data clear button is never pressed) |
@@ -200,6 +200,6 @@ screen 7 belong to schedule events, not to a unit.
 | 3310 | `ScDemandControlStatus` | F | - | demand control (needs the dealer option and a pulse input) |
 | 3311 | `ScDemandGroup` | F | F | demand control (needs the dealer option and a pulse input) |
 | 3312 | `ScDemandTargetPowerSetup` | F | F | demand control (needs the dealer option and a pulse input) |
-| 4000 | `ScSetupExport` | - | F | setup export (export_setup; a download, sensitive) |
+| 4000 | `ScSetupExport` | - | V | setup export (export_setup; a download, sensitive) |
 | 4100 | `ScSysBackup` | - | F | backup (run_backup; a job on the device, treated as a write) |
 | 20000 | `ScSample` | X | X | sample screen (unused) |

@@ -38,17 +38,17 @@ POINTS, POINT_SETTINGS = MenuScreen.POINTS, MenuScreen.POINT_SETTINGS
 ZN_LIST, ZN_ADD, ZN_DELETE, ZN_MEMBERS, ZN_SETTINGS, ZN_MOVE = 4, 6, 7, 8, 9, 10
 MB_LIST, MB_ADD, MB_REMOVE, MB_AVAILABLE, MB_OK, MB_CANCEL = 2, 7, 8, 11, 12, 13
 MB_UP, MB_DOWN, MB_JUMP = 3, 4, 5
-# Member order (1602, the order setup screen, opened by the member list's Jump): the
-# members' list, OK (hands the order back to 1601), Cancel.
+# Member order (1602, opened by the member list's Jump); OK hands the order back
+# to 1601.
 ORDER, OR_LIST, OR_OK, OR_CANCEL = 1602, 1, 2, 3
 MV_LIST, MV_OK, MV_CANCEL = 4, 5, 6
 IC_LIST, IC_OK, IC_CANCEL = 1, 2, 3
 ZA_ICON, ZA_ICON_BUTTON, ZA_OK = 16, 17, 18
 PT_LIST, PT_CHANGE = 1, 2
 PA_ICON, PA_ICON_BUTTON, PA_OK = 10, 11, 12
-# Columns of the zone list: name, level ("-" for the root), zones, points.
+# Zone list columns; the root's level is "-".
 ZC_NAME, ZC_LEVEL, ZC_ZONES, ZC_POINTS = 0, 1, 2, 3
-# The zone error screen (1606, ScSysAreaErr): its text and its Close.
+# The zone error screen (1606, ScSysAreaErr).
 ZONE_ERROR, ZE_TEXT, ZE_CLOSE = 1606, 1, 2
 
 
@@ -121,10 +121,7 @@ async def _select(s: _Session, screen: int, part: int, row: int) -> None:
 
 async def _click(s: _Session, screen: int, part: int, what: str) -> Reply:
     """Click a button, never one the iTM reports disabled (that hangs it)."""
-    if s.state.get(screen, part, "ENABLED") == 0:
-        msg = f"{what}: the iTM has the button disabled"
-        raise ItmCommandError(msg)
-    return await s.send(screen, part)
+    return await s.click(screen, part, what)
 
 
 async def _leave(s: _Session, screen: int, cancel: int) -> None:

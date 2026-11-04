@@ -163,7 +163,7 @@ recorded in `client.planned` and the screen is cancelled, so nothing changes.
 | `create_schedule(name)` | Creates an empty, disabled schedule program. |
 | `delete_schedule(name)` | Deletes a schedule program. |
 | `add_schedule_event(program, day, spec)` | Adds an event (`EventSpec`: time, target point or zone, power/setback, mode, setpoint, locks, overtime, fan) to a weekday (0 = Sunday) or special day ("Ex1".."Ex5"). |
-| `edit_schedule_event(program, day, at, target, spec)` | Replaces the event at `at` for `target` with `spec`. |
+| `edit_schedule_event(program, day, at, target, spec, *, keep_unset=False)` | Replaces the event at `at` for `target` with `spec`; with `keep_unset=True` the settings `spec` leaves out keep their current values (the CLI's `edit-event` does this unless `--replace`). |
 | `delete_schedule_event(program, day, at, target)` | Deletes that event. |
 | `set_schedule_period(program, period)` | A program's period `((month, day), (month, day))`, or `None` for all year. |
 | `rename_schedule_special_day(program, day, name)` | Renames a special day pattern. |
@@ -181,7 +181,7 @@ read-back:
 | `fetch_zone_attributes(zone)` / `set_zone_attributes(zone, *, name=None, info=None, start_interval=None, stop_interval=None)` | A zone's settings screen. |
 | `create_web_user(name, password, *, zones, admin=False)` / `set_web_user(name, *, password=None, admin=None, zones=None)` / `delete_web_user(name)` | Web access users; a new user needs at least one managed zone. The account the client logs in with is refused; passwords are never logged. |
 | `fetch_web_user_screens(name)` / `set_web_user_screens(name, screens)` | The screens a normal web user may open (`WebUserScreens`: allowed and available). Administrators are refused (the iTM disables the button for them). |
-| `fetch_own_settings()` / `set_own_settings(*, date_format=None, time_24h=None, decimal_comma=None, icon_colour=None, language=None, password=None)` | The logged-in user's own settings (`OwnSettings`), reached through the login screen's "user settings" button; the iTM ends the session when they apply. A new password is sent once, never logged or planned, and used for the read-back login. Built from the web UI's code; tested against the simulated iTM only. |
+| `fetch_own_settings()` / `set_own_settings(*, date_format=None, time_24h=None, decimal_comma=None, icon_colour=None, language=None, password=None, allow_password_change=False)` | The logged-in user's own settings (`OwnSettings`), reached through the login screen's "user settings" button; the iTM ends the session when they apply. A new password needs `allow_password_change=True`; it is sent once, never logged or planned, and used for the read-back login. Reading, the icon colour and the password are validated on a real iTM; the language and the formats are tested against the simulated iTM only and need `allow_experimental=True`. |
 | `fetch_language()` / `set_language(code)` | The display language (en, de, es, pt, ja, fr, it, nl, zh, ko). It belongs to the logged-in web user: the iTM ends the session when it changes. |
 | `fetch_dst()` / `set_dst(*, enabled=True, start=EU_DST_START, end=EU_DST_END)` | Summer time and its rule (`DstRule`). Set it before the clock. |
 | `set_clock(when=None)` | The iTM's clock (default: this computer's local time). |
@@ -191,13 +191,13 @@ read-back:
 | `set_confirm_dialogs(*, enabled)` | The iTM's "confirm settings" dialogs. |
 | `fetch_password_settings()`, `set_password_setting(kind, *, enabled=None, password=None, allow_password_change=False)` | Whether the touch panel's administrator and screen password are enabled (`PasswordSettings`); enable, disable or change one (`kind` is `administrator` or `screen`). Refused unless `allow_password_change`; the password is sent once and never logged or planned. |
 | `set_planned_consumption(*, year=None, energy_type=None, ratio=None, per_month=None, months=None)`, `set_actual_consumption(*, year=None, energy_type=None, co2_factor=None, months=None)` | The energy navigator's planned consumption (ratio to the previous year, yearly or per month, targets per month) and hand-entered actual consumption (values per month, CO2 factor) of a fiscal year, read back as `PlannedYear` / `ActualYear`. The expected yearly value has no input and is not written. Tested against the simulated iTM only. |
-| `set_energy_sampling(*, start=None, end=None, target=None)`, `create_energy_type(name, *, group=False)`, `rename_energy_type(name, new_name, *, group=False)`, `delete_energy_type(name, *, group=False)` | The equipment management's sampling period and target, and the energy types (or with `group=True` the energy groups). Tested against the simulated iTM only. |
-| `create_energy_rule(name)`, `rename_energy_rule(name, new_name)`, `delete_energy_rule(name)`, `copy_energy_rule(name, targets, *, calendar=False)`, `set_energy_rule_day(rule, day, ranges)` | The equipment management's rules: the rule list, copying a rule's patterns (or its calendar) to other rules, and one day's time ranges (`RuleRange`: start, end, cooling and heating setpoints), saved through the rule editor and read back as `RuleDay`. Tested against the simulated iTM only. |
+| `set_energy_sampling(*, start=None, end=None, target=None)`, `create_energy_type(name, *, group=False)`, `rename_energy_type(name, new_name, *, group=False)`, `delete_energy_type(name, *, group=False)` | The equipment management's sampling period and target, and the energy types (or with `group=True` the energy groups). Creating, renaming and deleting energy types and creating and deleting groups are validated on a real iTM; the sampling and renaming a group are tested against the simulated iTM only. |
+| `create_energy_rule(name)`, `rename_energy_rule(name, new_name)`, `delete_energy_rule(name)`, `copy_energy_rule(name, targets, *, calendar=False)`, `set_energy_rule_day(rule, day, ranges)` | The equipment management's rules: the rule list, copying a rule's patterns (or its calendar) to other rules, and one day's time ranges (`RuleRange`: start, end, cooling and heating setpoints), saved through the rule editor and read back as `RuleDay`. Creating and deleting rules and time ranges without setpoints are validated on a real iTM; renaming, setpoints and the copies are tested against the simulated iTM only (on a real iTM, Copy first asks a new rule's name, which isn't supported yet). |
 | `set_energy_room_temperature(password, point, *, analog_point=None, allow_service_change=False)`, `set_energy_collection_start(password, month, *, allow_service_change=False)`, `set_energy_conversion(password, change, *, allow_service_change=False)` | The energy navigator's installer settings, behind the service login: a point's room temperature source (the unit's return air temperature or an analog input), the month data collection starts and the energy conversion's name and unit texts (`ConversionType`). Refused unless `allow_service_change=True` (a dry run plans without it); the password is sent once, never stored or logged; the data clear button is never pressed. Tested against the simulated iTM only. |
 | `set_emergency_stop_enabled(name, *, enabled, allow_safety_change=False)` | Arms or disarms an emergency stop program: refused unless `allow_safety_change` (disarming switches a safety function off; arming may start a stop at once when the input is in alarm). |
 | `create_emergency_stop_program(name)`, `rename_emergency_stop_program(name, new_name)`, `copy_emergency_stop_program(name, new_name)`, `delete_emergency_stop_program(name)` | Emergency stop programs (adding needs the iTM's emergency stop dealer option; the built-in program can't be renamed, copied, deleted or edited; a program is deleted only while disarmed). |
 | `set_emergency_stop_settings(name, *, inputs=None, outputs=None, release_mode=None, stop=None)` | A disarmed program's input and output points (exactly these), release mode and stop (options as shown). |
-| `release_emergency_stop(name)` | Releases an active stop. Nothing in the library starts one. |
+| `release_emergency_stop(name, *, allow_safety_change=False)` | Releases an active stop: refused unless `allow_safety_change` (it restarts equipment a safety input stopped). Nothing in the library starts one. |
 | `create_temperature_limit(name, *, members=(), lower=None, upper=None)`, `set_temperature_limit(name, *, new_name=None, lower=None, upper=None)`, `set_temperature_limit_members(name, members)`, `set_temperature_limit_enabled(name, *, enabled)`, `delete_temperature_limit(name)` | Temperature limit groups (a group is deleted only while disabled). |
 | `create_sliding_temperature(name, *, members=())`, `set_sliding_temperature(name, *, new_name=None, outdoor_point=None, outdoor_range=None, setpoint_range=None)`, `set_sliding_temperature_members(name, members)`, `set_sliding_temperature_enabled(name, *, enabled)`, `delete_sliding_temperature(name)` | Sliding temperature groups; the ranges are (from, to) in °C. |
 | `set_heating_optimisation(units=None, *, enabled)` | Heating mode optimisation on or off for these units, or for all of them (the screen's all on / all off buttons) without units. |
@@ -207,7 +207,7 @@ read-back:
 | `set_web_server_port(port, *, allow_network_change=False)`, `set_remote_management(*, connect, allow_remote_change=False)` | Guarded like `set_network`: a dry run unless explicitly allowed. |
 | `copy_schedule(...)`, `copy_schedule_day(...)`, `clear_schedule_day(...)`, `copy_schedule_event(...)`, `copy_schedule_calendar(...)` | Copies of programs, days, events and calendars, and clearing a day. |
 | `fetch_ppd(*, start=None, end=None, calculation_day=None)`, `fetch_ppd_advanced()`, `set_ppd_weekday(...)` | Power proportional distribution (needs the iTM's PPD licence for results). |
-| `export_history(start, end)`, `export_energy_data(period)`, `export_point_list(start, end)`, `export_setup()`, `run_backup()` | The iTM's exports (the others as CSV), returned as `Download(name, data)`. The history comes as a ZIP archive: Daikin's Windows CSV converter, the raw history (tab-separated text) and the iTM's setup data, including an authentication file, so treat it as sensitive. The iTM serves the file without a session token while it exists, so the library fetches it at once and tells the iTM it is done. `parse_history_export(data)` reads a history archive's records (`HistoryRecord`: time in UTC, event, source, point or user, value) in memory, opening only the history file and the converter settings; codes not seen yet are kept as numbers. `export_setup()` downloads the iTM's configuration (sensitive). `run_backup()` runs the device's backup job (a write: refused by `read_only`, planned in a dry run) and returns the file if the iTM offers one. Both follow the web UI's code and are tested against the simulated iTM only. |
+| `export_history(start, end)`, `export_energy_data(period)`, `export_point_list(start, end)`, `export_setup()`, `run_backup()` | The iTM's exports (the others as CSV), returned as `Download(name, data)`. The history comes as a ZIP archive: Daikin's Windows CSV converter, the raw history (tab-separated text) and the iTM's setup data, including an authentication file, so treat it as sensitive. The iTM serves the file without a session token while it exists, so the library fetches it at once and tells the iTM it is done. `parse_history_export(data)` reads a history archive's records (`HistoryRecord`: time in UTC, event, source, point or user, value) in memory, opening only the history file and the converter settings; codes not seen yet are kept as numbers. `export_setup()` downloads the iTM's configuration (sensitive; validated on a real iTM). `run_backup()` runs the device's backup job (a write: refused by `read_only`, planned in a dry run) and returns the file if the iTM offers one; it follows the web UI's code and is tested against the simulated iTM only. |
 
 The installer's service screens sit behind a service login (the menu's four hidden
 corner buttons, then the service password, which is not a web user's). The library
@@ -235,7 +235,7 @@ read-back:
 | `set_power_state(unit, state, *, confirm=True)` | `PowerState.ON`, `OFF`, `SETBACK_LOW` or `SETBACK_HIGH` through the operation panel. |
 | `set_unit_settings(unit, *, airflow_direction=…, ventilation_mode=…, ventilation_amount=…, reset_filter_sign=False, reset_dust_alarm=False, force_dust_alarm_reset=False)` | Also through the settings dialog: the airflow direction (`position_0`..`position_4`, `swing`, on units that offer it), a ventilation unit's mode and air volume (by the labels it lists), and resetting a filter sign or dust alarm (offered only while it shows). |
 | `set_unit_settings(unit, *, low_noise=…, outdoor_low_noise=…, capacity=…, reheat=…, leaving_water_cool=…, leaving_water_heat=…, storage_water=…, output_repeat=…, output_repeat_interval=…, analog_output=…, multistate_output=…)` | The optional settings in `UnitSettings`: options by label or value, numbers through the iTM's number input. One the unit doesn't offer is refused before anything in the dialog is clicked (not validated on a real iTM yet). |
-| `set_zone_power_state(zone, state)`, `set_zone_setpoint(zone, value)`, `apply_zone(zone, *, power=None, mode=None, fan_speed=None)`, `fetch_zone_units(zone)` | Operate every unit of a zone (below the zone path) at once, through the zone's own panel and settings dialog; confirmed on every indoor unit in it. |
+| `set_zone_power_state(zone, state)`, `set_zone_setpoint(zone, value)`, `apply_zone(zone, *, power=None, mode=None, fan_speed=None)`, `fetch_zone_units(zone)` | Operate every unit of a zone (below the zone path) at once, through the zone's own panel and settings dialog; confirmed on every indoor unit in it. They follow the unit write rules for each unit in the zone: its lock, the spacing and an earlier unconfirmed change. |
 
 ### UnitSettings
 
@@ -416,7 +416,7 @@ them `F`. Among them: the dealer functions, demand control and energy saving,
 emergency stop changes, energy navigator changes, the installer's service
 writes (leakage check, layout setup, R32 ports, password setting), PPD settings,
 the backup job, the test e-mail, web server port, remote management and network
-changes, own settings and a web user's allowed screens, Jump in
+changes, the own language and formats and setting a web user's allowed screens, Jump in
 `set_zone_member_order`, °F and the decimal comma in `set_region`, and the
 settings dialog's ventilation, reset, low noise, capacity, reheat, water and
 output settings in `set_unit_settings`.
@@ -528,6 +528,7 @@ itm setback / overtime / emgstop / schedules
 itm schedule "Program B"   # a program in full (--no-events: patterns only)
 itm schedule-day Always --days-ahead 1
 itm history --day 2025-01-01 --pages 2
+itm history --pages 5 --unit "Office"   # one unit: its name, address or description
                           # who changed what, when (--management: logins too)
 itm functions             # probe the hidden functions (experimental)
 itm --dry-run changeover create "Group A" --add 1:1-09
@@ -556,7 +557,7 @@ itm maintenance 1:1-09 on
 itm point 1:1-09 --info "AC 10"      # itm zone "Zone A" --info "..."
 itm user add demouser --manage-zone "Zone A"   # password from ITM_NEW_PASSWORD or a prompt
 itm user screens viewer --screen "Screen A"   # a normal user's screens; without --screen: show
-itm own-settings --time 24h --decimal comma   # also --date-format, --language, --icon-colour, --password
+itm own-settings --time 24h --decimal comma   # also --date-format, --language, --icon-colour, --password --allow-password-change
 itm language nl           # itm dst on; itm clock --set-now
 itm layout [--names]      # the graphical layout view, read only
 itm service               # installer settings, read only (ITM_SERVICE_PASSWORD)
@@ -577,7 +578,7 @@ itm confirm-dialogs off
 itm emgstop settings "Fire alarm"   # also add, rename, copy, delete, active
 itm emgstop disable "Fire alarm" --allow-safety-change  # or enable
 itm emgstop set "Program 2" --input AC1 --output AC2 --stop "..."  # disarmed only
-itm emgstop release "Fire alarm"  # an active stop
+itm emgstop release "Fire alarm" --allow-safety-change  # an active stop
 itm templimit --details  # also add, members, set, enable, disable, delete
 itm templimit add "Group A" --add AC1 --lower 18 --upper 26
 itm slidetemp set "Group B" --outdoor-point "Outdoor" --outdoor-range 0 30 --setpoint-range 21 25
@@ -587,16 +588,20 @@ itm schedule-edit "Program C" copy-day 1 2 3     # also copy-program, clear-day,
 itm ppd --start 2024-11-20 --end 2024-12-19
 itm export history --start 2024-12-20 --end 2025-01-01 --out history.zip
 itm export history --start 2025-01-01 --end 2025-01-01 --parse   # print the records
-itm export setup --out setup.bin   # the iTM's configuration (sensitive)
+itm export setup --out setup.bin   # the iTM's configuration (sensitive; files are saved owner-only)
 itm backup                       # run the device's backup job
 itm zone-members "Zone A" --order AC2 AC1   # put these members first
-itm --trace trace.jsonl status   # record requests (numbers only) and replies (no token)
+itm --trace trace.jsonl status   # record requests (numbers only) and replies (no token; see below)
 itm --read-only status    # --read-only refuses every write before it is sent
 itm setpoint 1:1-04 21    # each write returns once the unit shows the change
 itm power 1:1-09 on
 itm mode 1:1-04 heat      # heat / cool / fan / dry / auto, as offered by the unit
 itm fan 1:1-04 low        # low / medium / high / auto
 ```
+
+A trace keeps each reply as the iTM sent it, apart from the token, so it includes
+the installation's names and settings, and from screens such as the history also
+usernames and IP addresses.
 
 ## Protocol notes
 

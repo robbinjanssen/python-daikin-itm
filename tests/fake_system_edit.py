@@ -65,6 +65,7 @@ class FakeSystemEditITM(FakeITM):  # pylint: disable=too-many-instance-attribute
         self.own = {"date": 0, "24h": True, "comma": False, "colour": 1}
         self.own_password_changes = 0
         self.own_ends_session = True  # leaving 1205 ends the session
+        self.own_opens = True
         self.own_repeat_mismatch = False  # the repeated password is refused
         self.own_ignore_password = False  # a new password is dropped
         self.edit: dict[str, Any] = {}  # what the open screens are editing
@@ -75,7 +76,13 @@ class FakeSystemEditITM(FakeITM):  # pylint: disable=too-many-instance-attribute
         r = Reader(body[4 + 32 :])
         screen, part, event = r.short(), r.short(), r.short()
         reply = super().handle(body)
-        if screen == 1203 and part == 5 and event == 1 and self.session is not None:
+        if (
+            screen == 1203
+            and part == 5
+            and event == 1
+            and self.session is not None
+            and self.own_opens
+        ):
             self.open_screens.add(OWN)
             self.edit = {"own": dict(self.own)}
             return self._reply(

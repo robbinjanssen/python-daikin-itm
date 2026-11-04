@@ -420,7 +420,9 @@ async def _emgstop(  # noqa: PLR0912  # pylint: disable=too-many-branches
             _print_emergency_settings(settings)
         return
     else:  # release
-        await client.release_emergency_stop(name)
+        await client.release_emergency_stop(
+            name, allow_safety_change=args.allow_safety_change
+        )
     if not _print_plan(client):
         _out(f"{name}: {action} done")
 
@@ -442,15 +444,43 @@ async def _schedules(client: ItmClient, _args: argparse.Namespace) -> None:
     _print_schedules(await client.fetch_schedules())
 
 
+async def _history_names(client: ItmClient, unit: str) -> set[str]:
+    """Return the names the history may show a unit by.
+
+    The history shows a unit by its name; ``unit`` may also be its address or the
+    description set in the iTM (both read from the units' Details screens).
+    """
+    wanted = unit.strip()
+    names = {wanted}
+    key = wanted.casefold()
+    found = False
+    for name, caps in (await client.fetch_capabilities()).items():
+        known = (name, caps.address or "", (caps.description or "").strip())
+        if key in {k.casefold() for k in known}:
+            names.add(name)
+            found = True
+    if not found:
+        print(
+            f"note: no unit in the zone path {'/'.join(client.zone_path) or '(top)'} "
+            f"has the name, address or description {wanted!r}; showing entries "
+            "named that only (use --zone to look elsewhere)",
+            file=sys.stderr,
+        )
+    return names
+
+
 async def _history(client: ItmClient, args: argparse.Namespace) -> None:
     """Show the history."""
     day = date.fromisoformat(args.day) if args.day else None
+    names = await _history_names(client, args.unit) if args.unit else None
     pages = await client.fetch_history(
         day=day, include_management=args.management, pages=args.pages
     )
     for page in pages:
         _out(f"-- {page.day or '?'} {page.page or ''}")
         for e in page.entries:
+            if names is not None and e.name.strip() not in names:
+                continue
             _out(f"{e.time:6} {e.kind:12} {e.name:16} {e.content:36} {e.source}")
 
 
@@ -762,7 +792,9 @@ async def _own_settings(client: ItmClient, args: argparse.Namespace) -> None:
         "password": _new_password() if args.password else None,
     }
     if any(v is not None for v in changes.values()):
-        await client.set_own_settings(**changes)
+        await client.set_own_settings(
+            **changes, allow_password_change=args.allow_password_change
+        )
         if _print_plan(client):
             return
     own = await client.fetch_own_settings()
@@ -925,7 +957,7 @@ async def _schedule_edit(  # noqa: PLR0912  # pylint: disable=too-many-branches
                 args, args.new_time or args.time, args.new_target or args.target
             )
             event = await client.edit_schedule_event(
-                name, day, args.time, args.target, spec
+                name, day, args.time, args.target, spec, keep_unset=not args.replace
             )
         else:
             await client.delete_schedule_event(name, day, args.time, args.target)
@@ -1134,7 +1166,7 @@ async def _leakcheck(client: ItmClient, args: argparse.Namespace) -> None:
     elif args.action == "export":
         download = await client.export_leakage_check_results(password)
         out = Path(args.out or download.name)
-        await asyncio.to_thread(out.write_bytes, download.data)
+        await asyncio.to_thread(_save, out, download.data)
         _out(f"{download.name}: {len(download.data)} bytes written to {out}")
     else:
         await _leakcheck_write(client, args, password)
@@ -1672,8 +1704,16 @@ async def _export(client: ItmClient, args: argparse.Namespace) -> None:
         else:
             download = await client.export_point_list(start, end)
     out = Path(args.out or download.name)
-    await asyncio.to_thread(out.write_bytes, download.data)
+    await asyncio.to_thread(_save, out, download.data)
     _out(f"{download.name}: {len(download.data)} bytes written to {out}")
+
+
+def _save(out: Path, data: bytes) -> None:
+    """Write a download readable by its owner only (an archive can hold logins)."""
+    fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        os.fchmod(f.fileno(), 0o600)
+        f.write(data)
 
 
 def _print_history_export(export: HistoryExport) -> None:
@@ -1701,7 +1741,7 @@ async def _backup(client: ItmClient, args: argparse.Namespace) -> None:
         _out("backup done; the iTM keeps it (no file offered)")
         return
     out = Path(args.out or download.name)
-    await asyncio.to_thread(out.write_bytes, download.data)
+    await asyncio.to_thread(_save, out, download.data)
     _out(f"{download.name}: {len(download.data)} bytes written to {out}")
 
 
@@ -1831,7 +1871,6 @@ async def _zones(client: ItmClient, args: argparse.Namespace) -> None:
 
 async def _setpoint(client: ItmClient, args: argparse.Namespace) -> None:
     """Change a unit's setpoint."""
-    # Returns the unit as read back once the change shows; refuses stopped units.
     u = await client.set_setpoint(args.unit, args.value)
     if not _print_plan(client):
         _out(f"{args.unit}: setpoint now {u.setpoint if u else None}")
@@ -1977,8 +2016,8 @@ def _parser() -> argparse.ArgumentParser:
         "--trace",
         metavar="FILE",
         help="append every request (numbers only) and reply (token blanked) to FILE; "
-        "replies hold your installation's names and settings, so replace those "
-        "before sharing it",
+        "replies include the installation's names, settings, usernames and IP "
+        "addresses",
     )
     p.add_argument(
         "--zone",
@@ -2147,6 +2186,12 @@ def _add_menu_commands(sub: Any) -> None:
     hi.add_argument("--day", help="YYYY-MM-DD (default: the iTM's current day)")
     hi.add_argument("--management", action="store_true", help="include logins/logouts")
     hi.add_argument("--pages", type=int, default=1, help="pages of 100 entries")
+    hi.add_argument(
+        "--unit",
+        metavar="UNIT",
+        help="only this unit's entries: its name, address or description (looked "
+        "up in the zone path)",
+    )
     sub.add_parser("functions", help="probe the hidden functions (experimental)")
     w = sub.add_parser("power", help="start or stop a unit")
     w.add_argument("unit")
@@ -2380,7 +2425,7 @@ def _add_emgstop_command(sub: Any) -> None:
     es.add_argument(
         "--allow-safety-change",
         action="store_true",
-        help="enable/disable: needed, it arms or disarms a safety function",
+        help="enable/disable/release: needed, they change a safety function",
     )
     es.add_argument("--input", action="append", help="set: an input point (repeat)")
     es.add_argument("--output", action="append", help="set: an output point (repeat)")
@@ -2409,7 +2454,13 @@ def _add_schedule_edit_command(sub: Any) -> None:  # pylint: disable=too-many-lo
 
     for action, text in (
         ("add-event", "add an event"),
-        ("edit-event", "change an event (found by DAY TIME TARGET)"),
+        (
+            "edit-event",
+            (
+                "change an event (found by DAY TIME TARGET); settings left out are "
+                "kept, or cleared with --replace"
+            ),
+        ),
         ("delete-event", "delete an event"),
     ):
         a = actions.add_parser(action, help=text)
@@ -2421,6 +2472,11 @@ def _add_schedule_edit_command(sub: Any) -> None:  # pylint: disable=too-many-lo
         if action == "edit-event":
             a.add_argument("--new-time")
             a.add_argument("--new-target")
+            a.add_argument(
+                "--replace",
+                action="store_true",
+                help="clear the settings left out instead of keeping them",
+            )
     pe = actions.add_parser("period", help="the program's period, or all year")
     pe.add_argument("period", help="MM-DD:MM-DD or off")
     rn = actions.add_parser("rename-special", help="rename a special day")
@@ -2535,6 +2591,11 @@ def _add_own_settings_command(sub: Any) -> None:
     ow.add_argument("--icon-colour", type=int, choices=[1, 2])
     ow.add_argument("--language", choices=list(LANGUAGE_RADIOS))
     ow.add_argument("--password", action="store_true", help="set a new password")
+    ow.add_argument(
+        "--allow-password-change",
+        action="store_true",
+        help="--password: needed, a wrong password locks the client out",
+    )
 
 
 def _add_email_commands(sub: Any) -> None:

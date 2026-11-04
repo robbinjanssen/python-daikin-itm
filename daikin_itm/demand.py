@@ -101,8 +101,7 @@ _T = TypeVar("_T")
 MB_DEMAND = 109
 MM_ENERGY_SAVING_BUTTON = 17
 
-# Demand control main (3300): graph, legend button, the status texts, the unit label
-# after the target power, the buttons and Cancel.
+# Demand control main (3300).
 MAIN = 3300
 MN_GRAPH, MN_LEGEND, MN_UNIT = 1, 2, 10
 MN_STATE, MN_PERIOD, MN_TARGET, MN_PREDICTED, MN_SYNC = 5, 7, 9, 12, 15
@@ -136,14 +135,14 @@ TS_UPPER_COOL, TS_UPPER_BUTTON, TS_LOWER_HEAT, TS_LOWER_BUTTON = 5, 7, 9, 11
 STATUS = 3310
 CS_TABS, CS_CANCEL = 1, 7
 CS_TAB_PARTS = ((3, 5, 6), (9, 11, 12), (14, 16, 17))
-# Group (3311): members, add, remove, available points, condition, resume, OK, Cancel.
+# Group (3311).
 GROUP = 3311
 GP_MEMBERS, GP_ADD, GP_REMOVE, GP_AVAILABLE = 2, 4, 5, 8
 GP_CONDITION, GP_RESUME, GP_OK, GP_CANCEL = 10, 14, 11, 12
-# Target power (3312): text, its Change, OK, Cancel.
+# Target power (3312).
 TARGET = 3312
 TP_TEXT, TP_BUTTON, TP_OK, TP_CANCEL = 2, 3, 4, 5
-# Energy saving suspend (1400): status text, suspend button, Cancel.
+# Energy saving suspend (1400).
 SUSPEND = 1400
 SS_STATUS, SS_BUTTON, SS_CANCEL = 2, 3, 4
 
@@ -411,15 +410,11 @@ def _row(names: list[str], name: str, what: str) -> int:
 
 
 def _ensure_enabled(s: _Session, screen: int, part: int, what: str) -> None:
-    """Raise for a part the iTM reports disabled: clicking it hangs the iTM."""
-    if s.state.get(screen, part, "ENABLED") == 0:
-        msg = f"{what}: the iTM has this disabled"
-        raise ItmCommandError(msg)
+    s.refuse_disabled(screen, part, what)
 
 
 async def _click(s: _Session, screen: int, part: int, what: str) -> Reply:
-    _ensure_enabled(s, screen, part, what)
-    return await s.send(screen, part)
+    return await s.click(screen, part, what)
 
 
 async def _select(s: _Session, screen: int, part: int, row: int) -> None:
@@ -1168,7 +1163,7 @@ async def set_suspended(s: _Session, *, suspended: bool) -> bool:
 
     """
     if s.indicators().energy_saving is not suspended:
-        return True  # active and resume wanted, or not active and suspend wanted
+        return True
     verb = "suspend" if suspended else "resume"
     try:
         if not await _open_suspend(s):
@@ -1280,16 +1275,18 @@ async def read_demand_service(s: _Session) -> DemandServiceSettings:
 async def _set_port(  # noqa: PLR0913  # pylint: disable=too-many-arguments
     s: _Session, screen: int, *, button: int, delete: int, port: str, what: str
 ) -> bool:
-    """Clear a port ("") or pick it in 1514 (its OK sent as a write).
+    """Clear a port ("") or pick it in 1514, both sent as writes.
+
+    A dry run plans them (1514 is cancelled), so the rest of the screen is still
+    checked and planned.
 
     Returns
     -------
-        False in a dry run (1514 cancelled), else True.
+        False in a dry run, else True.
 
     """
     if not port:
-        await _click(s, screen, delete, f"clear {what}")
-        return True
+        return await s.write(f"clear {what}", screen, delete) is not None
     await _open_below(s, screen, button, PORT_PICKER)
     names = ports_from_screen(s.state)
     await _select(s, PORT_PICKER, PP_LIST, _row(list(names), port, "port"))
@@ -1321,15 +1318,15 @@ async def set_pulse_setup(s: _Session, change: PulseChange) -> bool:
     try:
         await _require_screen(s, PULSE_SETUP, "demand pulse setup")
         for index, port in enumerate((change.input_port1, change.input_port2)):
-            if port is not None and not await _set_port(
-                s,
-                PULSE_SETUP,
-                button=PS_PORT_BUTTONS[index],
-                delete=PS_PORT_DELETES[index],
-                port=port.strip(),
-                what=f"input port {index + 1}",
-            ):
-                return False
+            if port is not None:
+                await _set_port(
+                    s,
+                    PULSE_SETUP,
+                    button=PS_PORT_BUTTONS[index],
+                    delete=PS_PORT_DELETES[index],
+                    port=port.strip(),
+                    what=f"input port {index + 1}",
+                )
         for value, button, what in (
             (change.pulse_coefficient, PS_COEFFICIENT_BUTTON, "pulse coefficient"),
             (change.return_value, PS_RETURN_BUTTON, "return value"),
@@ -1393,15 +1390,14 @@ async def set_interlock_ports(s: _Session, ports: Mapping[int, str]) -> bool:
             if not 1 <= number <= len(IL_PORT_BUTTONS):
                 msg = f"there is no interlock input port {number}"
                 raise ItmCommandError(msg)
-            if not await _set_port(
+            await _set_port(
                 s,
                 INTERLOCK_SETUP,
                 button=IL_PORT_BUTTONS[number - 1],
                 delete=IL_PORT_DELETES[number - 1],
                 port=port.strip(),
                 what=f"interlock input port {number}",
-            ):
-                return False
+            )
         return await _ok(
             s, "save demand control interlock", INTERLOCK_SETUP, IL_OK, IL_CANCEL
         )

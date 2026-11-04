@@ -232,14 +232,14 @@ async def test_heating_optimisation(itm: FakeDealerITM) -> None:
     result = await c.set_heating_optimisation(enabled=True)
     assert result is not None
     assert all(u.enabled for u in result)
-    await c.set_heating_optimisation(enabled=True)  # already: nothing sent
+    await c.set_heating_optimisation(enabled=True)
     result = await c.set_heating_optimisation(enabled=False)
     assert result is not None
     assert not any(u.enabled for u in result)
     with pytest.raises(ItmCommandError, match="not found once"):
         await c.set_heating_optimisation(["Nowhere"], enabled=True)
     itm.hmo.clear()  # nothing listed: All off stays disabled
-    with pytest.raises(ItmCommandError, match="the button disabled"):
+    with pytest.raises(ItmCommandError, match="has this disabled"):
         await run(itm, df.set_heating_optimisation_all, enabled=False)
     assert itm.open_screens == set()
 
@@ -424,11 +424,11 @@ async def test_disabled_parts_are_never_clicked() -> None:
     itm.limits.append(Group("A"))
     itm.interlocks.append(Interlock("P"))
     c = FakeClient(itm)
-    with pytest.raises(ItmCommandError, match="the button disabled"):
+    with pytest.raises(ItmCommandError, match="has this disabled"):
         await c.delete_temperature_limit("A")
-    with pytest.raises(ItmCommandError, match="the button disabled"):
+    with pytest.raises(ItmCommandError, match="has this disabled"):
         await c.fetch_interlock_setup("P")
-    with pytest.raises(ItmCommandError, match="the button disabled"):
+    with pytest.raises(ItmCommandError, match="has this disabled"):
         await c.copy_interlock("P", "Q")
     assert itm.limits[0].name == "A"
     assert itm.open_screens == set()
@@ -672,7 +672,6 @@ async def test_interlock_conditions_and_actions(itm: FakeDealerITM) -> None:
     assert setup.outputs[0].actions == ()
     program = itm.interlock("Program A")
     assert program.condition_of[b]["point"] == "Return sensor"
-    # Change only a condition and an action: the inputs and outputs stay.
     setup = await c.set_interlock_setup(
         "Program A",
         conditions=[InterlockConditionSpec(b, constant=25, comparison=">")],
@@ -706,13 +705,13 @@ async def test_interlock_condition_refusals(itm: FakeDealerITM) -> None:
         (InterlockConditionSpec(a, mode="dry"), "'dry' is not offered"),
         (InterlockConditionSpec(a, comparison="="), "is not offered"),
         (InterlockConditionSpec(a, reference_point="Nowhere"), "not found once"),
-        (InterlockConditionSpec(a, multistate="State 2"), "the button disabled"),
+        (InterlockConditionSpec(a, multistate="State 2"), "has this disabled"),
         (InterlockConditionSpec("Nowhere", state="On"), "interlock input 'Nowhere'"),
     ):
         with pytest.raises(ItmCommandError, match=match):
             await c.set_interlock_setup("P", conditions=[spec])
     for action, match in (
-        (InterlockActionSpec(x, power=PowerState.SETBACK_LOW), "the button disabled"),
+        (InterlockActionSpec(x, power=PowerState.SETBACK_LOW), "has this disabled"),
         (InterlockActionSpec(x, mode="Dry"), "is not offered"),
         (InterlockActionSpec("Nowhere", power=PowerState.ON), "interlock output"),
     ):
@@ -787,11 +786,11 @@ async def test_disabled_setup_buttons() -> None:
     assert setup.conditions == ()
     assert setup.outputs[0].events == (("Output", x),)
     assert setup.outputs[0].actions == ()
-    with pytest.raises(ItmCommandError, match="the button disabled"):
+    with pytest.raises(ItmCommandError, match="has this disabled"):
         await c.set_interlock_setup(
             "P", conditions=[InterlockConditionSpec(a, state="On")]
         )
-    with pytest.raises(ItmCommandError, match="the button disabled"):
+    with pytest.raises(ItmCommandError, match="has this disabled"):
         await c.set_interlock_setup(
             "P",
             outputs=[

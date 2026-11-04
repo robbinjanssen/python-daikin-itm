@@ -379,6 +379,23 @@ async def test_web_users(itm: FakeITM) -> None:
     assert len(itm.web_users) == 2
 
 
+async def test_web_user_dry_run_never_types_the_password(itm: FakeITM) -> None:
+    """A dry run cancels the password input and plans it as ***."""
+    dry = FakeClient(itm, dry_run=True)
+    sent = len(itm.requests)
+    assert await dry.create_web_user("demouser", "s3cret!", zones=("Building",)) is None
+    assert await dry.set_web_user("viewer", password="n3wpass") is None
+    assert "web user demouser password = ***" in " ".join(dry.planned)
+    assert "web user viewer password = ***" in " ".join(dry.planned)
+    typed = [
+        r for r in itm.requests[sent:] if r.get("string") in {"s3cret!", "n3wpass"}
+    ]
+    assert typed == []
+    assert "demouser" not in itm.passwords
+    with pytest.raises(ItmCommandError, match="4-15 characters"):
+        await dry.create_web_user("other", "abc", zones=("Building",))
+
+
 async def test_language(itm: FakeITM) -> None:
     """Read and switch the display language; only the region screen's OK applies."""
     c = FakeClient(itm)

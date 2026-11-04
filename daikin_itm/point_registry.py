@@ -158,10 +158,7 @@ async def _click(s: _Session, screen: int, part: int, what: str) -> Reply:
     if screen == REGISTRY and part in RG_FORBIDDEN:
         msg = f"{what}: part {part} of the registration screen is never pressed"
         raise ItmCommandError(msg)
-    if s.state.get(screen, part, "ENABLED") == 0:
-        msg = f"{what}: the iTM has this button disabled"
-        raise ItmCommandError(msg)
-    return await s.send(screen, part)
+    return await s.click(screen, part, what)
 
 
 MAX_CONFIRMS = 3  # questions answered when leaving a screen

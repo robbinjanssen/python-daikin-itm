@@ -204,7 +204,8 @@ EVT_AIR_VOLUME, EVT_AIR_VOLUME_COMBO = 35, 36
 # History (800).
 H_LIST, H_PAGE_LABEL, H_DATE = 1, 14, 8
 H_CLASS_ERROR, H_CLASS_MANAGEMENT, H_CLASS_SETTINGS, H_CLASS_STATUS = 3, 4, 5, 6
-H_DAY_PREVIOUS, H_DAY_NEXT, H_REFRESH, H_PAGE_PREVIOUS, H_PAGE_NEXT = 9, 10, 12, 15, 16
+H_DAY_PREVIOUS, H_DAY_NEXT, H_REFRESH = 9, 10, 12
+H_PAGE_OLDER, H_PAGE_NEWER = 15, 16
 HISTORY_COLUMNS = 10
 
 # Time (2400), region (2500) and version (2600).
@@ -229,9 +230,6 @@ DATE_FORMATS = ("%d/%m/%Y", "%m/%d/%Y", "%Y/%m/%d")
 _VERSION = re.compile(r"\bVer\s*([\d.]+)")
 _ACTION_PAIR = re.compile(r"^(.*?)\s*\[(.*)\]$")
 _ACTION_TEMP = re.compile(r"^(-?\d+(?:[.,]\d+)?)\s*(?:°[CF]|℃|℉)$")
-
-
-# -- models ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -434,9 +432,6 @@ class ItmConfig:
     emergency_stop: tuple[EmergencyStopProgram, ...]
     extra: dict[str, Any] = field(default_factory=dict)
     system: SystemSettings | None = None  # with fetch_config(system=True)
-
-
-# -- readers --------------------------------------------------------------------------
 
 
 def _text(state: UIState, screen: int, part: int, ptype: str = "TEXT") -> str | None:

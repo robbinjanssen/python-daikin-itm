@@ -72,6 +72,8 @@ class FakeEnergyMoreITM(FakeEnergyEditITM):  # pylint: disable=too-many-instance
     def __init__(self, *, data: bool = True) -> None:
         """Start with two rules (Rule A with a weekday range) and generic points."""
         super().__init__(data=data)
+        self.copy_asks_name = False
+        self.copy_name_cancelled = False
         # Per rule: per day key (weekday 0-6, special "s0"-"s4") its time ranges.
         self.rule_days: dict[str, dict[str, list[dict[str, Any]]]] = {
             name[0]: {} for name in self.rules
@@ -243,10 +245,17 @@ class FakeEnergyMoreITM(FakeEnergyEditITM):  # pylint: disable=too-many-instance
 
     def _rule_list_event(self, ev: dict[str, Any]) -> list[Update] | None:
         part = ev["part"]
+        if part == 12 and ev["event"] == 2:
+            self.copy_name_cancelled = True
+            return [("DLG_CLOSE", 3213, [12, 1], [])]
         if ev["event"] != 1 or part in {2, 8, 10}:
             return None
         if part in {4, 6, 7}:
             return self._list_event(ev)
+        if part == 5 and self.copy_asks_name:
+            data = [12, 4, "Rule name", "New rule 001", 1, 16, 0, 0, 1, "Words"]
+            data += ["OK", "Cancel", *["x"] * 12]
+            return [("DLG_OPEN", 3213, data, [])]
         if part in {5, 9}:
             self.row_selected.setdefault(3213, -1)
             if self.row_selected[3213] < 0:
@@ -360,7 +369,18 @@ class FakeEnergyMoreITM(FakeEnergyEditITM):  # pylint: disable=too-many-instance
 
     def _field_parts(self) -> list[tuple[int, str, Any]]:
         f = self.rs_fields
+        usable = {
+            13: f["setpoint"],
+            14: f["setpoint"],
+            15: f["setpoint"] and f["cool_on"],
+            16: f["setpoint"] and f["cool_on"],
+            17: f["setpoint"] and f["heat_on"],
+            18: f["setpoint"] and f["heat_on"],
+        }
+        for part, on in usable.items():
+            (self.locked.discard if on else self.locked.add)((3217, part))
         return [
+            *[(part, "ENABLED", int(on)) for part, on in usable.items()],
             (7, "TEXT", f["start"]),
             (10, "TEXT", f["end"]),
             (12, "CHECK_STATE", int(f["setpoint"])),
@@ -414,8 +434,10 @@ class FakeEnergyMoreITM(FakeEnergyEditITM):  # pylint: disable=too-many-instance
             data = [HOURMIN_ID, 10, 4, "Time", 0, 0, 0, 0, 23, 59, "OK", "Cancel"]
             return [("DLG_OPEN", 3217, data, [])]
         if part in {12, 13, 14}:
+            if ev["dtype"] != 1:
+                return [("UPDATE", 3217, [], [])]
             key = {12: "setpoint", 13: "cool_on", 14: "heat_on"}[part]
-            self.rs_fields[key] = not self.rs_fields[key]
+            self.rs_fields[key] = ev["number"] == 1
             return [("UPDATE", 3217, [], self._field_parts())]
         if part in {16, 18}:
             key, low, high = ("cool", 16, 32) if part == 16 else ("heat", 10, 30)

@@ -316,7 +316,7 @@ async def test_energy_saving(itm: FakeDemandITM) -> None:
     assert await c.suspend_energy_saving() is False
     assert itm.suspended
     itm.saved.clear()
-    assert await c.suspend_energy_saving() is False  # already suspended
+    assert await c.suspend_energy_saving() is False
     assert itm.saved == []
     dry = FakeClient(itm, dry_run=True)
     assert await dry.suspend_energy_saving(suspend=False) is None
@@ -354,14 +354,14 @@ async def test_energy_saving_service(itm: FakeDemandITM) -> None:
     sent = len(itm.requests)
     with pytest.raises(ItmCommandError, match="allow_service_change"):
         await c.disable_energy_saving(PASSWORD)
-    assert len(itm.requests) == sent  # refused before anything is sent
+    assert len(itm.requests) == sent
     dry = FakeClient(itm, dry_run=True)
     assert await dry.disable_energy_saving(PASSWORD) is None
     assert itm.saving_configured
     assert await c.disable_energy_saving(PASSWORD, allow_service_change=True) is False
     es = await c.fetch_energy_saving(PASSWORD)
     assert es.service is not None
-    assert es.service.control_status is None  # empty while not active
+    assert es.service.control_status is None
     with pytest.raises(ReadOnlyError):
         await FakeClient(itm, read_only=True).disable_energy_saving(
             PASSWORD, allow_service_change=True
@@ -397,10 +397,23 @@ async def test_pulse_setup(itm: FakeDemandITM) -> None:
     with pytest.raises(ItmCommandError, match="allow_service_change"):
         await c.set_demand_pulse_setup(PASSWORD, pulse_coefficient=2)
     dry = FakeClient(itm, dry_run=True)
-    assert await dry.set_demand_pulse_setup(PASSWORD, input_port2="Port 2") is None
-    assert dry.planned == ["pick input port 2 Port 2: screen 1514 part 3 event 1"]
-    assert await dry.set_demand_pulse_setup(PASSWORD, cutoff_value=12) is None
+    assert (
+        await dry.set_demand_pulse_setup(
+            PASSWORD, input_port1="", input_port2="Port 2", cutoff_value=12
+        )
+        is None
+    )
+    assert [p.split(":")[0] for p in dry.planned] == [
+        "clear input port 1",
+        "pick input port 2 Port 2",
+        "save demand pulse setup",
+    ]
     assert itm.pulse["cutoff"] == 10
+    assert st.pulse.input_ports == ("Port 1", None)
+    with pytest.raises(ItmCommandError, match="outside the iTM's range"):
+        await dry.set_demand_pulse_setup(
+            PASSWORD, input_port2="Port 2", pulse_coefficient=1e9
+        )
     got = await c.set_demand_pulse_setup(
         PASSWORD,
         input_port1="",
@@ -442,8 +455,12 @@ async def test_interlock_setup(itm: FakeDemandITM) -> None:
             PASSWORD, {4: "Port 1"}, allow_service_change=True
         )
     dry = FakeClient(itm, dry_run=True)
-    assert await dry.set_demand_interlock_ports(PASSWORD, {2: "Port 3"}) is None
-    assert await dry.set_demand_interlock_ports(PASSWORD, {2: ""}) is None
+    assert await dry.set_demand_interlock_ports(PASSWORD, {2: "Port 3", 3: ""}) is None
+    assert [p.split(":")[0] for p in dry.planned] == [
+        "pick interlock input port 2 Port 3",
+        "clear interlock input port 3",
+        "save demand control interlock",
+    ]
     assert itm.interlock == ["", "", "Port 1"]
     with pytest.raises(ItmCommandError, match="pulse setup"):
         await c.set_demand_pulse_setup(

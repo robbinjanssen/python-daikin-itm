@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import hashlib
 import ipaddress
 import json
@@ -74,7 +75,7 @@ from .menu import (
     H_DATE,
     H_DAY_NEXT,
     H_DAY_PREVIOUS,
-    H_PAGE_NEXT,
+    H_PAGE_OLDER,
     H_REFRESH,
     MB_CHANGEOVER,
     MB_EMERGENCY_STOP,
@@ -593,7 +594,14 @@ class _Session:  # pylint: disable=too-many-public-methods
         string: str = "",
         array: tuple[int, ...] = (),
     ) -> Reply:
-        """Send a GUI event and merge the reply into the UI state."""
+        """Send a GUI event and merge the reply into the UI state.
+
+        A click on a part the iTM reports disabled is refused: it hangs the iTM.
+        The unit settings dialog keeps its own checks: it opens with its controls
+        disabled, and ticking a setting's checkbox enables them.
+        """
+        if event == EventType.CLICK and screen != ScreenID.SETTINGS:
+            self.refuse_disabled(screen, part, f"screen {screen} part {part}")
         body = encode_event(
             self.token, screen, part, event, data_type, number, array, string=string
         )
@@ -621,6 +629,18 @@ class _Session:  # pylint: disable=too-many-public-methods
                 msg = f"iTM ended the session: {s.data}"
                 raise SessionEnded(msg)
         return reply
+
+    def refuse_disabled(self, screen: int, part: int, what: str) -> None:
+        """Raise for a part the iTM reports disabled; a hidden part is fine.
+
+        Raises
+        ------
+            ItmCommandError: The part is disabled.
+
+        """
+        if self.state.get(screen, part, "ENABLED") == 0:
+            msg = f"{what}: the iTM has this disabled"
+            raise ItmCommandError(msg)
 
     async def _take_token(self, text: str) -> None:
         # Taken before parsing, so a parser problem can never lose the session.
@@ -1513,6 +1533,8 @@ class _Session:  # pylint: disable=too-many-public-methods
 
         """
         self._writable()
+        if event == EventType.CLICK and screen != ScreenID.SETTINGS:
+            self.refuse_disabled(screen, part, label)
         if self._client.dry_run:
             self._client.planned.append(
                 f"{label}: screen {screen} part {part} event {event}"
@@ -1891,11 +1913,9 @@ class _Session:  # pylint: disable=too-many-public-methods
             raise ItmCommandError(msg)
         await self.select_row(screen, part, row)
 
-    async def _click_enabled(self, screen: int, part: int, what: str) -> Reply:
-        """Click a button, but never one the iTM reports disabled (that hangs it)."""
-        if self.state.get(screen, part, "ENABLED") == 0:
-            msg = f"{what}: the iTM has the button disabled"
-            raise ItmCommandError(msg)
+    async def click(self, screen: int, part: int, what: str) -> Reply:
+        """Click a button, naming it when the iTM has it disabled."""
+        self.refuse_disabled(screen, part, what)
         return await self.send(screen, part)
 
     async def _open_system_screen(self, button: int, screen: MenuScreen) -> None:
@@ -1909,7 +1929,7 @@ class _Session:  # pylint: disable=too-many-public-methods
         await self._open_system_screen(MB_ZONES, s)
         try:
             await self._select_listed(s, ZN_LIST, 0, zone, "zone")
-            await self._click_enabled(s, ZN_SETTINGS, "zone")
+            await self.click(s, ZN_SETTINGS, "zone")
             return zone_attributes_from_screen(self.state)
         finally:
             await self.close_screen(a)
@@ -1928,7 +1948,7 @@ class _Session:  # pylint: disable=too-many-public-methods
         n = MenuScreen.NETWORK
         text = field in NW_TEXT_FIELDS
         kind = "CHARINPUT" if text else "IPADDR"
-        reply = await self._click_enabled(n, NW_BUTTONS[field], f"network {field}")
+        reply = await self.click(n, NW_BUTTONS[field], f"network {field}")
         dialogs = [
             u for u in reply.screens if u.update == "DLG_OPEN" and u.data[1] == kind
         ]
@@ -2035,9 +2055,9 @@ class _Session:  # pylint: disable=too-many-public-methods
             )
             target = MT_IN_MAINTENANCE if on else MT_AVAILABLE
             if row_index(self.state, s, target, 1, point) is not None:
-                return  # already where it should be
+                return
             await self._select_listed(s, source, 1, point, "maintenance")
-            await self._click_enabled(s, button, "maintenance")
+            await self.click(s, button, "maintenance")
             verb = "into" if on else "out of"
             await self.press_ok(
                 f"put {point} {verb} maintenance", s, MT_OK, CLOSE_PART[s]
@@ -2053,7 +2073,7 @@ class _Session:  # pylint: disable=too-many-public-methods
         await self._open_system_screen(MB_POINTS, s)
         try:
             await self._select_listed(s, PT_LIST, 1, point, "point")
-            await self._click_enabled(s, PT_CHANGE, "point")
+            await self.click(s, PT_CHANGE, "point")
             if a not in self.state.screens:
                 msg = f"{point}: the point settings did not open"
                 raise ItmCommandError(msg)
@@ -2080,7 +2100,7 @@ class _Session:  # pylint: disable=too-many-public-methods
         await self._open_system_screen(MB_ZONES, s)
         try:
             await self._select_listed(s, ZN_LIST, 0, zone, "zone")
-            await self._click_enabled(s, ZN_SETTINGS, "zone")
+            await self.click(s, ZN_SETTINGS, "zone")
             if a not in self.state.screens:
                 msg = f"{zone}: the zone settings did not open"
                 raise ItmCommandError(msg)
@@ -2100,8 +2120,13 @@ class _Session:  # pylint: disable=too-many-public-methods
             await self.close_screen(a)
             await self.close_screen(s)
 
-    async def _answer_password(self, reply: Reply, password: str) -> None:
-        """Enter the password in the dialog(s) a reply opened (new, then repeat)."""
+    async def _answer_password(
+        self, reply: Reply, password: str, what: str = "password"
+    ) -> None:
+        """Enter the password in the dialog(s) a reply opened (new, then repeat).
+
+        A dry run never types it: it cancels the input and plans ``***``.
+        """
         for _ in range(2):
             dialogs = [
                 u
@@ -2116,6 +2141,12 @@ class _Session:  # pylint: disable=too-many-public-methods
                 await self.send(d.screen, d.data[0], EventType.CLICK2, DataType.INT, 0)
                 msg = f"the password must be {low}-{high} characters"
                 raise ItmCommandError(msg)
+            if self._client.dry_run:
+                await self.send(d.screen, d.data[0], EventType.CLICK2, DataType.INT, 0)
+                self._client.planned.append(
+                    f"{what} = ***: screen {d.screen} input {d.data[0]}"
+                )
+                return
             reply = await self.send(
                 d.screen, d.data[0], EventType.CLICK, DataType.STRING, string=password
             )
@@ -2127,7 +2158,7 @@ class _Session:  # pylint: disable=too-many-public-methods
     async def _pick_user_zones(self, zones: tuple[str, ...]) -> None:
         """Select the zones a web user manages in 1202 and press its OK."""
         z = MenuScreen.USER_ZONES
-        await self._click_enabled(MenuScreen.USER_SETUP, US_ZONES_BUTTON, "user zones")
+        await self.click(MenuScreen.USER_SETUP, US_ZONES_BUTTON, "user zones")
         if z not in self.state.screens:
             msg = "the user's zone list did not open"
             raise ItmCommandError(msg)
@@ -2164,10 +2195,10 @@ class _Session:  # pylint: disable=too-many-public-methods
                 msg = f"web user {name!r} exists already"
                 raise ItmCommandError(msg)
             if new:
-                await self._click_enabled(s, WU_ADD, "add web user")
+                await self.click(s, WU_ADD, "add web user")
             else:
                 await self._select_listed(s, WU_LIST, 0, name, "web user")
-                await self._click_enabled(s, WU_CHANGE, "change web user")
+                await self.click(s, WU_CHANGE, "change web user")
             if u not in self.state.screens:
                 msg = f"{name}: the user setup did not open"
                 raise ItmCommandError(msg)
@@ -2175,7 +2206,9 @@ class _Session:  # pylint: disable=too-many-public-methods
                 await self.answer_text(u, US_NAME_BUTTON, name, "user name")
             if password is not None:
                 reply = await self.send(u, US_PASSWORD_BUTTON)
-                await self._answer_password(reply, password)
+                await self._answer_password(
+                    reply, password, f"web user {name} password"
+                )
             if admin is not None:
                 await self.send(u, US_ADMIN if admin else US_USER)
             if zones is not None:
@@ -2358,7 +2391,7 @@ class _Session:  # pylint: disable=too-many-public-methods
                 return tuple(events)
             detailed = []
             for event in events:
-                # Select the event's own row (the list has separator rows too).
+                # The list has separator rows too.
                 await self.send(
                     MenuScreen.SCHEDULE_EVENTS,
                     EV_LIST,
@@ -2560,8 +2593,10 @@ class _Session:  # pylint: disable=too-many-public-methods
                 await self._history_go_to(day, date_format)
             result = [history_from_screen(self.state)]
             for _ in range(pages - 1):
+                if self.state.get(MenuScreen.HISTORY, H_PAGE_OLDER, "ENABLED") != 1:
+                    break
                 await self.wait_for_progress(
-                    await self.send(MenuScreen.HISTORY, H_PAGE_NEXT)
+                    await self.send(MenuScreen.HISTORY, H_PAGE_OLDER)
                 )
                 page = history_from_screen(self.state)
                 if not page.entries or page.page == result[-1].page:
@@ -2704,7 +2739,6 @@ def _settings_mismatch(result: UnitSettings, changes: dict[str, Any]) -> dict[st
     for key, value in changes.items():
         have = shown.get(key)
         if key in {"ventilation_mode", "ventilation_amount"}:
-            # Picked by label, ignoring case and outer spaces.
             if str(have or "").strip().casefold() != str(value).strip().casefold():
                 wrong[key] = have
         elif key in shown and have != value:
@@ -2755,6 +2789,18 @@ _EXPERIMENTAL_UNIT_SETTINGS = frozenset(
         "analog_output",
         "multistate_output",
     }
+)
+
+
+KEPT_EVENT_SETTINGS = (
+    "power",
+    "mode",
+    "setpoint",
+    "lock_start_stop",
+    "lock_mode",
+    "lock_setpoint",
+    "overtime",
+    "fan_speed",
 )
 
 
@@ -2846,7 +2892,7 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
         self._unit_locks: dict[str, asyncio.Lock] = {}
         # Unconfirmed changes (written with confirm=False) by unit: what was changed
         # and how to recognize it.
-        self._unconfirmed: dict[str, tuple[str, Callable[[Unit], bool]]] = {}
+        self._unconfirmed: dict[str, Callable[[], Awaitable[object]]] = {}
 
     async def close(self) -> None:
         """Close the aiohttp session if the client created it."""
@@ -4058,7 +4104,7 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
             )
         )
 
-    # -- energy navigator writes (tested against the simulated iTM only) -------------
+    # -- energy navigator writes -----------------------------------------------------
     async def set_planned_consumption(  # pylint: disable=too-many-arguments
         self,
         *,
@@ -4169,7 +4215,6 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
             group: Work on the energy groups instead.
 
         """
-        self._experimental("create an energy type or group")
         await self._system_write(
             lambda s: _ignore(energy_edit.create_entry(s, name, group=group))
         )
@@ -4189,7 +4234,8 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
             group: Work on the energy groups instead.
 
         """
-        self._experimental("rename an energy type or group")
+        if group:
+            self._experimental("rename an energy group")
         await self._system_write(
             lambda s: _ignore(energy_edit.rename_entry(s, name, new_name, group=group))
         )
@@ -4209,7 +4255,6 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
             group: Work on the energy groups instead.
 
         """
-        self._experimental("delete an energy type or group")
         await self._system_write(
             lambda s: _ignore(energy_edit.delete_entry(s, name, group=group))
         )
@@ -4217,13 +4262,12 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
             msg = f"{name}: the iTM did not delete it"
             raise ItmCommandError(msg)
 
-    # -- energy navigator rules and installer settings (simulated iTM only) ---------
+    # -- energy navigator rules and installer settings ------------------------------
     async def _rule_names(self) -> tuple[str, ...]:
         return await self._in_session(energy_navigator.read_rules) or ()
 
     async def create_energy_rule(self, name: str) -> None:
         """Create a management rule (3213), confirmed by the rule list."""
-        self._experimental("create an energy navigator rule")
         await self._system_write(lambda s: _ignore(energy_edit.create_rule(s, name)))
         if not self.dry_run and name.strip() not in await self._rule_names():
             msg = f"rule {name}: the iTM did not create it"
@@ -4244,7 +4288,6 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
 
     async def delete_energy_rule(self, name: str) -> None:
         """Delete a management rule, confirmed by the rule list."""
-        self._experimental("delete an energy navigator rule")
         await self._system_write(lambda s: _ignore(energy_edit.delete_rule(s, name)))
         if not self.dry_run and name.strip() in await self._rule_names():
             msg = f"rule {name}: the iTM did not delete it"
@@ -4310,8 +4353,9 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
             The day as read back in a fresh session; None in a dry run.
 
         """
-        self._experimental("set an energy navigator rule's day")
         wanted = tuple(ranges)
+        if any(r.cool is not None or r.heat is not None for r in wanted):
+            self._experimental("set an energy navigator rule's setpoints")
         await self._system_write(
             lambda s: _ignore(energy_edit.set_rule_day(s, rule, day, wanted))
         )
@@ -5318,7 +5362,7 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
         async with self._own_session() as s:
             return system_edit.own_settings_from_screen(s.state)
 
-    async def set_own_settings(  # noqa: PLR0913  # pylint: disable=too-many-arguments
+    async def set_own_settings(  # noqa: PLR0913  # pylint: disable=too-many-arguments,too-many-locals
         self,
         *,
         date_format: str | None = None,
@@ -5327,11 +5371,15 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
         icon_colour: int | None = None,
         language: str | None = None,
         password: str | None = None,
+        allow_password_change: bool = False,
     ) -> OwnSettings | None:
         """Change the logged-in web user's own settings (screen 1205).
 
         The iTM ends the session when they apply. A new password is the one this
-        client logs in with from then on; it is sent once and never logged.
+        client logs in with from then on; it is sent once and never logged. It
+        needs ``allow_password_change`` (a dry run is always allowed). When the
+        read-back fails, the client goes back to the old password only if that
+        one still logs in.
 
         Args:
         ----
@@ -5341,15 +5389,33 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
             icon_colour: 1 or 2.
             language: en, de, es, pt, ja, fr, it, nl, zh or ko.
             password: A new password for the client's own account.
+            allow_password_change: Really change the password.
 
         Returns:
         -------
             The settings as read back (logging in with the new password), or None
             in a dry run.
 
+        Raises:
+        ------
+            ItmCommandError: Not allowed, nothing to change, or the read-back failed.
+
         """
-        self._experimental("change the own settings")
+        for name, value in (
+            ("language", language),
+            ("date format", date_format),
+            ("time format", time_24h),
+            ("decimal sign", decimal_comma),
+        ):
+            if value is not None:
+                self._experimental(f"change the own {name}")
         self._writable()
+        if password is not None and not allow_password_change and not self.dry_run:
+            msg = (
+                "changing the client's own password can lock it out: "
+                "pass allow_password_change=True"
+            )
+            raise ItmCommandError(msg)
         changes: dict[str, Any] = {
             "date_format": date_format,
             "time_24h": time_24h,
@@ -5378,8 +5444,13 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
             result = await self.fetch_own_settings()
             code = await self.fetch_language() if language is not None else None
         except (ItmCommandError, LoginRejected) as err:
-            self._password = old_password
             msg = "could not log in again after changing the own settings"
+            if password is not None:
+                if await self._logs_in_with(old_password):
+                    msg += "; the iTM kept the old password, which the client uses"
+                else:
+                    self._password = password
+                    msg += "; the client keeps the new password"
             raise ItmCommandError(msg) from err
         wrong = {
             k: getattr(result, k)
@@ -5392,6 +5463,16 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
             msg = f"the iTM did not take the own settings: {wrong}"
             raise ItmCommandError(msg)
         return result
+
+    async def _logs_in_with(self, password: str) -> bool:
+        """Switch to a password if a login with it works; else keep the current one."""
+        current, self._password = self._password, password
+        try:
+            await self.fetch_language()
+        except (ItmCommandError, LoginRejected):
+            self._password = current
+            return False
+        return True
 
     async def fetch_language(self) -> str | None:
         """Read the display language as a code (en, de, es, pt, ja, fr, it, nl, zh, ko).
@@ -5816,15 +5897,31 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
         """
         return await self._in_session(emergency.read_active_stops)
 
-    async def release_emergency_stop(self, name: str) -> None:
+    async def release_emergency_stop(
+        self, name: str, *, allow_safety_change: bool = False
+    ) -> None:
         """Release an active emergency stop (this library never starts one).
+
+        Releasing restarts equipment a safety input (e.g. a fire alarm) stopped, so
+        it is refused unless ``allow_safety_change`` (a dry run is always allowed).
 
         Args:
         ----
             name: The program whose stop is active.
+            allow_safety_change: Really release it.
+
+        Raises:
+        ------
+            ItmCommandError: Not allowed, or the iTM did not release the stop.
 
         """
         self._experimental("release an emergency stop")
+        if not allow_safety_change and not self.dry_run:
+            msg = (
+                "releasing an emergency stop restarts equipment a safety input "
+                "stopped: pass allow_safety_change=True"
+            )
+            raise ItmCommandError(msg)
         await self._system_write(lambda s: _ignore(emergency.release(s, name)))
         if self.dry_run:
             return
@@ -5881,8 +5978,15 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
             raise ItmCommandError(msg)
         return event
 
-    async def edit_schedule_event(  # pylint: disable=too-many-arguments
-        self, program: str, day: Day, at: str, target: str, spec: EventSpec
+    async def edit_schedule_event(  # noqa: PLR0913  # pylint: disable=too-many-arguments
+        self,
+        program: str,
+        day: Day,
+        at: str,
+        target: str,
+        spec: EventSpec,
+        *,
+        keep_unset: bool = False,
     ) -> ScheduleEvent | None:
         """Replace an event (found by its time and target) with spec.
 
@@ -5893,12 +5997,21 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
             at: The event's current time ("HH:MM").
             target: Its current target.
             spec: What it should become (time, target and settings).
+            keep_unset: Keep the event's current value of every setting spec
+                leaves None (read first), instead of leaving it out.
 
         Returns:
         -------
             The event as read back in a fresh session, or None in a dry run.
 
+        Raises:
+        ------
+            ItmCommandError: No such event; with keep_unset, an event holding
+                settings this library can't write back.
+
         """
+        if keep_unset:
+            spec = await self._keep_event_settings(program, day, at, target, spec)
         await self._schedule_write(
             lambda s: schedule_edit.edit_event(
                 s, program, day, time=at, target=target, spec=spec
@@ -5911,6 +6024,32 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
             msg = f"{program}: the iTM did not take the change to {at} {target}"
             raise ItmCommandError(msg)
         return event
+
+    async def _keep_event_settings(  # pylint: disable=too-many-arguments
+        self, program: str, day: Day, at: str, target: str, spec: EventSpec
+    ) -> EventSpec:
+        """Fill the settings spec leaves None from the event as it is now."""
+        current = await self._schedule_event(program, day, at, target)
+        if current is None:
+            msg = f"{program}: no event at {at} for {target}"
+            raise ItmCommandError(msg)
+        if (
+            current.setpoint_shift
+            or current.ventilation_mode
+            or current.air_volume
+            or current.extra
+        ):
+            msg = (
+                f"{program}: the event at {at} for {target} has settings this "
+                "library can't write back; give the whole event instead"
+            )
+            raise ItmCommandError(msg)
+        kept = {
+            name: getattr(current, name)
+            for name in KEPT_EVENT_SETTINGS
+            if getattr(spec, name) is None
+        }
+        return replace(spec, **kept)
 
     async def delete_schedule_event(
         self, program: str, day: Day, at: str, target: str
@@ -6035,7 +6174,6 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
             The copy as read back, or None in a dry run.
 
         """
-        self._experimental("copy a schedule event")
         await self._schedule_write(
             lambda s: schedule_edit.copy_event(
                 s,
@@ -6067,7 +6205,6 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
             targets: The programs to copy to, named explicitly.
 
         """
-        self._experimental("copy a schedule calendar")
         names = tuple(targets)
         await self._schedule_write(
             lambda s: schedule_edit.copy_calendar(s, program, names)
@@ -6262,12 +6399,13 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
         that never shows is logged, not raised: it belongs to an earlier call that
         has already returned.
         """
-        pending = self._unconfirmed.pop(unit, None)
-        if pending is None:
+        confirm = self._unconfirmed.pop(unit, None)
+        if confirm is None:
             return
-        what, check = pending
+        for other in [k for k, v in self._unconfirmed.items() if v is confirm]:
+            del self._unconfirmed[other]
         try:
-            await self._confirm(unit, what, check)
+            await confirm()
         except ItmCommandError as err:
             _LOGGER.warning("%s", err)
 
@@ -6278,7 +6416,7 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
             return None
         if confirm:
             return await self._confirm(unit, what, check)
-        self._unconfirmed[unit] = (what, check)
+        self._unconfirmed[unit] = functools.partial(self._confirm, unit, what, check)
         return None
 
     # -- whole zones ------------------------------------------------------------------
@@ -6293,6 +6431,67 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
                 raise ItmCommandError(msg)
             await s.select_by_name(name)
             yield s
+
+    async def _zone_members(self, zone: str) -> list[str]:
+        """Return the points directly in a zone below the zone path."""
+        async with self._session() as s:
+            await s.open_zone(self.zone_path)
+            name = _zone_name(zone, s.icons())
+            if not any(i[0] == name and i[1] == ICON_ID_ZONE for i in s.icons()):
+                msg = f"{zone!r} is not a zone"
+                raise ItmCommandError(msg)
+            await s.open_zone((name,))
+            return [i[0] for i in s.icons() if i[1] != ICON_ID_ZONE]
+
+    @asynccontextmanager
+    async def _zone_writes(self, zone: str) -> AsyncIterator[list[str]]:
+        """Apply the per-unit write rules to every point of a zone, for a zone write.
+
+        Holds each member's unit lock (in name order, so two zone writes can't
+        deadlock), lets an earlier unconfirmed change to a member show first, and
+        spaces the write like a unit write.
+        """
+        members = await self._zone_members(zone)
+        async with contextlib.AsyncExitStack() as stack:
+            for member in sorted(set(members)):
+                await stack.enter_async_context(self._unit_lock(member))
+            for member in members:
+                await self._settle(member)
+            now = time.monotonic()
+            wait = max(
+                (
+                    self._last_write.get(m, 0) + self.min_write_interval - now
+                    for m in members
+                ),
+                default=0,
+            )
+            if wait > 0:
+                await asyncio.sleep(wait)
+            try:
+                yield members
+            finally:
+                done = time.monotonic()
+                for member in members:
+                    self._last_write[member] = done
+
+    async def _finish_zone(  # pylint: disable=too-many-arguments
+        self,
+        zone: str,
+        members: list[str],
+        what: str,
+        check: Callable[[Unit], bool],
+        *,
+        confirm: bool,
+    ) -> dict[str, Unit] | None:
+        """Confirm a zone write, or leave it to the next write to each member."""
+        if self.dry_run:
+            return None
+        if confirm:
+            return await self._confirm_zone(zone, what, check)
+        later = functools.partial(self._confirm_zone, zone, what, check)
+        for member in members:
+            self._unconfirmed[member] = later
+        return None
 
     async def fetch_zone_units(self, zone: str) -> dict[str, Unit]:
         """Read every point directly in a zone below the zone path.
@@ -6344,6 +6543,12 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
 
         """
         self._writable()
+        async with self._zone_writes(zone) as members:
+            return await self._zone_power_state(zone, members, state, confirm=confirm)
+
+    async def _zone_power_state(
+        self, zone: str, members: list[str], state: PowerState, *, confirm: bool
+    ) -> dict[str, Unit] | None:
         async with self._write_zone(zone) as s:
             options = s.state.get(ScreenID.OPERATION, P_POWER, "COMBO_STRS") or []
             order = {
@@ -6360,10 +6565,12 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
                 raise ItmCommandError(msg)
             await s.choose(P_POWER, order.index(state), confirm=True)
             await s.commit(self.commit_delay)
-        if self.dry_run or not confirm:
-            return None
-        return await self._confirm_zone(
-            zone, f"power {state}", lambda u: u.power_state == state
+        return await self._finish_zone(
+            zone,
+            members,
+            f"power {state}",
+            lambda u: u.power_state == state,
+            confirm=confirm,
         )
 
     async def set_zone_setpoint(
@@ -6384,21 +6591,24 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
 
         """
         self._writable()
-        async with self._write_zone(zone) as s:
-            current = unit_from_panel(s.state)
-            if not current.running:
-                msg = f"{zone} is stopped; the iTM ignores setpoint changes then"
-                raise ItmCommandError(msg)
-            nums = list(current.setpoint_range)
-            if value not in nums:
-                raise SetpointOutOfRange(zone, value, current.setpoint_range)
-            await s.choose(P_SETPOINT, nums.index(value))
-            await s.commit(self.commit_delay)
-        if self.dry_run or not confirm:
-            return None
-        return await self._confirm_zone(
-            zone, f"setpoint {value}", lambda u: not u.running or u.setpoint == value
-        )
+        async with self._zone_writes(zone) as members:
+            async with self._write_zone(zone) as s:
+                current = unit_from_panel(s.state)
+                if not current.running:
+                    msg = f"{zone} is stopped; the iTM ignores setpoint changes then"
+                    raise ItmCommandError(msg)
+                nums = list(current.setpoint_range)
+                if value not in nums:
+                    raise SetpointOutOfRange(zone, value, current.setpoint_range)
+                await s.choose(P_SETPOINT, nums.index(value))
+                await s.commit(self.commit_delay)
+            return await self._finish_zone(
+                zone,
+                members,
+                f"setpoint {value}",
+                lambda u: not u.running or u.setpoint == value,
+                confirm=confirm,
+            )
 
     async def apply_zone(
         self,
@@ -6435,19 +6645,22 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
                 f"{zone}: unknown fan speed {fan_speed!r}, expected one of {FAN_SPEEDS}"
             )
             raise ItmCommandError(msg)
-        async with self._write_zone(zone) as s:
-            await s.change_settings(zone, power=power, mode=mode, fan_speed=fan_speed)
-        if self.dry_run or not confirm:
-            return None
-        return await self._confirm_zone(
-            zone,
-            "change",
-            lambda u: (
-                (power is None or _power_is(u, on=power))
-                and (mode is None or u.mode == mode)
-                and (fan_speed is None or u.fan_speed in {None, fan_speed})
-            ),
-        )
+        async with self._zone_writes(zone) as members:
+            async with self._write_zone(zone) as s:
+                await s.change_settings(
+                    zone, power=power, mode=mode, fan_speed=fan_speed
+                )
+            return await self._finish_zone(
+                zone,
+                members,
+                "change",
+                lambda u: (
+                    (power is None or _power_is(u, on=power))
+                    and (mode is None or u.mode == mode)
+                    and (fan_speed is None or u.fan_speed in {None, fan_speed})
+                ),
+                confirm=confirm,
+            )
 
     async def list_zones(self, path: tuple[str, ...] = ()) -> list[str]:
         """List the zones and units at a path (for discovery and configuration).

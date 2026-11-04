@@ -3,8 +3,8 @@
 Each request is written as its numbers only (screen, part, event, data type, number
 and an integer array); text it carries (such as the login's username and password
 hash) is never written. Each reply is written whole, with its page token blanked. A
-reply still holds the installation's names, descriptions and settings: replace
-those before sharing a trace (see ROADMAP.md).
+reply still holds the installation's names, descriptions and settings, and from
+some screens (such as the history) usernames and IP addresses.
 """
 
 from __future__ import annotations

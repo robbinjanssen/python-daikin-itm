@@ -173,7 +173,7 @@ async def test_edit_event_replaces_its_settings(itm: FakeScheduleITM) -> None:
     assert "mode_idx" not in first  # unticked: not part of the spec
     assert "locks" not in first
     assert first["vent"] == 0  # not covered by EventSpec: kept
-    assert weekly(itm, 2)[0]["time"] == "06:00"  # other days unchanged
+    assert weekly(itm, 2)[0]["time"] == "06:00"
     retarget = EventSpec(time="18:00", target="1:1-00", power=PowerState.OFF)
     await run(
         itm, edit_event, PROGRAM, 1, time="18:00", target="Indoor units", spec=retarget
@@ -325,6 +325,49 @@ async def test_client_event_wrappers(itm: FakeScheduleITM) -> None:
         await FakeClient(itm, read_only=True).add_schedule_event(PROGRAM, 3, spec)
 
 
+async def test_edit_event_keeps_unset_settings(itm: FakeScheduleITM) -> None:
+    """keep_unset keeps what the spec leaves out; without it, it is cleared."""
+    c = FakeClient(itm)
+    spec = EventSpec(
+        time="07:00", target="1:1-09", power=PowerState.ON, mode="heat", setpoint=21
+    )
+    await c.add_schedule_event(PROGRAM, 3, spec)
+    kept = await c.edit_schedule_event(
+        PROGRAM,
+        3,
+        "07:00",
+        "1:1-09",
+        EventSpec(time="07:30", target="1:1-09", setpoint=20),
+        keep_unset=True,
+    )
+    assert kept is not None
+    assert (kept.time, kept.power, kept.mode, kept.setpoint) == (
+        "07:30",
+        PowerState.ON,
+        "heat",
+        20,
+    )
+    replaced = await c.edit_schedule_event(
+        PROGRAM,
+        3,
+        "07:30",
+        "1:1-09",
+        EventSpec(time="07:30", target="1:1-09", setpoint=19),
+    )
+    assert replaced is not None
+    assert (replaced.power, replaced.mode, replaced.setpoint) == (None, None, 19)
+    with pytest.raises(ItmCommandError, match="no event at 09:00"):
+        await c.edit_schedule_event(
+            PROGRAM,
+            3,
+            "09:00",
+            "1:1-09",
+            EventSpec(time="09:00", target="1:1-09"),
+            keep_unset=True,
+        )
+    await c.delete_schedule_event(PROGRAM, 3, "07:30", "1:1-09")
+
+
 async def test_client_program_wrappers(itm: FakeScheduleITM) -> None:
     """Period, special day name and calendar rules through ItmClient."""
     c = FakeClient(itm)
@@ -390,7 +433,7 @@ async def test_clear_day(itm: FakeScheduleITM) -> None:
     assert weekly(itm, 2)
     assert await run(itm, clear_day, PROGRAM, 2) is True
     assert not weekly(itm, 2)
-    assert weekly(itm, 3)  # the other days are untouched
+    assert weekly(itm, 3)
 
 
 async def test_copy_event(itm: FakeScheduleITM) -> None:

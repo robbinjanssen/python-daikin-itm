@@ -490,10 +490,12 @@ class FakeITM:  # pylint: disable=too-many-instance-attributes
         ]
         self.history_rows = [list(r) for r in HISTORY_ROWS]
         self.history_day = "01/01/2025"
-        self.history_loaded_day = self.history_day  # the day the list was loaded for
+        self.history_loaded_day = self.history_day
         self.history_classes = {3, 4, 5, 6}  # checked class filters
         self.history_job = 0
         self.history_loading = False
+        self.history_page = 0
+        self.history_page_size = 100
         self.optional_available: dict[int, bool] = {
             400: True,
             500: True,
@@ -577,7 +579,7 @@ class FakeITM:  # pylint: disable=too-many-instance-attributes
         self.overview_offset = 0
         self.selected_event: int | None = None
         self.editor_confirming = False
-        self.session: str | None = None  # active token
+        self.session: str | None = None
         self.tokens: Iterator[str] = (f"{i:032x}" for i in itertools.count(1))
         self.requests: list[dict[str, Any]] = []
         self.fail_next: Exception | None = None
@@ -914,7 +916,8 @@ class FakeITM:  # pylint: disable=too-many-instance-attributes
         rows = []
         for e in events:
             icon = 1000 if e["kind"] == "zone" else 2114
-            action = "Start" if e.get("power") == 0 else "Stop"
+            power = e.get("power")
+            action = "" if power is None else "Start" if power == 0 else "Stop"
             rows.append(
                 {
                     "text": [e["time"], e["target"], action],
@@ -1698,7 +1701,10 @@ class FakeITM:  # pylint: disable=too-many-instance-attributes
                     (p, "CHECK_STATE", 1 if p in self.history_classes else 0)
                     for p in (3, 4, 5, 6)
                 ],
+                (15, "ENABLED", 0),
+                (16, "ENABLED", 0),
             ]
+            self.history_page = 0
             progress = [
                 19,
                 11,
@@ -1797,9 +1803,14 @@ class FakeITM:  # pylint: disable=too-many-instance-attributes
             shown += timedelta(days=1 if part == 10 else -1)
             self.history_day = shown.strftime("%d/%m/%Y")
             return [("UPDATE", 800, [], [(8, "TEXT", self.history_day)])]
-        if part in {12, 16}:
+        if part in {12, 15, 16}:
             if part == 12:
                 self.history_loaded_day = self.history_day
+                self.history_page = 0
+            elif self._history_page_enabled(part):
+                self.history_page += 1 if part == 15 else -1
+            else:
+                self.history_page = -1
             self.history_loading = True
             self.history_job += 1
             progress = [
@@ -1814,17 +1825,34 @@ class FakeITM:  # pylint: disable=too-many-instance-attributes
             return [("DLG_OPEN", 800, progress, [])]
         return []
 
-    def _polling(self, _ev: dict[str, Any]) -> list[Update]:
-        """Deliver the history once it has loaded."""
-        if 800 not in self.open_screens or self.history_loading:
-            return []
+    def _history_matching(self) -> list[list[str]]:
+        """Return the rows the class filters and the loaded day show."""
         kinds = {3: "Error", 4: "Control", 5: "Attributes", 6: "Status"}
         wanted = {kinds[c] for c in self.history_classes}
-        rows = [
+        return [
             r
             for r in self.history_rows
             if r[1] in wanted and self.history_loaded_day == "01/01/2025"
         ]
+
+    def _history_page_enabled(self, part: int) -> bool:
+        """Whether a page button (15 older, 16 newer) is enabled."""
+        if self.history_page < 0:
+            return False
+        if part == 15:
+            older = (self.history_page + 1) * self.history_page_size
+            return older < len(self._history_matching())
+        return self.history_page > 0
+
+    def _polling(self, _ev: dict[str, Any]) -> list[Update]:
+        """Deliver the history once it has loaded."""
+        if 800 not in self.open_screens or self.history_loading:
+            return []
+        matching = self._history_matching()
+        size, page = self.history_page_size, self.history_page
+        rows = matching[page * size : (page + 1) * size] if page >= 0 else []
+        first = page * size + 1
+        label = f"{first}-{first + len(rows) - 1}/{len(matching)}" if rows else "0-0/0"
         parts: list[tuple[int, str, Any]] = [
             (
                 1,
@@ -1834,7 +1862,9 @@ class FakeITM:  # pylint: disable=too-many-instance-attributes
                     "selected": [],
                 },
             ),
-            (14, "LABEL", f"1-{len(rows)}/{len(rows)}"),
+            (14, "LABEL", label),
+            (15, "ENABLED", int(self._history_page_enabled(15))),
+            (16, "ENABLED", int(self._history_page_enabled(16))),
         ]
         return [("UPDATE", 800, [], parts)]
 

@@ -275,7 +275,7 @@ async def create_program(s: _Session, name: str) -> bool:
                 "(it needs the emergency stop dealer option)"
             )
             raise ItmCommandError(msg)
-        reply = await s._click_enabled(MAIN, ES_CREATE, "add emergency stop program")
+        reply = await s.click(MAIN, ES_CREATE, "add emergency stop program")
         return await _answer_name(
             s, reply, name, f"create emergency stop program {name}"
         )
@@ -296,7 +296,7 @@ async def rename_program(s: _Session, name: str, new_name: str) -> bool:
         _exists(s, new_name)
         await _select_program(s, name)
         _allowed(s, ES_RENAME, name, "renaming")
-        reply = await s._click_enabled(MAIN, ES_RENAME, "rename emergency stop program")
+        reply = await s.click(MAIN, ES_RENAME, "rename emergency stop program")
         return await _answer_name(
             s, reply, new_name, f"rename emergency stop program {name} to {new_name}"
         )
@@ -317,7 +317,7 @@ async def copy_program(s: _Session, name: str, new_name: str) -> bool:
         _exists(s, new_name)
         await _select_program(s, name)
         _allowed(s, ES_COPY, name, "copying")
-        reply = await s._click_enabled(MAIN, ES_COPY, "copy emergency stop program")
+        reply = await s.click(MAIN, ES_COPY, "copy emergency stop program")
         return await _answer_name(
             s, reply, new_name, f"copy emergency stop program {name} to {new_name}"
         )
@@ -392,7 +392,7 @@ async def _open_settings(s: _Session, name: str, *, reading: bool) -> None:
             "disable it first (that needs allow_safety_change)"
         )
         raise ItmCommandError(msg)
-    reply = await s._click_enabled(MAIN, ES_EDIT, "edit emergency stop program")
+    reply = await s.click(MAIN, ES_EDIT, "edit emergency stop program")
     for dialog in reply.dialogs():
         if dialog[1] == "CONFIRM":  # "open in read-only mode?"
             await s.send(MAIN, dialog[0])
@@ -426,7 +426,7 @@ async def read_program_settings(s: _Session, name: str) -> EmergencyStopSettings
 
 async def _pick_points(s: _Session, button: int, points: tuple[str, ...]) -> None:
     """Make a 202 point list exactly these, through the picker (203), then its OK."""
-    await s._click_enabled(SETTINGS, button, "emergency stop points")
+    await s.click(SETTINGS, button, "emergency stop points")
     if PICKER not in s.state.screens:
         msg = "the emergency stop point picker did not open"
         raise ItmCommandError(msg)
@@ -435,7 +435,7 @@ async def _pick_points(s: _Session, button: int, points: tuple[str, ...]) -> Non
         if point and point not in wanted:
             names = _last_column(s.state, PICKER, PK_SELECTED)
             await _select(s, PICKER, PK_SELECTED, _row(names, point, "point"))
-            await s._click_enabled(PICKER, PK_REMOVE, "remove emergency stop point")
+            await s.click(PICKER, PK_REMOVE, "remove emergency stop point")
     for point in wanted:
         if point in _last_column(s.state, PICKER, PK_SELECTED):
             continue
@@ -446,7 +446,7 @@ async def _pick_points(s: _Session, button: int, points: tuple[str, ...]) -> Non
             msg = f"{point!r} is not offered: {err}"
             raise ItmCommandError(msg) from err
         await _select(s, PICKER, PK_AVAILABLE, row)
-        await s._click_enabled(PICKER, PK_ADD, "add emergency stop point")
+        await s.click(PICKER, PK_ADD, "add emergency stop point")
     got = [n for n in _last_column(s.state, PICKER, PK_SELECTED) if n]
     if set(got) != set(wanted):
         msg = f"the points would be {got}, not {wanted}"

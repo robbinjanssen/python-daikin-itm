@@ -91,7 +91,7 @@ async def test_email_activation(itm: FakeSystemEditITM) -> None:
     await run(itm, add_email_address, ADDRESS, (itm.units[0].name,))
     assert await run(itm, set_email_enabled, enabled=True) is True
     assert itm.email_active is True
-    assert await run(itm, set_email_enabled, enabled=True) is True  # already on
+    assert await run(itm, set_email_enabled, enabled=True) is True
     dry: dict[str, Any] = {"dry_run": True}
     assert await run(itm, set_email_enabled, enabled=False, client=dry) is False
     assert itm.email_active is True
@@ -223,7 +223,7 @@ async def test_more_settings_and_refusals(itm: FakeSystemEditITM) -> None:
         await run(itm, edit_email_address, "nobody@example.com", points=())
     with pytest.raises(ItmCommandError, match="not found"):
         await run(itm, delete_email_address, "nobody@example.com")
-    assert await run(itm, set_confirm_dialogs, enabled=True) is True  # already on
+    assert await run(itm, set_confirm_dialogs, enabled=True) is True
     assert await run(itm, set_web_server_port, None, client={"dry_run": True}) is False
     itm.remote_connectable = True
     assert (
@@ -237,9 +237,6 @@ async def test_more_settings_and_refusals(itm: FakeSystemEditITM) -> None:
         await set_own_settings(s, icon_colour=3)
     assert await set_own_settings(s, date_format="%Y/%m/%d", icon_colour=2) is True
     assert (itm.own["date"], itm.own["colour"]) == (2, 2)
-
-
-# -- through the client -----------------------------------------------------------
 
 
 async def test_client_email_and_confirm(itm: FakeSystemEditITM) -> None:

@@ -109,9 +109,6 @@ class ScreensaverMode(StrEnum):
     SCREEN_3 = "screen_3"
 
 
-# -- models ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class ZoneInfo:
     """A zone as the zone settings list it."""
@@ -283,9 +280,6 @@ class SystemSettings:
     remote_management: RemoteManagement | None = None
     ppd: PpdSettings | None = None
     energy_navigator: EnergyNavigatorInfo | None = None
-
-
-# -- readers --------------------------------------------------------------------------
 
 
 def _text(state: UIState, screen: int, part: int) -> str | None:

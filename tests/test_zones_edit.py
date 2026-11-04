@@ -162,7 +162,7 @@ async def test_jump_refusals(itm: FakeZonesITM) -> None:
     """Jump disabled (as on a real iTM), 1602 not opening or misplacing: refused."""
     a, b, c = (u.name for u in itm.units[:3])
     assert await run(itm, set_zone_members, "Zone A", (a, b, c)) is True
-    with pytest.raises(ItmCommandError, match="has the button disabled"):
+    with pytest.raises(ItmCommandError, match="has this disabled"):
         await run(itm, set_zone_member_order, "Zone A", (c,), use_jump=True)
     assert not [r for r in itm.requests if (r["screen"], r["part"]) == (1601, 5)]
     itm.jump_enabled = True
@@ -225,9 +225,6 @@ def test_icon_rules() -> None:
     assert _icon_allowed(None, 2100) is not None
     assert "family" in (_icon_allowed(2114, 2601) or "")
     assert "recognises" in (_icon_allowed(2114, 2107) or "")
-
-
-# -- through the client and the CLI ---------------------------------------------------
 
 
 async def test_client_zone_structure(itm: FakeZonesITM) -> None:

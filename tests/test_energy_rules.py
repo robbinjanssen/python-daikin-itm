@@ -179,10 +179,10 @@ async def test_rule_day_refusals(itm: FakeEnergyMoreITM) -> None:
             "Rule A", "monday", [RuleRange("08:00", "09:00", cool=40)]
         )
     itm.disabled = {(3217, 8)}
-    with pytest.raises(ItmCommandError, match="start: the iTM does not offer"):
+    with pytest.raises(ItmCommandError, match="start: the iTM has this disabled"):
         await c.set_energy_rule_day("Rule A", "monday", [RuleRange("8:00", "9:00")])
     itm.disabled = {(3214, 29)}
-    with pytest.raises(ItmCommandError, match="does not offer"):
+    with pytest.raises(ItmCommandError, match="has this disabled"):
         await c.set_energy_rule_day("Rule A", "monday", [])
     itm.disabled = set()
     original = itm._editor_event
@@ -292,6 +292,15 @@ async def test_rule_list_writes_not_taking_effect(itm: FakeEnergyMoreITM) -> Non
         await c.create_energy_rule("Rule C")
     assert await client(itm)._rule_names() == ()
     assert_closed(itm)
+
+
+async def test_copy_rule_asking_a_name(itm: FakeEnergyMoreITM) -> None:
+    """Where Copy asks a new rule's name, the prompt is cancelled and reported."""
+    itm.copy_asks_name = True
+    with pytest.raises(ItmCommandError, match="asks for a new rule's name"):
+        await client(itm).copy_energy_rule("Rule A", ["Rule B"])
+    assert itm.copy_name_cancelled
+    assert itm.rule_days["Rule B"] != itm.rule_days["Rule A"]
 
 
 async def test_copy_rule_and_calendar(itm: FakeEnergyMoreITM) -> None:

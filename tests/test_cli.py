@@ -253,7 +253,7 @@ def test_zone_and_session_file_options(
     out = capsys.readouterr().out.splitlines()
     assert len(out) == 2  # the header and the zone's one ventilation unit
     assert out[1].split()[:5] == ["Vent", "1", "Fresh", "air", "Start"]
-    assert not session_file.exists()  # removed again after the logout
+    assert not session_file.exists()
 
 
 def test_client_construction(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -394,7 +394,7 @@ def test_unusable_cache_is_ignored(
 
 def test_load_caps(tmp_path: Path) -> None:
     """The cache gives the capabilities of one host's units, zones as a tuple."""
-    assert itm_cli._load_caps(HOST) == {}  # no cache yet
+    assert itm_cli._load_caps(HOST) == {}
     caps = {
         "a": Capabilities("a", {"cool": "Cool"}, fan_speed=True, zones=("x", "y")),
     }
@@ -590,6 +590,19 @@ def test_menu_commands(itm: FakeITM, capsys: pytest.CaptureFixture[str]) -> None
     lines = capsys.readouterr().out.splitlines()
     assert lines[0].startswith("-- 01/01/2025")
     assert "Auto Change" in lines[1]
+    for unit in ("AC 05", "ac 05", "1:1-04"):
+        run("history", "--day", "2025-01-01", "--unit", unit)
+        captured = capsys.readouterr()
+        lines = captured.out.splitlines()
+        assert len(lines) == 3
+        assert all("1:1-04" in line for line in lines[1:])
+        assert "note:" not in captured.err
+    run("history", "--day", "2025-01-01", "--unit", "Office")
+    assert len(capsys.readouterr().out.splitlines()) == 1
+    run("history", "--day", "2025-01-01", "--unit", "Nowhere")
+    captured = capsys.readouterr()
+    assert len(captured.out.splitlines()) == 1
+    assert "use --zone" in captured.err
     run("functions")
     assert "interlock                0 entries" in capsys.readouterr().out
     run("config")
@@ -769,6 +782,10 @@ def test_schedule_edit_command(
         "--new-time", "07:15", "--power", "off", "--start-stop-lock", "allowed",
     )  # fmt: skip
     assert "07:15 1:1-09" in capsys.readouterr().out
+    run("schedule-edit", *edit[1:], "edit-event", "3", "07:15", "1:1-09")
+    assert "Stop" in capsys.readouterr().out
+    run("schedule-edit", *edit[1:], "edit-event", "3", "07:15", "1:1-09", "--replace")
+    assert "Stop" not in capsys.readouterr().out
     run("schedule-edit", "Always", "delete-event", "3", "07:15", "1:1-09")
     assert capsys.readouterr().out == "07:15 1:1-09: deleted\n"
     run("schedule-edit", "Always", "period", "06-15:08-31")
@@ -971,6 +988,7 @@ def test_ppd_and_export_commands(
         str(out),
     )
     assert out.read_bytes().startswith(b"history")
+    assert out.stat().st_mode & 0o777 == 0o600
     setup = tmp_path / "setup.bin"
     run("export", "setup", "--out", str(setup))
     assert setup.read_bytes().startswith(b"setup")
@@ -982,7 +1000,6 @@ def test_ppd_and_export_commands(
     fake.backup_on_device = True
     run("backup")
     assert "the iTM keeps it" in capsys.readouterr().out
-    # --parse prints the records instead of writing the archive.
     archive = history_archive()
 
     async def get_archive(_self: Any, _path: str) -> bytes:

@@ -48,6 +48,13 @@ def test_own_settings_command(
     assert "own password = ***" in out
     assert NEW_PASSWORD not in out
     assert itm.own_password_changes == 0
+    with pytest.raises(SystemExit, match="allow_password_change"):
+        run("own-settings", "--password")
+    assert itm.own_password_changes == 0
+    run("own-settings", "--password", "--allow-password-change")
+    assert itm.own_password_changes == 1
+    assert NEW_PASSWORD not in capsys.readouterr().out
+    monkeypatch.setenv("ITM_PASSWORD", NEW_PASSWORD)
     run("own-settings", "--date-format", "ymd", "--decimal", "comma", "--time", "12h")
     out = capsys.readouterr().out
     assert "date %Y/%m/%d, time 12h, decimal comma" in out

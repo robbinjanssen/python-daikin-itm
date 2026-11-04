@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from daikin_itm import ItmCommandError, ReadOnlyError
+from daikin_itm import ItmCommandError, LoginRejected, ReadOnlyError
 from daikin_itm.system_edit import (
     WebUserScreens,
     leave_own_settings,
@@ -84,7 +84,10 @@ async def test_own_password_is_sent_never_planned_or_logged(
     assert itm.own_password_changes == 0
     assert itm.own["24h"] is True
     c = FakeClient(itm)
-    assert await c.set_own_settings(password=NEW_PASSWORD) is not None
+    assert (
+        await c.set_own_settings(password=NEW_PASSWORD, allow_password_change=True)
+        is not None
+    )
     assert itm.own_password_changes == 1
     assert c._password == NEW_PASSWORD
     assert await c.fetch_language() == "en"  # a normal login with the new password
@@ -106,8 +109,10 @@ async def test_own_settings_refusals(itm: FakeUsersITM) -> None:
         await c.set_own_settings(icon_colour=3)
     with pytest.raises(ItmCommandError, match="unknown language"):
         await c.set_own_settings(language="xx")
+    with pytest.raises(ItmCommandError, match="allow_password_change"):
+        await c.set_own_settings(password=NEW_PASSWORD)
     with pytest.raises(ItmCommandError, match="4-15 characters"):
-        await c.set_own_settings(password="abc")
+        await c.set_own_settings(password="abc", allow_password_change=True)
     assert itm.session is None
     assert itm.own_password_changes == 0
 
@@ -121,6 +126,17 @@ async def test_own_session_kept_by_the_itm(itm: FakeUsersITM) -> None:
     assert await c.set_own_settings(icon_colour=2) is not None
     assert itm.own["colour"] == 2
     assert itm.session is None
+
+
+async def test_own_settings_not_opened_logs_out(itm: FakeUsersITM) -> None:
+    """A login that works but doesn't open 1205 is logged out, never left taken."""
+    itm.own_opens = False
+    c = FakeClient(itm)
+    with pytest.raises(ItmCommandError, match="logged in, but"):
+        await c.fetch_own_settings()
+    assert itm.session is None
+    itm.own_opens = True
+    assert (await c.fetch_own_settings()).icon_colour == 1
 
 
 async def test_own_settings_session_level(itm: FakeUsersITM) -> None:
@@ -154,8 +170,25 @@ async def test_own_read_back_fails(itm: FakeUsersITM) -> None:
     c = FakeClient(itm)
     itm.own_ignore_password = True  # the iTM drops the new password
     with pytest.raises(ItmCommandError, match="could not log in again"):
-        await c.set_own_settings(password=NEW_PASSWORD)
+        await c.set_own_settings(password=NEW_PASSWORD, allow_password_change=True)
     assert c._password == "secret"
+
+
+async def test_own_read_back_fails_after_the_change(
+    itm: FakeUsersITM, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The iTM took the new password but the read-back can't log in: keep it."""
+    c = FakeClient(itm)
+
+    async def busy() -> None:
+        msg = "another web session is active"
+        raise LoginRejected(msg)
+
+    monkeypatch.setattr(c, "fetch_own_settings", busy)
+    with pytest.raises(ItmCommandError, match="keeps the new password"):
+        await c.set_own_settings(password=NEW_PASSWORD, allow_password_change=True)
+    assert itm.own_password_changes == 1
+    assert c._password == NEW_PASSWORD
 
 
 # -- a web user's allowed screens (1201) ----------------------------------------------
@@ -266,7 +299,7 @@ async def test_own_buttons_without_answer(
     monkeypatch.setattr(itm, "_own_event", own_event)
     c = FakeClient(itm)
     with pytest.raises(ItmCommandError, match="no password input"):
-        await c.set_own_settings(password=NEW_PASSWORD)
+        await c.set_own_settings(password=NEW_PASSWORD, allow_password_change=True)
     with pytest.raises(ItmCommandError, match="language screen did not open"):
         await c.set_own_settings(language="en")
     assert itm.session is None

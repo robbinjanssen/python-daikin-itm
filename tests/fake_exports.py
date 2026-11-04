@@ -58,10 +58,11 @@ class FakeExportsITM(FakeITM):  # pylint: disable=too-many-instance-attributes
         self.dialog_for: dict[int, Any] = {}  # dialog id -> what it answers
         self.period = 0
         self.job = 0
-        self.export: dict[str, Any] | None = None  # the running export
+        self.export: dict[str, Any] | None = None
         self.files: dict[str, bytes] = {}
         self.confirming_export: str | None = None
         self.finished: list[tuple[int, int]] = []
+        self.download_uri: str | None = None
         self.no_file = False  # an export that ends without a file
         self.backup_on_device = False  # a backup that keeps its file on the iTM
         self.slow_polls = 2  # progress requests before the job ends
@@ -290,7 +291,8 @@ class FakeExportsITM(FakeITM):  # pylint: disable=too-many-instance-attributes
         name = f"{export['kind']}_{self.job:04d}.csv"
         self.files[f"/sdlfs/WebExport/{name}"] = f"{export['kind']};data\n".encode()
         # Like the real iTM: the full path (the "#name" form is tested on its own).
-        data = [PROGRESS_ID, 11, f"/sdlfs/WebExport/{name}", "", "Ready", "", ""]
+        uri = self.download_uri or f"/sdlfs/WebExport/{name}"
+        data = [PROGRESS_ID, 11, uri, "", "Ready", "", ""]
         return [("DLG_DOWNLOAD", screen, data, [])]
 
     def _finish(self, screen: int, array: list[int]) -> list[Update]:

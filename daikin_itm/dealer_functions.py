@@ -136,8 +136,7 @@ N_INPUTS, N_ADD, N_REMOVE, N_AVAILABLE, N_CONDITION, N_OK, N_CANCEL = (
 O_EVENTS, O_ADD, O_REMOVE, O_AVAILABLE, O_OK, O_CANCEL = 2, 8, 9, 12, 13, 14
 # The buttons opening the condition setup (902 -> 903) and action setup (905 -> 906).
 N_CONDITION_BUTTON, O_ACTION_BUTTON = 4, 6
-# The condition setup (903), the management point picker (904), the action setup
-# (906).
+# Condition setup (903), management point picker (904), action setup (906).
 INTERLOCK_CONDITION, INTERLOCK_POINTS, INTERLOCK_ACTION = 903, 904, 906
 C_OK, C_CANCEL, C_TAB = 20, 21, 27
 C_TAB_STATE, C_TAB_MODE, C_TAB_ANALOG, C_TAB_MULTISTATE = 0, 1, 2, 3
@@ -206,7 +205,7 @@ class InterlockCondition:  # pylint: disable=too-many-instance-attributes
     """The condition of one input point (903), as shown; None: not shown."""
 
     point: tuple[str, ...]  # the input's row in the input setup (902)
-    tabs: tuple[str, ...] = ()  # the condition tabs the iTM shows
+    tabs: tuple[str, ...] = ()
     state: str | None = None  # on/off tab: the checked condition's label
     state_options: tuple[str, ...] = ()
     mode: str | None = None  # operation mode tab, as shown
@@ -235,7 +234,7 @@ class InterlockAction:  # pylint: disable=too-many-instance-attributes
     lock_mode: RemoteLock | None = None
     lock_setpoint: RemoteLock | None = None
     mode: str | None = None  # as shown
-    setpoint: float | None = None  # °C, a fixed setpoint
+    setpoint: float | None = None  # °C
     fan_speed: str | None = None
 
 
@@ -339,7 +338,7 @@ class InterlockOutputSpec:
     condition: str | None = None  # an option as shown
     outputs: tuple[str, ...] | None = None  # the output points, exactly
     interval: float | None = None  # as the iTM's number input takes it
-    actions: tuple[InterlockActionSpec, ...] = ()  # per output point
+    actions: tuple[InterlockActionSpec, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -659,9 +658,7 @@ async def _select_multi(s: _Session, screen: int, part: int, row: int) -> None:
 
 def _enabled(s: _Session, screen: int, part: int, what: str) -> None:
     """Raise when the iTM reports a part disabled (clicking it hangs the iTM)."""
-    if s.state.get(screen, part, "ENABLED") == 0:
-        msg = f"{what}: the iTM has the button disabled"
-        raise ItmCommandError(msg)
+    s.refuse_disabled(screen, part, what)
 
 
 def _radio(state: UIState, screen: int, enable: int, disable: int) -> bool | None:

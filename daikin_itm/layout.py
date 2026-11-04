@@ -149,10 +149,7 @@ def layout_from_screen(state: UIState) -> Layout:
 
 async def _click(s: _Session, screen: int, part: int, what: str) -> None:
     """Click a part, never one the iTM reports disabled (that hangs it)."""
-    if s.state.get(screen, part, "ENABLED") == 0:
-        msg = f"{what}: the iTM has this button disabled"
-        raise ItmCommandError(msg)
-    await s.send(screen, part)
+    await s.click(screen, part, what)
 
 
 async def leave_layout(s: _Session) -> None:

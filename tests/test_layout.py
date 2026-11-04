@@ -51,7 +51,7 @@ async def test_empty_layout() -> None:
     assert layout.back_enabled is False
     assert not itm.layout_shown
     assert toggles(itm) == [(0, 2), (0, 1)]
-    assert itm.session is None  # logged out
+    assert itm.session is None
 
 
 async def test_filled_layout() -> None:
@@ -150,9 +150,6 @@ def test_layout_state_edge_cases() -> None:
         ),
     )
     assert layout.back_enabled is None
-
-
-# -- CLI ------------------------------------------------------------------------------
 
 
 @pytest.fixture

@@ -158,8 +158,10 @@ changing it.
 - **Never click a button the iTM reports disabled** (`ENABLED 0`). Its web
   server doesn't guard against it: the request never gets an answer, the TCP
   connection dies after some 20 s and the session is lost (seen on firmware
-  Ver1.32.00, by clicking Edit with a separator row selected). Check
-  the part's `ENABLED` state first and raise instead.
+  Ver1.32.00, by clicking Edit with a separator row selected). `_Session.send`
+  and `write` refuse such a click on every screen except the unit settings
+  dialog, whose controls open disabled until their checkbox is ticked. Use
+  `s.click(screen, part, what)` to name the part in the error.
 - **`read_only=True`** makes every write raise `ReadOnlyError` before a request
   is sent: the public write methods check it, and so do the session's commit,
   panel picks and the settings dialog's OK. Keep that guard on any new write.

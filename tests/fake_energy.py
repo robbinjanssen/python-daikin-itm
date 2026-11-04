@@ -120,7 +120,7 @@ class FakeEnergyITM(FakeITM):  # pylint: disable=too-many-instance-attributes
         self.disabled: set[tuple[int, int]] = set()  # parts shown as ENABLED 0
         self.no_screen: set[int] = set()  # screens whose button opens nothing
         self.tab_shown: dict[int, int] = {}
-        self.row_selected: dict[int, int] = {}  # list screen -> selected row
+        self.row_selected: dict[int, int] = {}
         self.locked: set[tuple[int, int]] = set()  # buttons disabled until a row
         # The lists' entries; a built-in type ("Power") can't be edited.
         self.energy_types: list[list[str]] = [["Power", "kWh"], ["Gas", "m3"]]

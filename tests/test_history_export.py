@@ -104,6 +104,36 @@ def test_bad_archives(monkeypatch: pytest.MonkeyPatch) -> None:
         parse_history_export(history_archive())
 
 
+def test_damaged_archives(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A damaged member or an impossible time raises HistoryExportError too."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        noise = "\n".join(str(i * 7919 % 100003) for i in range(5000))
+        archive.writestr("History/DBdata/t_history.dat", noise)
+    data = bytearray(buffer.getvalue())
+    start = data.index(b"t_history.dat") + len(b"t_history.dat")
+    data[start : start + 40] = b"\xff" * 40
+    with pytest.raises(HistoryExportError, match="can't be read"):
+        parse_history_export(bytes(data))
+
+    def encrypted(*_args: Any, **_kwargs: Any) -> Any:
+        msg = "File is encrypted, password required for extraction"
+        raise RuntimeError(msg)
+
+    archive_data = history_archive()
+    with monkeypatch.context() as m:
+        m.setattr(zipfile.ZipFile, "open", encrypted)
+        with pytest.raises(HistoryExportError, match="encrypted"):
+            parse_history_export(archive_data)
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("History/DBdata/t_history.dat", record(f1="20250304061004"))
+        archive.writestr("History/DBdata/conv.conf", "1\n0\n\n\n99999999999999\n")
+    with pytest.raises(HistoryExportError, match="invalid time"):
+        parse_history_export(buffer.getvalue())
+
+
 def test_bad_numbers_read_as_zero() -> None:
     """A field that should be a number but isn't reads as 0, as the converter does."""
     line = "\t".join(["x", "20250304061004", *ZERO[2:]])

@@ -77,7 +77,7 @@ async def test_planned_other_type_and_year(itm: FakeEnergyEditITM) -> None:
     assert year is not None
     assert year.name == "01/2024-12/2024"
     assert itm.plans[1, 1]["ratio"] == "3"
-    assert itm.plans[0, 0]["ratio"] == "5"  # the shown type was not changed
+    assert itm.plans[0, 0]["ratio"] == "5"
     assert_closed(itm)
 
 
@@ -138,10 +138,10 @@ async def test_plan_refusals(itm: FakeEnergyEditITM) -> None:
     with pytest.raises(ItmCommandError, match="month '03/2026' not listed"):
         await c.set_actual_consumption(months={"03/2026": 1})
     itm.disabled = {(3202, 8)}
-    with pytest.raises(ItmCommandError, match="ratio: the iTM does not offer"):
+    with pytest.raises(ItmCommandError, match="ratio: the iTM has this disabled"):
         await c.set_planned_consumption(ratio=1)
     itm.disabled = {(3203, 15)}
-    with pytest.raises(ItmCommandError, match="does not offer"):
+    with pytest.raises(ItmCommandError, match="has this disabled"):
         await c.set_actual_consumption(co2_factor=1)
     itm.disabled = set()
     itm.unavailable = {3200}
@@ -217,7 +217,7 @@ async def test_sampling_refusals(itm: FakeEnergyEditITM) -> None:
     with pytest.raises(ItmCommandError, match="'Nowhere' not listed"):
         await c.set_energy_sampling(target="Nowhere")
     itm.disabled = {(3210, 6)}
-    with pytest.raises(ItmCommandError, match="sampling to: the iTM does not offer"):
+    with pytest.raises(ItmCommandError, match="sampling to: the iTM has this disabled"):
         await c.set_energy_sampling(end=date(2026, 1, 1))
     itm.disabled = set()
     original = itm._date_dialog
@@ -292,9 +292,9 @@ async def test_type_dry_run_and_refusals(itm: FakeEnergyEditITM) -> None:
     with pytest.raises(ItmCommandError, match="'Coal' not listed once"):
         await c.delete_energy_type("Coal")
     # The built-in type's buttons stay disabled after selecting it.
-    with pytest.raises(ItmCommandError, match="does not offer"):
+    with pytest.raises(ItmCommandError, match="has this disabled"):
         await c.delete_energy_type("Power")
-    with pytest.raises(ItmCommandError, match="does not offer"):
+    with pytest.raises(ItmCommandError, match="has this disabled"):
         await c.rename_energy_type("Power", "Electricity")
     with pytest.raises(ItmCommandError, match="1-16 characters"):
         await c.create_energy_type("x" * 17)

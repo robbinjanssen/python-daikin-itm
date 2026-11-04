@@ -65,7 +65,21 @@ def fetcher(itm: FakeExportsITM) -> Callable[[str], Awaitable[bytes]]:
 def test_export_path() -> None:
     """A "#name" URI is a file in the export directory; others are paths."""
     assert export_path("#h.csv") == "/sdlfs/WebExport/h.csv"
-    assert export_path("/other/x.csv") == "/other/x.csv"
+    assert export_path("/sdlfs/WebExport/History 1.zip") == (
+        "/sdlfs/WebExport/History 1.zip"
+    )
+    for uri in (
+        "/other/x.csv",
+        "@evil.example/.bashrc",
+        "#.bashrc",
+        "/sdlfs/WebExport/../x",
+        "/sdlfs/WebExport/a/b.csv",
+        "/sdlfs/WebExport//x.csv",
+        "/sdlfs/WebExport/x..csv",
+        "#",
+    ):
+        with pytest.raises(ItmCommandError, match="unexpected file location"):
+            export_path(uri)
 
 
 async def test_read_ppd_for_a_period(itm: FakeExportsITM) -> None:
@@ -143,6 +157,21 @@ async def test_energy_exports(itm: FakeExportsITM) -> None:
     assert 3219 not in itm.open_screens
 
 
+async def test_download_from_elsewhere_is_refused(itm: FakeExportsITM) -> None:
+    """A URI outside the export directory is never fetched; the job is failed."""
+    fetched: list[str] = []
+
+    async def fetch(path: str) -> bytes:
+        fetched.append(path)
+        return b""
+
+    itm.download_uri = "@evil.example/.bashrc"
+    with pytest.raises(ItmCommandError, match="unexpected file location"):
+        await run(itm, export_energy_data, "01/2025-01/2025", fetch)
+    assert not fetched
+    assert itm.finished == [(1, DOWNLOAD_FAILED)]
+
+
 async def test_failed_downloads(itm: FakeExportsITM) -> None:
     """A fetch that fails is reported as failed; a job without a file is cancelled."""
 
@@ -181,7 +210,7 @@ async def test_refused_before_sending(itm: FakeExportsITM) -> None:
         await run(
             itm, export_point_list, date(2024, 11, 20), date(2024, 11, 21), fetcher(itm)
         )
-    with pytest.raises(ItmCommandError, match="does not offer"):
+    with pytest.raises(ItmCommandError, match="has this disabled"):
         await run(itm, read_ppd)
     itm.disabled_parts = set()
     itm.no_job = True

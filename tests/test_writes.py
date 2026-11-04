@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import Any
 
 import pytest
@@ -45,7 +47,6 @@ async def test_enable_and_disable(itm: FakeITM) -> None:
     group = await c.set_changeover_enabled("Group 01", enabled=False)
     assert group is not None
     assert group.enabled is False
-    # Already in the wanted state: nothing pressed.
     before = len(itm.requests)
     await c.set_changeover_enabled("Group 01", enabled=False)
     assert not any(
@@ -91,7 +92,6 @@ async def test_settings(itm: FakeITM) -> None:
     assert itm.groups[0].reference == 0
     assert _confirmed(itm.requests, 302, 30)  # Yes on "Execute setting?"
     assert itm.open_screens == set()
-    # Nothing asked: nothing written.
     before = len(itm.requests)
     await c.set_changeover_settings("Group 01")
     assert not _confirmed(itm.requests[before:], 302, 11)
@@ -295,7 +295,6 @@ async def test_set_unit_settings(itm: FakeITM) -> None:
     assert [r["array"] for r in numbers] == [[26, 500], [20, 0]]
     assert [r["dtype"] for r in numbers] == [16, 16]
     assert itm.dialog is None
-    # And back.
     result = await c.set_unit_settings(
         "1:1-09",
         start_stop_lock=RemoteLock.ALLOWED,
@@ -306,7 +305,7 @@ async def test_set_unit_settings(itm: FakeITM) -> None:
     assert result is not None
     assert result.cool_limit.enabled is False
     assert (u.lock_start_stop, u.lock_mode, u.overtime) == (0, 0, False)
-    assert await c.set_unit_settings("1:1-09") is None  # nothing asked
+    assert await c.set_unit_settings("1:1-09") is None
 
 
 async def test_set_unit_settings_refusals(itm: FakeITM) -> None:
@@ -371,7 +370,6 @@ async def test_set_schedule_enabled(itm: FakeITM) -> None:
     assert dry.planned == ["enable schedule Program E: screen 104 part 20 event 1"]
     assert itm.schedules[2][0] == 3
     assert itm.open_screens == set()
-    # Already as asked: no OK at all.
     before = len(itm.requests)
     await c.set_schedule_enabled("Always", enabled=True)
     assert not any(
@@ -483,6 +481,40 @@ async def test_zone_operation(itm: FakeITM) -> None:
     assert await dry.set_zone_power_state(zone, PowerState.ON) is None
     assert not any(u.running for u in itm.units)
     assert await c.apply_zone(zone) is None
+
+
+async def test_zone_writes_follow_the_unit_rules(
+    itm: FakeITM, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A zone write is spaced, leaves its change to settle, and locks its units."""
+    c = FakeClient(itm, zone_path=("Building",), min_write_interval=60)
+    zone, member = "Indoor units", itm.units[0].name
+    waits: list[float] = []
+    real_sleep = asyncio.sleep
+
+    async def sleep(seconds: float) -> None:
+        waits.append(seconds)
+        await real_sleep(0)
+
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+    c._last_write[member] = time.monotonic()
+    assert await c.apply_zone(zone, power=True, confirm=False) is None
+    assert any(w > 50 for w in waits)
+    assert set(c._unconfirmed) >= {u.name for u in itm.units}
+    assert all(c._last_write[u.name] > 0 for u in itm.units)
+    c.min_write_interval = 0
+    await c._settle(member)
+    assert not c._unconfirmed
+    assert all(u.running for u in itm.units)
+    lock = c._unit_lock(itm.units[1].name)
+    await lock.acquire()
+    task = asyncio.ensure_future(c.set_zone_setpoint(zone, 23))
+    for _ in range(20):
+        await real_sleep(0)
+    assert not task.done()
+    lock.release()
+    assert await task is not None
+    assert all(u.setpoint == 23 for u in itm.units)
 
 
 async def test_filter_sign_and_dust_alarm_reset(itm: FakeITM) -> None:

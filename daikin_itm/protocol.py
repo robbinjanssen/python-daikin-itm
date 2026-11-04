@@ -403,7 +403,6 @@ def encode_event(  # noqa: PLR0913, PLR0917  # pylint: disable=too-many-argument
     return "snD=" + w.buf
 
 
-# -- decoding -------------------------------------------------------------------------
 # Fixed layouts are written as one letter per field: N = int, H = short, S = string.
 # Lowercase letters are read and dropped (fields the web UI skips as well).
 _FIELD_READERS: dict[str, Callable[[Reader], Any]] = {

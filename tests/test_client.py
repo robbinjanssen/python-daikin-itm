@@ -81,7 +81,7 @@ async def test_fetch_units(itm: FakeITM) -> None:
     assert units["1:1-04"].setpoint == 23
     assert units["1:1-04"].mode == "cool"
     assert units["1:1-09"].running is False
-    assert itm.session is None  # logged out again
+    assert itm.session is None
 
 
 async def test_fetch_unit(itm: FakeITM) -> None:
@@ -154,7 +154,7 @@ async def test_setpoint_range_is_checked_as_read_while_writing(itm: FakeITM) -> 
     """The range read in the write session counts, not an earlier read."""
     client = FakeClient(itm)
     assert (await client.fetch_units())["1:1-04"].setpoint_range[0] == 19
-    itm.units[1].setpoint_range = (21, 22, 23, 24)  # e.g. after a mode change
+    itm.units[1].setpoint_range = (21, 22, 23, 24)
     itm.units[1].setpoint = 22
     with pytest.raises(SetpointOutOfRange) as err:
         await client.set_setpoint("1:1-04", 20)
@@ -245,13 +245,11 @@ async def test_network_error_keeps_token_and_next_run_releases_it(
     c = FakeClient(itm, store=store)
     async with c._session() as s:
         await s.open_zone(c.zone_path)
-        # The logout never reaches the iTM.
         itm.fail_next = aiohttp.ClientConnectionError("gone")
         with pytest.raises(aiohttp.ClientConnectionError):
             await s.logout()
     assert itm.session is not None
     assert store.token == itm.session
-    # A new client (e.g. after a restart) frees the stale session before logging in.
     units = await FakeClient(itm, store=store).fetch_units()
     assert len(units) == 3
     assert itm.session is None
@@ -296,8 +294,8 @@ async def test_capabilities(itm: FakeITM) -> None:
     assert caps["1:1-04"].fan_speed
     assert caps["1:1-09"].modes == ("fan", "cool", "heat", "dry", "auto")
     assert not caps["1:1-09"].fan_speed
-    assert itm.dialog is None  # every dialog cancelled
-    assert itm.session is None  # and logged out
+    assert itm.dialog is None
+    assert itm.session is None
 
 
 async def test_set_mode(itm: FakeITM) -> None:
@@ -378,7 +376,7 @@ async def test_web_version_follows_the_device(
     itm: FakeITM, caplog: pytest.LogCaptureFixture
 ) -> None:
     """The client adopts the web UI version the iTM reports."""
-    itm.web_version = "Ver1.40.00"  # e.g. after a firmware update
+    itm.web_version = "Ver1.40.00"
     c = FakeClient(itm)
     assert len(await c.fetch_units()) == 3
     assert c.web_version == "Ver1.40.00"
@@ -554,8 +552,6 @@ async def test_unconfirmed_logout_keeps_the_token_for_the_next_run(
     expected = "f" * 32 if failure == UNREADABLE else itm.session
     assert store.token == expected
     itm.session = expected  # the iTM moved on to the token it sent along
-    # The next client (e.g. after a restart) releases the session with that token
-    # and carries on.
     units = await FakeClient(itm, store=store).fetch_units()
     assert len(units) == 3
     assert itm.session is None
@@ -572,11 +568,11 @@ async def test_cancel_during_logout_holds_the_lock_until_logged_out(
     order = []
 
     async def post(body: str) -> str:
-        if is_logout(body) and not in_logout.is_set():  # the first LOGOUT is slow
+        if is_logout(body) and not in_logout.is_set():
             in_logout.set()
             await asyncio.sleep(0.1)
             order.append("first logout")
-        elif body[44:48] == "0000":  # INIT, the start of a new session
+        elif body[44:48] == "0000":  # INIT
             order.append("init")
         return await orig(body)
 
@@ -584,7 +580,6 @@ async def test_cancel_during_logout_holds_the_lock_until_logged_out(
     first = asyncio.create_task(c.fetch_units())
     await in_logout.wait()
     first.cancel()
-    # Starts right away, while the logout is still on its way.
     second = asyncio.create_task(c.fetch_units())
     with pytest.raises(asyncio.CancelledError):
         await first
@@ -616,7 +611,7 @@ async def test_apply_without_changes_does_not_write(itm: FakeITM) -> None:
         r["screen"] == 7 or (r["screen"] == 4 and r["part"] == 17) for r in itm.requests
     )
     assert itm.session is None
-    await c.set_power("1:1-09", on=False)  # already stopped
+    await c.set_power("1:1-09", on=False)
     assert not any(r["screen"] == 7 for r in itm.requests)
 
 
@@ -632,7 +627,6 @@ async def test_apply_without_changes_records_no_unconfirmed_change(
 async def test_apply_sends_only_what_differs(itm: FakeITM) -> None:
     """Only the settings that differ from the unit are ticked."""
     c = FakeClient(itm)
-    # Already running: only the mode is set.
     await c.apply("1:1-04", power=True, mode="heat")
     ticks = [
         r["part"] for r in itm.requests if r["screen"] == 7 and r["part"] in {2, 17, 28}

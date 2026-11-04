@@ -26,6 +26,7 @@ body (the client provides one from its HTTP session).
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -46,6 +47,7 @@ if TYPE_CHECKING:
 Fetch = Callable[[str], Awaitable[bytes]]
 
 EXPORT_DIR = "/sdlfs/WebExport/"
+EXPORT_NAME = re.compile(r"[A-Za-z0-9_\-][A-Za-z0-9_.\- ]{0,127}")
 DOWNLOAD_SUCCEEDED, DOWNLOAD_CANCELLED, DOWNLOAD_FAILED = 0, 1, 2
 
 # PPD (2900): period / monthly radios, the date and day inputs, Execute, advanced,
@@ -57,7 +59,7 @@ PD_START_BUTTON, PD_END_BUTTON, PD_DAY_BUTTON = 6, 9, 14
 PD_EXECUTE, PD_ADVANCED, PD_CLOSE = 15, 17, 22
 PA_WEEKDAY_CHECKS = (2, 7, 12, 17, 22, 27, 32)  # Sunday .. Saturday
 PA_EXCLUSIONS, PA_TAB, PA_OK, PA_CANCEL = 53, 1, 37, 38
-# History (800): CSV -> output screen (801): start and end day inputs, Output, Cancel.
+# History (800): CSV opens the output screen (801).
 MB_HISTORY = 53
 HISTORY, HS_CSV, HS_CLOSE = 800, 13, 17
 HISTORY_OUTPUT, HO_START, HO_END, HO_OUTPUT, HO_CANCEL = 801, 3, 19, 6, 7
@@ -81,7 +83,7 @@ class PpdWeekday:
 
     enabled: bool | None
     option: str | None  # the combo's shown option
-    time: str | None  # the time text
+    time: str | None
 
 
 @dataclass(frozen=True)
@@ -97,10 +99,24 @@ def export_path(uri: str) -> str:
 
     The iTM names the file by its full path ("/sdlfs/WebExport/History.zip"); a bare
     "#name", as the browser script also handles, is a file in the export directory.
+    The URI comes from a reply, so only a plain file name in that directory is
+    accepted: never another host, directory or a hidden file.
+
+    Raises
+    ------
+        ItmCommandError: The URI names anything else.
+
     """
-    if uri.startswith("#"):
-        return EXPORT_DIR + uri[1:]
-    return uri
+    path = EXPORT_DIR + uri[1:] if uri.startswith("#") else uri
+    name = path.removeprefix(EXPORT_DIR)
+    if (
+        not path.startswith(EXPORT_DIR)
+        or EXPORT_NAME.fullmatch(name) is None
+        or ".." in name
+    ):
+        msg = f"export: unexpected file location from the iTM: {uri!r}"
+        raise ItmCommandError(msg)
+    return path
 
 
 def ppd_advanced_from_screen(state: UIState) -> PpdAdvanced:
@@ -158,14 +174,8 @@ async def answer_date(
 
 
 async def _click(s: _Session, screen: int, part: int, what: str) -> Reply:
-    """Click a part, refusing one the iTM shows as disabled (that hangs it).
-
-    A hidden part works on a real iTM (its menu hides buttons without blocking them).
-    """
-    if s.state.get(screen, part, "ENABLED") == 0:
-        msg = f"{what}: the iTM does not offer this here"
-        raise ItmCommandError(msg)
-    return await s.send(screen, part)
+    """Click a part; a hidden one works (the menu hides buttons without blocking)."""
+    return await s.click(screen, part, what)
 
 
 async def _close(s: _Session, screen: int, part: int) -> None:
@@ -252,10 +262,13 @@ async def download(  # pylint: disable=too-many-locals
         raise ItmCommandError(msg)
     reason = DOWNLOAD_FAILED
     try:
-        data = await fetch(export_path(uri))
+        path = export_path(uri)
+        data = await fetch(path)
         reason = DOWNLOAD_SUCCEEDED
+    except ItmCommandError:
+        raise
     except Exception as err:
-        msg = f"export: could not fetch {export_path(uri)}: {err}"
+        msg = f"export: could not fetch {path}: {err}"
         raise ItmCommandError(msg) from err
     finally:
         await s.send(
@@ -266,7 +279,7 @@ async def download(  # pylint: disable=too-many-locals
             2,
             array=(job, reason),
         )
-    return Download(name=uri.rsplit("/", 1)[-1].lstrip("#"), data=data)
+    return Download(name=path.removeprefix(EXPORT_DIR), data=data)
 
 
 # -- PPD ------------------------------------------------------------------------------

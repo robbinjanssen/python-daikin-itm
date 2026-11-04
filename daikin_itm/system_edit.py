@@ -123,9 +123,6 @@ class WebUserScreens:
     available: tuple[str, ...]
 
 
-# -- helpers -----------------------------------------------------------------------
-
-
 async def _close(s: _Session, screen: int, cancel: int) -> None:
     """Leave a screen with its Cancel/Close, if it is still open."""
     if screen in s.state.screens:
@@ -176,9 +173,6 @@ async def _plan_or_send_input(
         raise ItmCommandError(msg)
 
 
-# -- e-mail ---------------------------------------------------------------------------
-
-
 def email_addresses(state: UIState) -> list[str]:
     """Return the addresses the open e-mail screen lists."""
     rows = (state.get(MenuScreen.EMAIL, EMAIL_LIST, "LIST_ROW") or {}).get("rows", [])
@@ -194,12 +188,12 @@ async def _set_points(s: _Session, points: tuple[str, ...]) -> None:
     for name in list(_names(s.state, AD_SELECTED)):
         if name not in points:
             await s._select_listed(a, AD_SELECTED, 1, name, "e-mail point")
-            await s._click_enabled(a, AD_REMOVE, "remove e-mail point")
+            await s.click(a, AD_REMOVE, "remove e-mail point")
     for name in points:
         if name in _names(s.state, AD_SELECTED):
             continue
         await s._select_listed(a, AD_AVAILABLE, 1, name, "e-mail point")
-        await s._click_enabled(a, AD_ADD, "add e-mail point")
+        await s.click(a, AD_ADD, "add e-mail point")
 
 
 def _names(state: UIState, part: int) -> list[str]:
@@ -233,9 +227,7 @@ async def add_email_address(s: _Session, address: str, points: tuple[str, ...]) 
         if address in email_addresses(s.state):
             msg = f"e-mail address {address!r} exists already"
             raise ItmCommandError(msg)
-        reply = await s._click_enabled(
-            MenuScreen.EMAIL, EMAIL_ADD, "add e-mail address"
-        )
+        reply = await s.click(MenuScreen.EMAIL, EMAIL_ADD, "add e-mail address")
         # The iTM asks the address first (a text input on 1300), then opens 1301.
         inputs = [
             u
@@ -279,7 +271,7 @@ async def add_email_address(s: _Session, address: str, points: tuple[str, ...]) 
                     1,
                     array=(row,),
                 )
-                await s._click_enabled(MenuScreen.EMAIL, EMAIL_EDIT, "edit e-mail")
+                await s.click(MenuScreen.EMAIL, EMAIL_EDIT, "edit e-mail")
                 if ADDRESS_SCREEN not in s.state.screens:
                     msg = "the e-mail address screen did not open"
                     raise ItmCommandError(msg)
@@ -309,7 +301,7 @@ async def edit_email_address(
     await _open(s, MB_EMAIL, e)
     try:
         await s._select_listed(e, EMAIL_LIST, 1, address, "e-mail address")
-        await s._click_enabled(e, EMAIL_EDIT, "edit e-mail address")
+        await s.click(e, EMAIL_EDIT, "edit e-mail address")
         if ADDRESS_SCREEN not in s.state.screens:
             msg = "the e-mail address screen did not open"
             raise ItmCommandError(msg)
@@ -383,7 +375,7 @@ async def read_email_server(s: _Session) -> dict[str, Any]:
     e = MenuScreen.EMAIL
     await _open(s, MB_EMAIL, e)
     try:
-        await s._click_enabled(e, EMAIL_SERVER, "e-mail server")
+        await s.click(e, EMAIL_SERVER, "e-mail server")
         for tab in (0, 1):
             await s.send(SERVER_SCREEN, SV_TAB, EventType.TAB_SELECT, DataType.INT, tab)
         return email_server_from_screen(s.state)
@@ -397,7 +389,7 @@ async def set_email_server(s: _Session, server: EmailServer) -> bool:
     e, v = MenuScreen.EMAIL, SERVER_SCREEN
     await _open(s, MB_EMAIL, e)
     try:
-        await s._click_enabled(e, EMAIL_SERVER, "e-mail server")
+        await s.click(e, EMAIL_SERVER, "e-mail server")
         if v not in s.state.screens:
             msg = "the e-mail server screen did not open"
             raise ItmCommandError(msg)
@@ -419,7 +411,7 @@ async def set_email_server(s: _Session, server: EmailServer) -> bool:
                 await s._pick_option(v, part, index, f"e-mail {name}")
         if server.password is not None:
             await s.send(v, SV_TAB, EventType.TAB_SELECT, DataType.INT, 1)
-            reply = await s._click_enabled(v, SV_PASSWORD_BUTTON, "e-mail password")
+            reply = await s.click(v, SV_PASSWORD_BUTTON, "e-mail password")
             await _plan_or_send_input(
                 s, reply, "PASSWORD", server.password, "e-mail password"
             )
@@ -443,9 +435,9 @@ async def send_test_email(
     await _open(s, MB_EMAIL, e)
     try:
         await s._select_listed(e, EMAIL_LIST, 1, address, "e-mail address")
-        await s._click_enabled(e, EMAIL_EDIT, "edit e-mail address")
+        await s.click(e, EMAIL_EDIT, "edit e-mail address")
         await s.send(ADDRESS_SCREEN, AD_TAB, EventType.TAB_SELECT, DataType.INT, 1)
-        await s._click_enabled(ADDRESS_SCREEN, AD_TRIAL, "test e-mail")
+        await s.click(ADDRESS_SCREEN, AD_TRIAL, "test e-mail")
         if TRIAL_SCREEN not in s.state.screens:
             msg = "the test e-mail screen did not open"
             raise ItmCommandError(msg)
@@ -456,9 +448,6 @@ async def send_test_email(
         await _close(s, TRIAL_SCREEN, TR_CANCEL)
         await _close(s, ADDRESS_SCREEN, AD_CANCEL)
         await s.close_screen(e)
-
-
-# -- confirm dialogs, web server, remote management ---------------------------------
 
 
 async def set_confirm_dialogs(s: _Session, *, enabled: bool) -> bool:
@@ -489,7 +478,7 @@ async def set_web_server_port(
     n, w = MenuScreen.NETWORK, WEB_SERVER_SCREEN
     await _open(s, MB_NETWORK, n)
     try:
-        await s._click_enabled(n, NW_WEB_SERVER, "web server settings")
+        await s.click(n, NW_WEB_SERVER, "web server settings")
         if w not in s.state.screens:
             msg = "the web server screen did not open"
             raise ItmCommandError(msg)
@@ -532,17 +521,15 @@ async def set_remote_management(
         await s.close_screen(r)
 
 
-# -- the logged-in user's own settings (1205) ----------------------------------------
-#
 # Seen on a real iTM: the login screen (1203) has a second button next to "Login"
 # (part 5, "User Settings"); pressed without credentials it answers "Cannot log
 # in". Everything else here follows the web UI's script.js and is tested
 # against the simulated iTM only: ScMainLogin.onClick sends the same payload (name
 # length, name, SHA-256 of the password) for both its buttons, so part 5 logs in
-# straight into ScWebUserSetup (1205). Assumed, not seen: that 1205 opens on that
-# login, that leaving it (OK or Cancel) ends the session (as a language change does
-# elsewhere), that its password button (3) opens the same PASSWORD input as the user
-# setup's (1204), and that its language button (7) opens the language screen (2501).
+# straight into ScWebUserSetup (1205). Seen on a real iTM: 1205 opens on that login,
+# is read and left with Cancel, and its OK saves the icon colour and a new password
+# (entered in the same PASSWORD inputs as the user setup's, 1204). Assumed, not
+# seen: that its language button (7) opens the language screen (2501).
 
 
 async def open_own_settings(s: _Session, username: str, password: str) -> None:
@@ -550,6 +537,9 @@ async def open_own_settings(s: _Session, username: str, password: str) -> None:
 
     ``s`` is a fresh session that is not logged in. The credentials are sent like
     the browser sends them (the password only as its SHA-256 digest).
+
+    When the login succeeds but 1205 does not open, the session stays marked as
+    logged in, so ``leave_own_settings`` logs it out instead of leaving it taken.
 
     Raises
     ------
@@ -572,10 +562,17 @@ async def open_own_settings(s: _Session, username: str, password: str) -> None:
         string=f"{len(username):04d}{username}{digest}",
     )
     if OWN_SCREEN not in s.state.screens:
-        s.logged_in = False
-        await s._store.save(None)
         dialogs = reply.dialogs()
-        msg = f"the user's own settings did not open (wrong credentials?): {dialogs}"
+        if any(
+            u.screen == ScreenID.LOGIN and u.update == "DLG_OPEN" for u in reply.screens
+        ):
+            s.logged_in = False
+            await s._store.save(None)
+            msg = (
+                f"the user's own settings did not open (wrong credentials?): {dialogs}"
+            )
+        else:
+            msg = f"logged in, but the user's own settings did not open: {dialogs}"
         raise ItmCommandError(msg)
 
 
@@ -620,7 +617,7 @@ async def _enter_own_password(s: _Session, password: str) -> None:
     The password goes only into the iTM's PASSWORD input (and its repeat input, when
     the iTM asks for it); it is never logged, and a dry run plans it as ``***``.
     """
-    reply = await s._click_enabled(OWN_SCREEN, OWN_PASSWORD_BUTTON, "own password")
+    reply = await s.click(OWN_SCREEN, OWN_PASSWORD_BUTTON, "own password")
     dialogs = [
         u for u in reply.screens if u.update == "DLG_OPEN" and u.data[1] == "PASSWORD"
     ]
@@ -645,7 +642,7 @@ async def _enter_own_password(s: _Session, password: str) -> None:
 async def _pick_own_language(s: _Session, code: str) -> None:
     """Open the language screen from 1205, pick a language and press its OK."""
     g = MenuScreen.LANGUAGE
-    await s._click_enabled(OWN_SCREEN, OWN_LANGUAGE_BUTTON, "own language")
+    await s.click(OWN_SCREEN, OWN_LANGUAGE_BUTTON, "own language")
     if g not in s.state.screens:
         msg = "the language screen did not open"
         raise ItmCommandError(msg)
@@ -727,8 +724,6 @@ async def set_own_settings(  # noqa: PLR0913  # pylint: disable=too-many-argumen
     return saved
 
 
-# -- a normal web user's allowed screens (1201) ---------------------------------------
-#
 # From script.js (ScSysWebAccessRegistScreen) and the screen inventory; tested against
 # the simulated iTM only. Seen on a real iTM: the user setup's (1204) screens button
 # (16) and its zones button (12) are disabled for an administrator, so the screens
@@ -768,7 +763,7 @@ async def _open_user_screens(s: _Session, name: str) -> None:
     if user.admin:
         raise ItmCommandError(admin_msg)
     await s._select_listed(w, WU_LIST, 0, name, "web user")
-    await s._click_enabled(w, WU_CHANGE, "change web user")
+    await s.click(w, WU_CHANGE, "change web user")
     if u not in s.state.screens:
         msg = f"{name}: the user setup did not open"
         raise ItmCommandError(msg)
@@ -812,7 +807,7 @@ async def _move_screen(s: _Session, source: int, button: int, screen: str) -> No
         1,
         array=(rows.index(screen),),
     )
-    await s._click_enabled(USER_SCREENS, button, f"move screen {screen!r}")
+    await s.click(USER_SCREENS, button, f"move screen {screen!r}")
 
 
 async def set_web_user_screens(
