@@ -21,9 +21,10 @@ event is selected by its own row; a part the iTM shows as disabled is never clic
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from .exceptions import ItmCommandError
 from .lang import mode_from_label
@@ -68,9 +69,25 @@ from .models import FAN_ICONS, FAN_SPEEDS, PowerState, RemoteLock
 from .protocol import DataType, EventType
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable, Iterable
+
     from .client import _Session
+    from .menu import ScheduleProgram, ScheduleSummary
     from .protocol import Reply
     from .state import UIState
+
+_T = TypeVar("_T")
+
+KEPT_EVENT_SETTINGS = (
+    "power",
+    "mode",
+    "setpoint",
+    "lock_start_stop",
+    "lock_mode",
+    "lock_setpoint",
+    "overtime",
+    "fan_speed",
+)
 
 EDITOR = MenuScreen.SCHEDULE_EDITOR
 EVENTS = MenuScreen.SCHEDULE_EVENTS
@@ -968,3 +985,398 @@ async def copy_calendar(s: _Session, program: str, targets: tuple[str, ...]) -> 
             await s.send(CALENDAR_COPY, CC_CANCEL)
             s.state.screens.pop(CALENDAR_COPY, None)
         await s.close_screen(MenuScreen.SCHEDULE)
+
+
+async def _ignore(call: Awaitable[Any]) -> None:
+    await call
+
+
+class ScheduleMixin:
+    """ItmClient's schedule program and event writes."""
+
+    if TYPE_CHECKING:
+        # pylint: disable=unused-argument
+        dry_run: bool
+
+        async def _in_session(
+            self, call: Callable[[_Session], Awaitable[_T]]
+        ) -> _T: ...
+
+        def _writable(self) -> None: ...
+
+        async def fetch_schedule(
+            self, name: str, *, events: bool = True, details: bool = False
+        ) -> ScheduleProgram:
+            """Read a schedule program in full."""
+
+        async def fetch_schedules(self) -> list[ScheduleSummary]:
+            """Read the schedule programs."""
+
+    async def _schedule_write(
+        self, call: Callable[[_Session], Awaitable[bool]]
+    ) -> None:
+        self._writable()
+        await self._in_session(call)
+
+    async def _schedule_event(
+        self, program: str, day: Day, at: str, target: str
+    ) -> ScheduleEvent | None:
+        """Return an event of a program's day as read in a fresh session."""
+        p = await self.fetch_schedule(program, details=True)
+        if isinstance(day, int):
+            events = p.weekly.get(day, ())
+        else:
+            index = int(day[2:]) - 1
+            labels = list(p.special_slots)
+            events = p.special.get(labels[index], ()) if index < len(labels) else ()
+        return next(
+            (e for e in events if e.time == at and e.target == target.strip()), None
+        )
+
+    async def add_schedule_event(
+        self, program: str, day: Day, spec: EventSpec
+    ) -> ScheduleEvent | None:
+        """Add an event to a weekday (0 = Sunday) or special day ("Ex1".."Ex5").
+
+        Args:
+        ----
+            program: The program's name.
+            day: The weekday or special day.
+            spec: The event: time, target and settings.
+
+        Returns:
+        -------
+            The event as read back in a fresh session, or None in a dry run.
+
+        """
+        await self._schedule_write(lambda s: add_event(s, program, day, spec))
+        if self.dry_run:
+            return None
+        event = await self._schedule_event(program, day, spec.time, spec.target)
+        if event is None:
+            msg = f"{program}: the iTM did not add the event {spec.time} {spec.target}"
+            raise ItmCommandError(msg)
+        return event
+
+    async def edit_schedule_event(  # noqa: PLR0913  # pylint: disable=too-many-arguments
+        self,
+        program: str,
+        day: Day,
+        at: str,
+        target: str,
+        spec: EventSpec,
+        *,
+        keep_unset: bool = False,
+    ) -> ScheduleEvent | None:
+        """Replace an event (found by its time and target) with spec.
+
+        Args:
+        ----
+            program: The program's name.
+            day: The weekday or special day.
+            at: The event's current time ("HH:MM").
+            target: Its current target.
+            spec: What it should become (time, target and settings).
+            keep_unset: Keep the event's current value of every setting spec
+                leaves None (read first), instead of leaving it out.
+
+        Returns:
+        -------
+            The event as read back in a fresh session, or None in a dry run.
+
+        Raises:
+        ------
+            ItmCommandError: No such event; with keep_unset, an event holding
+                settings this library can't write back.
+
+        """
+        if keep_unset:
+            spec = await self._keep_event_settings(program, day, at, target, spec)
+        await self._schedule_write(
+            lambda s: edit_event(s, program, day, time=at, target=target, spec=spec)
+        )
+        if self.dry_run:
+            return None
+        event = await self._schedule_event(program, day, spec.time, spec.target)
+        if event is None:
+            msg = f"{program}: the iTM did not take the change to {at} {target}"
+            raise ItmCommandError(msg)
+        return event
+
+    async def _keep_event_settings(  # pylint: disable=too-many-arguments
+        self, program: str, day: Day, at: str, target: str, spec: EventSpec
+    ) -> EventSpec:
+        """Fill the settings spec leaves None from the event as it is now."""
+        current = await self._schedule_event(program, day, at, target)
+        if current is None:
+            msg = f"{program}: no event at {at} for {target}"
+            raise ItmCommandError(msg)
+        if (
+            current.setpoint_shift
+            or current.ventilation_mode
+            or current.air_volume
+            or current.extra
+        ):
+            msg = (
+                f"{program}: the event at {at} for {target} has settings this "
+                "library can't write back; give the whole event instead"
+            )
+            raise ItmCommandError(msg)
+        kept = {
+            name: getattr(current, name)
+            for name in KEPT_EVENT_SETTINGS
+            if getattr(spec, name) is None
+        }
+        return dataclasses.replace(spec, **kept)
+
+    async def delete_schedule_event(
+        self, program: str, day: Day, at: str, target: str
+    ) -> None:
+        """Delete an event (found by its time and target) from a program's day.
+
+        Args:
+        ----
+            program: The program's name.
+            day: The weekday or special day.
+            at: The event's time ("HH:MM").
+            target: Its target.
+
+        """
+        await self._schedule_write(lambda s: delete_event(s, program, day, at, target))
+        if not self.dry_run and await self._schedule_event(program, day, at, target):
+            msg = f"{program}: the iTM did not delete {at} {target}"
+            raise ItmCommandError(msg)
+
+    async def copy_schedule(
+        self, program: str, name: str, *, keep_enabled: bool = False
+    ) -> ScheduleSummary | None:
+        """Copy a program under a new name (disabled unless keep_enabled).
+
+        Args:
+        ----
+            program: The program to copy.
+            name: The copy's name.
+            keep_enabled: Keep the source's activation (default: disabled).
+
+        Returns:
+        -------
+            The copy as the program list shows it, or None in a dry run.
+
+        """
+        await self._schedule_write(
+            lambda s: copy_program(s, program, name, keep_enabled=keep_enabled)
+        )
+        if self.dry_run:
+            return None
+        copy = next((p for p in await self.fetch_schedules() if p.name == name), None)
+        if copy is None:
+            msg = f"{program}: the iTM did not make the copy {name!r}"
+            raise ItmCommandError(msg)
+        return copy
+
+    async def copy_schedule_day(
+        self, program: str, day: Day, targets: Iterable[Day]
+    ) -> ScheduleProgram | None:
+        """Copy a day's events to other days of the same kind (weekdays or Ex).
+
+        Args:
+        ----
+            program: The program.
+            day: The day to copy.
+            targets: The days to copy it to.
+
+        Returns:
+        -------
+            The program as read back (with events), or None in a dry run.
+
+        """
+        days = tuple(targets)
+        await self._schedule_write(lambda s: copy_day(s, program, day, days))
+        return None if self.dry_run else await self.fetch_schedule(program)
+
+    async def clear_schedule_day(
+        self, program: str, day: Day
+    ) -> ScheduleProgram | None:
+        """Delete every event of a day.
+
+        Args:
+        ----
+            program: The program.
+            day: The weekday (0 = Sunday) or special day ("Ex1".."Ex5").
+
+        Returns:
+        -------
+            The program as read back (with events), or None in a dry run.
+
+        """
+        await self._schedule_write(lambda s: clear_day(s, program, day))
+        if self.dry_run:
+            return None
+        result = await self.fetch_schedule(program)
+        if isinstance(day, int) and result.weekly.get(day):
+            msg = f"{program}: day {day} still has events"
+            raise ItmCommandError(msg)
+        return result
+
+    async def copy_schedule_event(  # noqa: PLR0913  # pylint: disable=too-many-arguments
+        self,
+        program: str,
+        day: Day,
+        at: str,
+        target: str,
+        new_time: str,
+        *,
+        new_target: str | None = None,
+        zone: bool = False,
+    ) -> ScheduleEvent | None:
+        """Copy an event to another time (and target), keeping its settings.
+
+        Args:
+        ----
+            program: The program.
+            day: The weekday or special day.
+            at: The event's time.
+            target: The event's target.
+            new_time: The copy's time.
+            new_target: The copy's target (default: the same).
+            zone: The new target is a zone.
+
+        Returns:
+        -------
+            The copy as read back, or None in a dry run.
+
+        """
+        await self._schedule_write(
+            lambda s: copy_event(
+                s,
+                program,
+                day,
+                time=at,
+                target=target,
+                new_time=new_time,
+                new_target=new_target,
+                zone=zone,
+            )
+        )
+        if self.dry_run:
+            return None
+        copy = await self._schedule_event(program, day, new_time, new_target or target)
+        if copy is None:
+            msg = f"{program}: the iTM did not copy the event to {new_time}"
+            raise ItmCommandError(msg)
+        return copy
+
+    async def copy_schedule_calendar(
+        self, program: str, targets: Iterable[str]
+    ) -> None:
+        """Copy a program's calendar to other programs (overwriting theirs).
+
+        Args:
+        ----
+            program: The program to copy from.
+            targets: The programs to copy to, named explicitly.
+
+        """
+        names = tuple(targets)
+        await self._schedule_write(lambda s: copy_calendar(s, program, names))
+
+    async def set_schedule_period(
+        self, program: str, period: Period | None
+    ) -> ScheduleProgram | None:
+        """Give a program a period ((month, day), (month, day)), or none (all year).
+
+        Args:
+        ----
+            program: The program's name.
+            period: Begin and end, or None for all year.
+
+        Returns:
+        -------
+            The program as read back (without events), or None in a dry run.
+
+        """
+        await self._schedule_write(lambda s: set_period(s, program, period))
+        if self.dry_run:
+            return None
+        result = await self.fetch_schedule(program, events=False)
+        if (result.period is None) != (period is None):
+            msg = (
+                f"{program}: the iTM did not take the period {period}: {result.period}"
+            )
+            raise ItmCommandError(msg)
+        return result
+
+    async def rename_schedule_special_day(
+        self, program: str, day: str, name: str
+    ) -> ScheduleProgram | None:
+        """Rename a special day pattern ("Ex1".."Ex5") of a program.
+
+        Args:
+        ----
+            program: The program's name.
+            day: "Ex1".."Ex5".
+            name: The new name (1-15 characters).
+
+        Returns:
+        -------
+            The program as read back (without events), or None in a dry run.
+
+        """
+        await self._schedule_write(lambda s: rename_special_day(s, program, day, name))
+        if self.dry_run:
+            return None
+        result = await self.fetch_schedule(program, events=False)
+        index = int(day[2:]) - 1
+        if index >= len(result.special_names) or result.special_names[index] != name:
+            msg = f"{program}: the iTM did not rename {day}: {result.special_names}"
+            raise ItmCommandError(msg)
+        return result
+
+    async def add_schedule_calendar_rule(
+        self, program: str, rule: CalendarRuleSpec
+    ) -> ScheduleProgram | None:
+        """Add a calendar rule: on which dates a special day pattern applies.
+
+        Args:
+        ----
+            program: The program's name.
+            rule: The rule.
+
+        Returns:
+        -------
+            The program as read back (without events), or None in a dry run.
+
+        """
+        before = len((await self.fetch_schedule(program, events=False)).calendar)
+        await self._schedule_write(lambda s: add_calendar_rule(s, program, rule))
+        if self.dry_run:
+            return None
+        result = await self.fetch_schedule(program, events=False)
+        if len(result.calendar) != before + 1:
+            msg = f"{program}: the iTM did not add the rule {rule}"
+            raise ItmCommandError(msg)
+        return result
+
+    async def delete_schedule_calendar_rule(
+        self, program: str, rule: CalendarRule
+    ) -> ScheduleProgram | None:
+        """Delete a calendar rule, as fetch_schedule read it.
+
+        Args:
+        ----
+            program: The program's name.
+            rule: The rule (month, day and pattern as shown).
+
+        Returns:
+        -------
+            The program as read back (without events), or None in a dry run.
+
+        """
+        await self._schedule_write(lambda s: delete_calendar_rule(s, program, rule))
+        if self.dry_run:
+            return None
+        result = await self.fetch_schedule(program, events=False)
+        if rule in result.calendar:
+            msg = f"{program}: the iTM did not delete the rule {rule}"
+            raise ItmCommandError(msg)
+        return result
