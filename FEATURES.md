@@ -179,7 +179,7 @@ screen 7 belong to schedule events, not to a unit.
 | 3214 | `ScEnergyNaviRuleEdit` | V | - | energy navigator: rule editor (read) |
 | 3215 | `ScEnergyNaviCopySelect` | F | F | energy navigator: rule copy (on a real iTM Copy first asks a new rule's name; not supported yet) |
 | 3216 | `ScEnergyNaviCalenderCopy` | F | F | energy navigator: calendar copy |
-| 3217 | `ScEnergyNaviRuleSetting` | V | V | energy navigator: rule settings: time ranges per day (V); their cool/heat setpoints (F) |
+| 3217 | `ScEnergyNaviRuleSetting` | V | V | energy navigator: rule settings: time ranges per day and their cool/heat setpoints |
 | 3218 | `ScEnergyNaviExtractSetting` | V | F | energy navigator: sampling targets (read V; choosing one F) |
 | 3219 | `ScEnergyNaviDataOutput` | V | F | energy navigator: data output periods (V); exports (F) |
 | 3220 | `ScEnergyNaviTrialSetting` | V | F | energy navigator installer settings (read V; the data clear button is never pressed) |

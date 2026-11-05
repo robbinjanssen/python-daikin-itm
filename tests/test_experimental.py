@@ -12,7 +12,6 @@ from daikin_itm import (
     ItmCommandError,
     ItmError,
     ReadOnlyError,
-    RuleRange,
 )
 from daikin_itm import cli as itm_cli
 
@@ -45,11 +44,6 @@ GUARDED: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = [
     ("rename_energy_type", ("Gas", "Water"), {"group": True}),
     ("rename_energy_rule", ("Rule A", "Rule C"), {}),
     ("copy_energy_rule", ("Rule A", ("Rule B",)), {}),
-    (
-        "set_energy_rule_day",
-        ("Rule A", "Monday", (RuleRange("09:00", "17:00", cool=24),)),
-        {},
-    ),
     ("set_energy_room_temperature", (SERVICE, "1:1-00"), {}),
     ("set_energy_collection_start", (SERVICE, "April"), {}),
     ("set_energy_conversion", (SERVICE, None), {}),

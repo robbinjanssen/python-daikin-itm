@@ -409,6 +409,17 @@ class FakeEnergyMoreITM(FakeEnergyEditITM):  # pylint: disable=too-many-instance
             "heat": f["heat"] if on and f["heat_on"] else None,
         }
 
+    def _time_limits(self, part: int) -> tuple[tuple[int, int], tuple[int, int]]:
+        """Return the range the real iTM gives the start (8) or end (11) input."""
+        f = self.rs_fields
+        if part == 11:
+            hour, minute = map(int, f["start"].split(":"))
+            return divmod(hour * 60 + minute + 15, 60), (24, 0)
+        if f["end"] == "00:00":
+            return (0, 0), (23, 45)
+        hour, minute = map(int, f["end"].split(":"))
+        return (0, 0), divmod(hour * 60 + minute - 15, 60)
+
     def _ranges_event(  # noqa: PLR0911  # pylint: disable=too-many-return-statements
         self, ev: dict[str, Any]
     ) -> list[Update] | None:
@@ -431,14 +442,16 @@ class FakeEnergyMoreITM(FakeEnergyEditITM):  # pylint: disable=too-many-instance
             return [("UPDATE", 3217, [], [*self._field_parts(), *enable])]
         if part in {8, 11}:
             self.edit_dialog = (HOURMIN_ID, "hourmin", "start" if part == 8 else "end")
-            data = [HOURMIN_ID, 10, 4, "Time", 0, 0, 0, 0, 23, 59, "OK", "Cancel"]
+            first, last = self._time_limits(part)
+            data = [HOURMIN_ID, 10, 4, "Time", 0, 0, *first, *last, "OK", "Cancel"]
             return [("DLG_OPEN", 3217, data, [])]
         if part in {12, 13, 14}:
             if ev["dtype"] != 1:
                 return [("UPDATE", 3217, [], [])]
             key = {12: "setpoint", 13: "cool_on", 14: "heat_on"}[part]
             self.rs_fields[key] = ev["number"] == 1
-            return [("UPDATE", 3217, [], self._field_parts())]
+            enabled = [p for p in self._field_parts() if p[1] == "ENABLED"]
+            return [("UPDATE", 3217, [], enabled)]
         if part in {16, 18}:
             key, low, high = ("cool", 16, 32) if part == 16 else ("heat", 10, 30)
             self.edit_dialog = (TEMP_ID, "temp", key)

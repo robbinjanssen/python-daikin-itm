@@ -800,18 +800,36 @@ async def _enter_time(s: _Session, button: int, value: str, what: str) -> None:
 async def _check(s: _Session, screen: int, part: int, *, on: bool, what: str) -> None:
     """Tick or untick a checkbox, only when it differs.
 
-    A checkbox takes its new state as a number; the iTM ignores a plain click.
+    A checkbox takes its new state as a number; the iTM ignores a plain click and
+    doesn't report the new state back, so it is kept here.
     """
     if (s.state.get(screen, part, "CHECK_STATE") == 1) != on:
         s.refuse_disabled(screen, part, what)
         await s.send(screen, part, EventType.CLICK, DataType.INT, int(on))
+        s.state.screens.setdefault(screen, {})[part, "CHECK_STATE"] = int(on)
+
+
+def _minutes(text: str) -> int | None:
+    hour, _, minute = text.strip().partition(":")
+    if not (hour.isdigit() and minute.isdigit()):
+        return None
+    return int(hour) * 60 + int(minute)
 
 
 async def _enter_range(s: _Session, r: en.RuleRange) -> None:
-    """Fill 3217's edit group with a time range."""
+    """Fill 3217's edit group with a time range.
+
+    The iTM keeps the start before the end shown: when the new start isn't before
+    it, the end goes first.
+    """
     rs = en.RULE_SETTING
-    await _enter_time(s, en.RS_START_BUTTON, r.start, "start")
-    await _enter_time(s, en.RS_END_BUTTON, r.end, "end")
+    shown_end = _minutes(str(s.state.get(rs, en.RS_END, "TEXT") or ""))
+    times = [(en.RS_START_BUTTON, r.start, "start"), (en.RS_END_BUTTON, r.end, "end")]
+    start = _minutes(r.start)
+    if shown_end is not None and start is not None and start >= shown_end:
+        times.reverse()
+    for button, time, label in times:
+        await _enter_time(s, button, time, label)
     managed = r.cool is not None or r.heat is not None
     await _check(s, rs, en.RS_SETPOINT, on=managed, what="setpoint")
     if not managed:
@@ -1332,8 +1350,6 @@ class EnergyMixin:
 
         """
         wanted = tuple(ranges)
-        if any(r.cool is not None or r.heat is not None for r in wanted):
-            self._experimental("set an energy navigator rule's setpoints")
         await self._system_write(lambda s: _ignore(set_rule_day(s, rule, day, wanted)))
         if self.dry_run:
             return None
