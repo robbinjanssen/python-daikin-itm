@@ -228,7 +228,7 @@ async def _energy_installer_edit(client: ItmClient, args: argparse.Namespace) ->
 async def _energy_rule_edit(client: ItmClient, args: argparse.Namespace) -> Any:
     """Change a management rule (simulated iTM only)."""
     action, name = args.action, args.name
-    if not name or (action == "rule-rename" and not args.new_name):
+    if not name or (action in {"rule-rename", "rule-copy"} and not args.new_name):
         sys.exit(f"energy-edit {action} needs a rule name")
     if action == "rule-create":
         await client.create_energy_rule(name)
@@ -236,10 +236,12 @@ async def _energy_rule_edit(client: ItmClient, args: argparse.Namespace) -> Any:
         await client.rename_energy_rule(name, args.new_name)
     elif action == "rule-delete":
         await client.delete_energy_rule(name)
-    elif action in {"rule-copy", "calendar-copy"}:
+    elif action == "rule-copy":
+        await client.copy_energy_rule(name, args.new_name)
+    elif action == "calendar-copy":
         if not args.to:
-            sys.exit(f"energy-edit {action} needs --to")
-        await client.copy_energy_rule(name, args.to, calendar=action == "calendar-copy")
+            sys.exit("energy-edit calendar-copy needs --to")
+        await client.copy_energy_rule_calendar(name, args.to)
     else:
         if not args.day:
             sys.exit("energy-edit rule-day needs --day")
@@ -345,7 +347,7 @@ def add_energy_commands(sub: Any) -> None:
             *ENERGY_INSTALLER_ACTIONS,
         ],
     )
-    ee.add_argument("--to", action="append", help="rule/calendar-copy: a target rule")
+    ee.add_argument("--to", action="append", help="calendar-copy: a target rule")
     ee.add_argument("--day", help="rule-day: a weekday or a special day's name")
     ee.add_argument("--range", action="append", help="START-END[/cool=N][/heat=N]")
     ee.add_argument("--point", help="room-temp: the point, as listed")

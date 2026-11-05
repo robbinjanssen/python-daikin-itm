@@ -72,8 +72,6 @@ class FakeEnergyMoreITM(FakeEnergyEditITM):  # pylint: disable=too-many-instance
     def __init__(self, *, data: bool = True) -> None:
         """Start with two rules (Rule A with a weekday range) and generic points."""
         super().__init__(data=data)
-        self.copy_asks_name = False
-        self.copy_name_cancelled = False
         # Per rule: per day key (weekday 0-6, special "s0"-"s4") its time ranges.
         self.rule_days: dict[str, dict[str, list[dict[str, Any]]]] = {
             name[0]: {} for name in self.rules
@@ -245,27 +243,29 @@ class FakeEnergyMoreITM(FakeEnergyEditITM):  # pylint: disable=too-many-instance
 
     def _rule_list_event(self, ev: dict[str, Any]) -> list[Update] | None:
         part = ev["part"]
-        if part == 12 and ev["event"] == 2:
-            self.copy_name_cancelled = True
-            return [("DLG_CLOSE", 3213, [12, 1], [])]
         if ev["event"] != 1 or part in {2, 8, 10}:
             return None
         if part in {4, 6, 7}:
             return self._list_event(ev)
-        if part == 5 and self.copy_asks_name:
-            data = [12, 4, "Rule name", "New rule 001", 1, 16, 0, 0, 1, "Words"]
-            data += ["OK", "Cancel", *["x"] * 12]
-            return [("DLG_OPEN", 3213, data, [])]
-        if part in {5, 9}:
+        if part == 5:
+            return self._name_dialog(3213, "copy", self.row_selected[3213])
+        if part == 9:
             self.row_selected.setdefault(3213, -1)
             if self.row_selected[3213] < 0:
                 self._violation(ev, "a copy without a selected rule")
-            return self._open(3215 if part == 5 else 3216)
+            return self._open(3216)
         return None
 
     def _named(self, screen: int, what: list[Any], name: str) -> list[Update]:
         if screen == 3224:
             return self._named_conversion(what[1], name)
+        if screen == 3213 and what[0] == "copy":
+            source = self.rules[what[1]][0]
+            self.rule_days[name] = copy.deepcopy(self.rule_days.get(source, {}))
+            self.calendars[name] = list(self.calendars.get(source, []))
+            self.rules.append([name])
+            self.saved.append("copy 3213")
+            return self._list_update(screen)
         if screen == 3213:
             if what[0] == "rename":
                 old = self.rules[what[1]][0]

@@ -144,7 +144,8 @@ async def test_rule_day_dry_run_and_read_only(itm: FakeEnergyMoreITM) -> None:
         lambda: ro.create_energy_rule("Rule C"),
         lambda: ro.rename_energy_rule("Rule A", "Rule C"),
         lambda: ro.delete_energy_rule("Rule A"),
-        lambda: ro.copy_energy_rule("Rule A", ["Rule B"]),
+        lambda: ro.copy_energy_rule("Rule A", "Rule C"),
+        lambda: ro.copy_energy_rule_calendar("Rule A", ["Rule B"]),
     ]
     for call in calls:
         with pytest.raises(ReadOnlyError):
@@ -156,7 +157,8 @@ async def test_rule_day_dry_run_and_read_only(itm: FakeEnergyMoreITM) -> None:
             ee.create_rule(s, "Rule C"),
             ee.rename_rule(s, "Rule A", "Rule C"),
             ee.delete_rule(s, "Rule A"),
-            ee.copy_rule(s, "Rule A", ("Rule B",)),
+            ee.copy_rule(s, "Rule A", "Rule C"),
+            ee.copy_rule_calendar(s, "Rule A", ("Rule B",)),
         ):
             with pytest.raises(ReadOnlyError):
                 await flow
@@ -294,31 +296,32 @@ async def test_rule_list_writes_not_taking_effect(itm: FakeEnergyMoreITM) -> Non
     assert_closed(itm)
 
 
-async def test_copy_rule_asking_a_name(itm: FakeEnergyMoreITM) -> None:
-    """Where Copy asks a new rule's name, the prompt is cancelled and reported."""
-    itm.copy_asks_name = True
-    with pytest.raises(ItmCommandError, match="asks for a new rule's name"):
-        await client(itm).copy_energy_rule("Rule A", ["Rule B"])
-    assert itm.copy_name_cancelled
-    assert itm.rule_days["Rule B"] != itm.rule_days["Rule A"]
-
-
-async def test_copy_rule_and_calendar(itm: FakeEnergyMoreITM) -> None:
-    """3215 copies the patterns, 3216 the calendar; each read back in the editors."""
+async def test_copy_rule_under_a_new_name(itm: FakeEnergyMoreITM) -> None:
+    """Copy asks the new rule's name; the copy holds the source's patterns."""
     c = client(itm)
-    await c.copy_energy_rule("Rule A", ["Rule B"])
-    assert itm.rule_days["Rule B"] == itm.rule_days["Rule A"]
-    await c.copy_energy_rule("Rule A", ["Rule B"], calendar=True)
-    assert itm.calendars["Rule B"] == [["01/01", "Holiday 1"]]
-    assert itm.saved == ["copy 3215", "copy 3216"]
-    picks = [r["array"] for r in itm.requests if (r["screen"], r["part"]) == (3215, 4)]
-    assert picks == [[0]]
+    await c.copy_energy_rule("Rule A", "Rule C")
+    assert itm.rule_days["Rule C"] == itm.rule_days["Rule A"]
+    assert itm.saved == ["copy 3213"]
+    with pytest.raises(ItmCommandError, match="exists already"):
+        await c.copy_energy_rule("Rule A", "Rule B")
     dry = client(itm, dry_run=True)
-    await dry.copy_energy_rule("Rule B", ["Rule A"], calendar=True)
+    await dry.copy_energy_rule("Rule A", "Rule D")
+    assert "Rule D" not in itm.rule_days
+    assert_closed(itm)
+
+
+async def test_copy_calendar(itm: FakeEnergyMoreITM) -> None:
+    """3216 copies the calendar, read back in the editor."""
+    c = client(itm)
+    await c.copy_energy_rule_calendar("Rule A", ["Rule B"])
+    assert itm.calendars["Rule B"] == [["01/01", "Holiday 1"]]
+    assert itm.saved == ["copy 3216"]
+    dry = client(itm, dry_run=True)
+    await dry.copy_energy_rule_calendar("Rule B", ["Rule A"])
     assert [p.split(":")[0] for p in dry.planned] == [
         "copy calendar of rule Rule B to Rule A"
     ]
-    assert len(itm.saved) == 2
+    assert len(itm.saved) == 1
     assert_closed(itm)
 
 
@@ -326,24 +329,24 @@ async def test_copy_refusals(itm: FakeEnergyMoreITM) -> None:
     """No target, the source itself, an unknown target, another source shown."""
     c = client(itm)
     with pytest.raises(ItmCommandError, match="name other rules"):
-        await c.copy_energy_rule("Rule A", [])
+        await c.copy_energy_rule_calendar("Rule A", [])
     with pytest.raises(ItmCommandError, match="name other rules"):
-        await c.copy_energy_rule("Rule A", ["Rule A"])
+        await c.copy_energy_rule_calendar("Rule A", ["Rule A"])
     with pytest.raises(ItmCommandError, match="not every target is listed once"):
-        await c.copy_energy_rule("Rule A", ["Rule Z"])
+        await c.copy_energy_rule_calendar("Rule A", ["Rule Z"])
     original = itm._copy_parts
     itm._copy_parts = lambda target: [  # type: ignore[method-assign]
         *original(target),
         (2, "TEXT", "Rule Z"),
     ]
     with pytest.raises(ItmCommandError, match="copies from 'Rule Z'"):
-        await c.copy_energy_rule("Rule A", ["Rule B"])
+        await c.copy_energy_rule_calendar("Rule A", ["Rule B"])
     itm._copy_parts = original  # type: ignore[method-assign]
     itm._confirm_dialog = lambda screen, *_: [  # type: ignore[method-assign]
         ("DLG_OPEN", screen, [60, 1, "Error", "Error", "OK"], [])
     ]
     with pytest.raises(ItmCommandError, match="iTM refused"):
-        await c.copy_energy_rule("Rule A", ["Rule B"])
+        await c.copy_energy_rule_calendar("Rule A", ["Rule B"])
     assert itm.saved == []
     itm.violations.clear()
     itm.edit_dialog = None
@@ -359,9 +362,10 @@ async def test_copy_not_taking_effect(itm: FakeEnergyMoreITM) -> None:
         screen
     )
     with pytest.raises(ItmCommandError, match="does not show the copy"):
-        await c.copy_energy_rule("Rule A", ["Rule B"])
-    with pytest.raises(ItmCommandError, match="does not show the copy"):
-        await c.copy_energy_rule("Rule A", ["Rule B"], calendar=True)
+        await c.copy_energy_rule_calendar("Rule A", ["Rule B"])
+    itm._named = lambda screen, *_: itm._list_update(screen)  # type: ignore[method-assign]
+    with pytest.raises(ItmCommandError, match="did not copy it"):
+        await c.copy_energy_rule("Rule A", "Rule E")
     assert_closed(itm)
 
 
@@ -401,15 +405,18 @@ def test_cli_rules(
     assert fake.rule_days["Rule A"]["5"][0]["heat"] == 19.5
     main("energy-edit", "rule-create", "Rule C")
     main("energy-edit", "rule-rename", "Rule C", "Rule D")
-    main("energy-edit", "rule-copy", "Rule A", "--to", "Rule D")
     main("energy-edit", "calendar-copy", "Rule A", "--to", "Rule D")
+    main("energy-edit", "rule-copy", "Rule A", "Rule E")
+    assert fake.rule_days["Rule E"] == fake.rule_days["Rule A"]
+    main("energy-edit", "rule-delete", "Rule E")
     out = main("energy-edit", "rule-delete", "Rule D")
     assert out == "rule-delete: done\n"
     out = main("--dry-run", "energy-edit", "rule-delete", "Rule B")
     assert "delete rule Rule B" in out
     for args, error in (
         (["rule-rename", "Rule A"], "needs a rule name"),
-        (["rule-copy", "Rule A"], "needs --to"),
+        (["rule-copy", "Rule A"], "needs a rule name"),
+        (["calendar-copy", "Rule A"], "needs --to"),
         (["rule-day", "Rule A"], "needs --day"),
         (["rule-day", "Rule A", "--day", "monday", "--range", "1-2/x=1"], "--range"),
         (["rule-day", "Rule A", "--day", "monday", "--range", "1-2/cool=x"], "--range"),

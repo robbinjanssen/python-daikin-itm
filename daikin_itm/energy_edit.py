@@ -83,17 +83,14 @@ ST_OK = 3
 # Energy type list (3205) and group list (3207): (3204 button, list screen).
 LISTS = {False: (en.DS_TYPES, en.TYPE_LIST), True: (en.DS_GROUPS, en.GROUP_LIST)}
 # Rule copy (False) and calendar copy (True).
-COPIES = {
-    False: (en.RL_COPY, en.COPY_SELECT, en.CS_FROM, en.CS_LIST, en.CS_OK, en.CS_CANCEL),
-    True: (
-        en.RL_CALENDAR_COPY,
-        en.CALENDAR_COPY,
-        en.CC_FROM,
-        en.CC_LIST,
-        en.CC_OK,
-        en.CC_CANCEL,
-    ),
-}
+CALENDAR_COPY_PARTS = (
+    en.RL_CALENDAR_COPY,
+    en.CALENDAR_COPY,
+    en.CC_FROM,
+    en.CC_LIST,
+    en.CC_OK,
+    en.CC_CANCEL,
+)
 
 
 @dataclass(frozen=True)
@@ -702,14 +699,36 @@ async def delete_rule(s: _Session, name: str) -> bool:
         await en.leave_rules(s)
 
 
-async def copy_rule(  # pylint: disable=too-many-locals
-    s: _Session, name: str, targets: tuple[str, ...], *, calendar: bool = False
-) -> bool:
-    """Copy a rule (3215), or with calendar=True its calendar (3216), to other rules.
+async def copy_rule(s: _Session, name: str, new_name: str) -> bool:
+    """Copy a management rule under a new name: select it, Copy, enter the name.
 
-    The source is selected in the rule list, Copy (or Calendar copy) opens the copy
-    screen, whose source text must show the rule; the targets are selected in its
-    list (all at once) and OK copies.
+    Returns
+    -------
+        True when sent, False in a dry run.
+
+    """
+    s._writable()
+    label = f"copy rule {name} to {new_name}"
+    try:
+        names = await _rule_list(s)
+        if new_name.strip() in names:
+            msg = f"rule {new_name!r} exists already"
+            raise ItmCommandError(msg)
+        await _select_rule(s, names, name)
+        reply = await en.click(s, en.RULES, en.RL_COPY, label)
+        return await _answer_name(s, reply, en.RULES, label, new_name)
+    finally:
+        await en.leave_rules(s)
+
+
+async def copy_rule_calendar(  # pylint: disable=too-many-locals
+    s: _Session, name: str, targets: tuple[str, ...]
+) -> bool:
+    """Copy a rule's calendar to other rules (3216).
+
+    The source is selected in the rule list, Calendar copy opens the copy screen,
+    whose source text must show the rule; the targets are selected in its list (all
+    at once) and OK copies.
 
     Returns
     -------
@@ -722,8 +741,8 @@ async def copy_rule(  # pylint: disable=too-many-locals
 
     """
     s._writable()
-    button, screen, source, part, ok, cancel = COPIES[calendar]
-    label = f"copy {'calendar of ' * calendar}rule {name} to {', '.join(targets)}"
+    button, screen, source, part, ok, cancel = CALENDAR_COPY_PARTS
+    label = f"copy calendar of rule {name} to {', '.join(targets)}"
     wanted = [t.strip() for t in targets]
     if not wanted or name.strip() in wanted:
         msg = f"{label}: name other rules to copy to"
@@ -731,18 +750,6 @@ async def copy_rule(  # pylint: disable=too-many-locals
     try:
         await _select_rule(s, await _rule_list(s), name)
         reply = await en.click(s, en.RULES, button, label)
-        prompts = [
-            u
-            for u in reply.screens
-            if u.update == "DLG_OPEN" and u.data[1] == "CHARINPUT"
-        ]
-        if prompts:
-            await s.send(prompts[0].screen, prompts[0].data[0], EventType.CLICK2)
-            msg = (
-                f"{label}: the iTM asks for a new rule's name instead; copying to a "
-                "new rule is not supported yet"
-            )
-            raise ItmCommandError(msg)
         await s.wait_for_progress(reply)
         if screen not in s.state.screens:
             msg = f"{label}: screen {screen} did not open: {reply.dialogs()}"
@@ -1270,44 +1277,41 @@ class EnergyMixin(ClientCore):
             msg = f"rule {name}: the iTM did not delete it"
             raise ItmCommandError(msg)
 
-    async def copy_energy_rule(
-        self, name: str, targets: Iterable[str], *, calendar: bool = False
+    async def copy_energy_rule(self, name: str, new_name: str) -> None:
+        """Copy a management rule under a new name, confirmed by the rule list."""
+        await self._system_write(lambda s: _ignore(copy_rule(s, name, new_name)))
+        if self.dry_run:
+            return
+        names = await self._rule_names()
+        if new_name.strip() not in names or name.strip() not in names:
+            msg = f"rule {name}: the iTM did not copy it to {new_name}"
+            raise ItmCommandError(msg)
+
+    async def copy_energy_rule_calendar(
+        self, name: str, targets: Iterable[str]
     ) -> None:
-        """Copy a management rule (3215), or its calendar (3216), to other rules.
+        """Copy a management rule's calendar to other rules (3216).
 
         Args:
         ----
-            name: The rule to copy.
+            name: The rule to copy from.
             targets: The rules to copy to, as listed.
-            calendar: Copy only the calendar.
 
         Raises:
         ------
             ItmCommandError: A target's editor doesn't show the copy afterwards.
 
         """
-        self._experimental("copy an energy navigator rule")
+        self._experimental("copy an energy navigator rule's calendar")
         wanted = tuple(t.strip() for t in targets)
-        await self._system_write(
-            lambda s: _ignore(copy_rule(s, name, wanted, calendar=calendar))
-        )
+        await self._system_write(lambda s: _ignore(copy_rule_calendar(s, name, wanted)))
         if self.dry_run:
             return
         rules = {r.name: r for r in await self._in_session(en.read_rule_editor) or ()}
         source = rules.get(name.strip())
         for target in wanted:
             got = rules.get(target)
-            same = (
-                source is not None
-                and got is not None
-                and (
-                    got.calendar == source.calendar
-                    if calendar
-                    else (got.weekdays, got.special_days)
-                    == (source.weekdays, source.special_days)
-                )
-            )
-            if not same:
+            if source is None or got is None or got.calendar != source.calendar:
                 msg = f"rule {target}: the iTM does not show the copy of {name}"
                 raise ItmCommandError(msg)
 

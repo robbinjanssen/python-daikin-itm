@@ -27,7 +27,7 @@ live); and the °F and decimal comma display settings (the date format and 12-ho
 clock are validated live). Pre-cool/pre-heat, time and management point parts of
 screen 7 belong to schedule events, not to a unit.
 
-172 screens, each counted by its best status (read or write). Covered: 139 (validated on a real iTM: 92, dry run only: 0, simulated iTM only: 47); probed only: 0; needs a licence or another iTM: 0; out of scope: 33; not covered: 0.
+172 screens, each counted by its best status (read or write). Covered: 138 (validated on a real iTM: 92, dry run only: 0, simulated iTM only: 46); probed only: 0; needs a licence or another iTM: 0; out of scope: 33; not covered: 1.
 
 | Screen | Class | Read | Write | Notes |
 | ---: | :---- | :--: | :---: | :---- |
@@ -175,9 +175,9 @@ screen 7 belong to schedule events, not to a unit.
 | 3210 | `ScEnergyNaviEquipmentManage` | V | F | energy navigator: equipment management, sampling period and target (read V; write F) |
 | 3211 | `ScEnergyNaviDetailInfo` | F | - | energy navigator: equipment details (only offered with data) |
 | 3212 | `ScEnergyNaviLegendDriveInfo` | X | X | energy navigator legend (static help, no data) |
-| 3213 | `ScEnergyNaviRuleList` | V | V | energy navigator: management rule list: create, rename, delete |
+| 3213 | `ScEnergyNaviRuleList` | V | V | energy navigator: management rule list: create, rename, delete, copy under a new name |
 | 3214 | `ScEnergyNaviRuleEdit` | V | - | energy navigator: rule editor (read) |
-| 3215 | `ScEnergyNaviCopySelect` | F | F | energy navigator: rule copy (on a real iTM Copy first asks a new rule's name; not supported yet) |
+| 3215 | `ScEnergyNaviCopySelect` | - | - | energy navigator: rule copy screen (not opened by the rule list's Copy, which asks a new rule's name) |
 | 3216 | `ScEnergyNaviCalenderCopy` | F | F | energy navigator: calendar copy |
 | 3217 | `ScEnergyNaviRuleSetting` | V | V | energy navigator: rule settings: time ranges per day and their cool/heat setpoints |
 | 3218 | `ScEnergyNaviExtractSetting` | V | F | energy navigator: sampling targets (read V; choosing one F) |
