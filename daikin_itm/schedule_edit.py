@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from .exceptions import ItmCommandError
 from .lang import mode_from_label
 from .menu import (
+    CLOSE_PART,
     EV_EDIT,
     EV_LIST,
     EVT_FAN,
@@ -43,11 +44,18 @@ from .menu import (
     EVT_POWER,
     EVT_SETPOINT,
     EVT_SETPOINT_FIXED,
+    MB_SCHEDULE,
+    SCH_ADD_BUTTON,
+    SCH_DAY_BUTTON,
+    SCH_DELETE_BUTTON,
     SCH_EDIT_BUTTON,
+    SCH_PANEL,
+    SD_NEXT,
     SE_DAY_RADIOS,
     SE_DISABLED,
     SE_EDIT_DAY,
     SE_EDIT_SPECIAL,
+    SE_ENABLED,
     SE_OK,
     SE_PERIOD,
     SE_PERIOD_CHECK,
@@ -62,7 +70,9 @@ from .menu import (
     MenuScreen,
     ScheduleEvent,
     day_events_from_screen,
+    event_from_screen,
     program_from_editor,
+    schedule_day_from_screen,
     schedules_from_screen,
 )
 from .models import FAN_ICONS, FAN_SPEEDS, PowerState, RemoteLock
@@ -71,7 +81,7 @@ from .protocol import DataType, EventType
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable
 
-    from .menu import ScheduleProgram, ScheduleSummary
+    from .menu import ScheduleDay, ScheduleProgram, ScheduleSummary
     from .protocol import Reply
     from .session import _Session
     from .state import UIState
@@ -1379,3 +1389,251 @@ class ScheduleMixin:
             msg = f"{program}: the iTM did not delete the rule {rule}"
             raise ItmCommandError(msg)
         return result
+
+
+class ScheduleSessionMixin:
+    """_Session's schedule screen reads and writes."""
+
+    if TYPE_CHECKING:
+        # pylint: disable=unused-argument
+        state: UIState
+
+        async def send(  # noqa: PLR0913, PLR0917  # pylint: disable=too-many-arguments
+            self,
+            screen: int = -1,
+            part: int = -1,
+            event: int = EventType.CLICK,
+            data_type: int = DataType.NONE,
+            number: int = -1,
+            string: str = "",
+            array: tuple[int, ...] = (),
+        ) -> Reply:
+            """Send a GUI event and merge the reply into the UI state."""
+
+        async def write(  # noqa: PLR0913, PLR0917  # pylint: disable=too-many-arguments
+            self,
+            label: str,
+            screen: int,
+            part: int,
+            event: int = EventType.CLICK,
+            data_type: int = DataType.NONE,
+            number: int = -1,
+            string: str = "",
+        ) -> Reply | None:
+            """Send the request that makes a change, unless this is a dry run."""
+
+        async def _answer_confirm(self, screen: int, reply: Reply) -> None: ...
+
+        async def open_menu_screen(self, button: int, screen: MenuScreen) -> bool:
+            """Press a menu list button and tell whether its screen opened."""
+
+        async def close_screen(self, screen: MenuScreen) -> None:
+            """Close (or cancel) a menu screen, if it is open. Never OK."""
+
+    async def _select_program(self, name: str) -> None:
+        await self.open_menu_screen(MB_SCHEDULE, MenuScreen.SCHEDULE)
+        names = [p.name for p in schedules_from_screen(self.state)]
+        if name not in names:
+            msg = f"schedule program {name!r} not found; available: {names}"
+            raise ItmCommandError(msg)
+        await self.send(
+            MenuScreen.SCHEDULE,
+            SCH_PANEL,
+            EventType.CLICK,
+            DataType.INT,
+            names.index(name),
+        )
+
+    async def read_schedule_day(self, name: str, *, days_ahead: int = 0) -> ScheduleDay:
+        """Read what a program does on a day, from its day overview."""
+        await self._select_program(name)
+        try:
+            await self.send(MenuScreen.SCHEDULE, SCH_DAY_BUTTON)
+            if MenuScreen.SCHEDULE_DAY not in self.state.screens:
+                msg = "the day overview did not open"
+                raise ItmCommandError(msg)
+            for _ in range(days_ahead):
+                await self.send(MenuScreen.SCHEDULE_DAY, SD_NEXT)
+            return schedule_day_from_screen(self.state)
+        finally:
+            await self.close_screen(MenuScreen.SCHEDULE_DAY)
+            await self.close_screen(MenuScreen.SCHEDULE)
+
+    async def _read_day_events(
+        self, radio: int, edit_button: int, *, details: bool
+    ) -> tuple[ScheduleEvent, ...]:
+        """Open a weekday's or special day's event list and read it (and each event)."""
+        await self.send(MenuScreen.SCHEDULE_EDITOR, radio)
+        await self.send(MenuScreen.SCHEDULE_EDITOR, edit_button)
+        if MenuScreen.SCHEDULE_EVENTS not in self.state.screens:
+            msg = "the event list did not open"
+            raise ItmCommandError(msg)
+        try:
+            events = day_events_from_screen(self.state)
+            if not details:
+                return tuple(events)
+            detailed = []
+            for event in events:
+                # The list has separator rows too.
+                await self.send(
+                    MenuScreen.SCHEDULE_EVENTS,
+                    EV_LIST,
+                    EventType.CLICK,
+                    DataType.INTARRAY,
+                    1,
+                    array=(event.row,),
+                )
+                # The iTM disables the buttons for a row that is no event; clicking
+                # a disabled button hangs its web server, so never do that.
+                if self.state.get(MenuScreen.SCHEDULE_EVENTS, EV_EDIT, "ENABLED") == 0:
+                    msg = f"the iTM does not open the event at row {event.row}"
+                    raise ItmCommandError(msg)
+                await self.send(MenuScreen.SCHEDULE_EVENTS, EV_EDIT)
+                if MenuScreen.SCHEDULE_EVENT in self.state.screens:
+                    detailed.append(event_from_screen(self.state, event))
+                    await self.close_screen(MenuScreen.SCHEDULE_EVENT)
+                else:
+                    detailed.append(event)
+            return tuple(detailed)
+        finally:
+            await self.close_screen(MenuScreen.SCHEDULE_EVENT)
+            await self.close_screen(MenuScreen.SCHEDULE_EVENTS)
+
+    async def close_editor(self) -> None:
+        """Leave the schedule editor without saving: Cancel, then Yes."""
+        if MenuScreen.SCHEDULE_EDITOR not in self.state.screens:
+            return
+        reply = await self.send(
+            MenuScreen.SCHEDULE_EDITOR, CLOSE_PART[MenuScreen.SCHEDULE_EDITOR]
+        )
+        for dialog in reply.dialogs():
+            if dialog[1] == "CONFIRM":
+                await self.send(MenuScreen.SCHEDULE_EDITOR, dialog[0])
+        if MenuScreen.SCHEDULE_EDITOR in self.state.screens:
+            msg = "the schedule editor did not close"
+            raise ItmCommandError(msg)
+
+    async def set_schedule_enabled(self, name: str, *, enabled: bool) -> None:
+        """Open a program's editor, pick enabled or disabled, OK (and confirm)."""
+        await self._select_program(name)
+        try:
+            await self.send(MenuScreen.SCHEDULE, SCH_EDIT_BUTTON)
+            e = MenuScreen.SCHEDULE_EDITOR
+            if e not in self.state.screens:
+                msg = "the schedule editor did not open"
+                raise ItmCommandError(msg)
+            program = program_from_editor(self.state)
+            if program.enabled == enabled:
+                return
+            await self.send(e, SE_ENABLED if enabled else SE_DISABLED)
+            verb = "enable" if enabled else "disable"
+            reply = await self.write(f"{verb} schedule {name}", e, SE_OK)
+            if reply is not None:
+                await self._answer_confirm(e, reply)
+                if e in self.state.screens:
+                    msg = f"{name}: the editor did not close after OK"
+                    raise ItmCommandError(msg)
+        finally:
+            await self.close_editor()
+            await self.close_screen(MenuScreen.SCHEDULE)
+
+    async def create_schedule(self, name: str) -> None:
+        """Press Add, rename the new program, OK (and confirm).
+
+        The iTM opens the editor on a new, disabled program without events (with a
+        default name); nothing exists until OK.
+        """
+        await self.open_menu_screen(MB_SCHEDULE, MenuScreen.SCHEDULE)
+        e = MenuScreen.SCHEDULE_EDITOR
+        try:
+            names = [p.name for p in schedules_from_screen(self.state)]
+            if name in names:
+                msg = f"schedule program {name!r} exists already"
+                raise ItmCommandError(msg)
+            if self.state.get(MenuScreen.SCHEDULE, SCH_ADD_BUTTON, "ENABLED") == 0:
+                msg = "the iTM does not allow another schedule program"
+                raise ItmCommandError(msg)
+            await self.send(MenuScreen.SCHEDULE, SCH_ADD_BUTTON)
+            if e not in self.state.screens:
+                msg = "the schedule editor did not open"
+                raise ItmCommandError(msg)
+            reply = await self.send(e, SE_RENAME)
+            dialogs = [d for d in reply.dialogs() if d[1] == "CHARINPUT"]
+            if not dialogs:
+                msg = f"Change did not ask for a name: {reply.dialogs()}"
+                raise ItmCommandError(msg)
+            reply = await self.send(
+                e, dialogs[0][0], EventType.CLICK, DataType.STRING, string=name
+            )
+            if reply.dialogs():  # a refused name; the read-back checks the rest
+                msg = f"the iTM did not take the name {name!r}: {reply.dialogs()}"
+                raise ItmCommandError(msg)
+            saved = await self.write(f"create schedule {name}", e, SE_OK)
+            if saved is not None:
+                await self._answer_confirm(e, saved)
+                if e in self.state.screens:
+                    msg = f"{name}: the editor did not close after OK"
+                    raise ItmCommandError(msg)
+        finally:
+            await self.close_editor()
+            await self.close_screen(MenuScreen.SCHEDULE)
+
+    async def delete_schedule(self, name: str) -> None:
+        """Select a program, press Delete and confirm."""
+        await self._select_program(name)
+        try:
+            # A disabled button hangs the iTM's web server when clicked.
+            if self.state.get(MenuScreen.SCHEDULE, SCH_DELETE_BUTTON, "ENABLED") == 0:
+                msg = f"the iTM does not allow deleting {name!r}"
+                raise ItmCommandError(msg)
+            reply = await self.write(
+                f"delete schedule {name}", MenuScreen.SCHEDULE, SCH_DELETE_BUTTON
+            )
+            if reply is not None:
+                await self._answer_confirm(MenuScreen.SCHEDULE, reply)
+        finally:
+            await self.close_screen(MenuScreen.SCHEDULE)
+
+    async def read_schedule(
+        self, name: str, *, events: bool = True, details: bool = False
+    ) -> ScheduleProgram:
+        """Read a program through its editor: properties, patterns and calendar.
+
+        Everything is read and the editor left with Cancel; nothing is saved.
+        With events, every weekday's and special day's event list is opened; with
+        details, each event's own settings screen too (two requests per event).
+        """
+        await self._select_program(name)
+        try:
+            await self.send(MenuScreen.SCHEDULE, SCH_EDIT_BUTTON)
+            if MenuScreen.SCHEDULE_EDITOR not in self.state.screens:
+                msg = "the schedule editor did not open"
+                raise ItmCommandError(msg)
+            tab = MenuScreen.SCHEDULE_EDITOR, SE_TAB, EventType.TAB_SELECT, DataType.INT
+            await self.send(*tab, SE_TAB_WEEKLY)
+            program = program_from_editor(self.state)
+            weekly: dict[int, tuple[ScheduleEvent, ...]] = {}
+            for day, slots in program.weekly_slots.items():
+                if slots and events:
+                    weekly[day] = await self._read_day_events(
+                        SE_DAY_RADIOS[day], SE_EDIT_DAY, details=details
+                    )
+            await self.send(*tab, SE_TAB_SPECIAL)
+            program = program_from_editor(self.state)
+            special: dict[str, tuple[ScheduleEvent, ...]] = {}
+            for i, (label, slots) in enumerate(program.special_slots.items()):
+                if slots and events:
+                    special[label] = await self._read_day_events(
+                        SE_SPECIAL_RADIOS[i], SE_EDIT_SPECIAL, details=details
+                    )
+            await self.send(*tab, SE_TAB_CALENDAR)
+            program = program_from_editor(self.state)
+            names = special_day_names(self.state)
+            return dataclasses.replace(
+                program, weekly=weekly, special=special, special_names=names
+            )
+        finally:
+            await self.close_screen(MenuScreen.SCHEDULE_EVENT)
+            await self.close_screen(MenuScreen.SCHEDULE_EVENTS)
+            await self.close_editor()
+            await self.close_screen(MenuScreen.SCHEDULE)

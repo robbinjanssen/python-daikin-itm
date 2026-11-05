@@ -28,6 +28,7 @@ daikin_itm/
   client.py           ItmClient (with the feature modules' *Mixin classes), the session
                       stores
   session.py          _Session: one logged-in session, the screen work behind ItmClient
+  settings_dialog.py  the unit settings dialog (screen 7), a _Session mixin
   exceptions.py       ItmError and subclasses
   models.py           Unit, UnitSettings, Capabilities, part IDs, screen readers
   lang.py             the labels the iTM only sends as text, per display language
@@ -38,6 +39,7 @@ daikin_itm/
   schedule_edit.py    schedule writes: events, period, special days, calendar, copies
   zones_edit.py       zone tree, members, member order, icons; the zone error screen
   system_edit.py      e-mail, confirm dialogs, ports, remote management, own settings,
+                      users, region, clock, hardware (session and client mixins),
                       a web user's allowed screens
   emergency.py        emergency stop programs, settings, release (never a start)
   dealer_functions.py temperature limit, sliding temperature, heating mode optimisation,

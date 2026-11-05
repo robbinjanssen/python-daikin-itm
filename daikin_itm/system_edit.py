@@ -17,34 +17,107 @@ from __future__ import annotations
 
 import hashlib
 import html
+import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
+from . import zones_edit
 from .exceptions import ItmCommandError, LoginRejected, SessionEnded
-from .menu import CLOSE_PART, DATE_FORMATS, MenuScreen
+from .menu import (
+    CLOSE_PART,
+    DATE_FORMATS,
+    MB_REGION,
+    MB_TIME,
+    R_12H,
+    R_24H,
+    R_CELSIUS,
+    R_DATE_FORMAT,
+    R_DECIMAL_COMMA,
+    R_DECIMAL_POINT,
+    R_FAHRENHEIT,
+    MenuScreen,
+)
 from .protocol import NO_TOKEN, DataType, EventType, ScreenID
 from .system import (
+    BUZZER_DURATIONS,
     EU_DST_END,
     EU_DST_START,
+    HW_BACKLIGHT,
+    HW_BUZZER_DURATION,
+    HW_BUZZER_VOLUME,
+    HW_KEY_VOLUME,
+    HW_OK,
     LANGUAGE_RADIOS,
     LG_OK,
     MB_CONFIRM_DIALOGS,
     MB_EMAIL,
+    MB_HARDWARE,
+    MB_MAINTENANCE,
     MB_NETWORK,
+    MB_POINTS,
     MB_REMOTE_MANAGEMENT,
+    MB_SCREENSAVER,
     MB_WEB_USERS,
+    MB_ZONES,
+    MT_ADD,
+    MT_AVAILABLE,
+    MT_IN_MAINTENANCE,
+    MT_OK,
+    MT_REMOVE,
+    NW_BUTTONS,
+    NW_OK,
+    NW_TEXT_FIELDS,
+    PA_INFO_BUTTON,
+    PA_NAME_BUTTON,
+    PA_OK,
+    PT_CHANGE,
+    PT_LIST,
+    RG_LANGUAGE_BUTTON,
+    RG_OK,
+    SS_DELAY_BUTTON,
+    SS_MODE,
+    SS_OFF_ON_ERROR,
+    SS_OK,
+    SS_ON_ON_ERROR,
+    TM_CHANGE,
+    TM_DST_END,
+    TM_DST_OFF,
+    TM_DST_ON,
+    TM_DST_START,
+    TM_OK,
     US_ADMIN,
+    US_NAME_BUTTON,
     US_OK,
+    US_PASSWORD_BUTTON,
+    US_USER,
+    US_ZONES_BUTTON,
+    UZ_LIST,
+    UZ_OK,
+    WU_ADD,
     WU_CHANGE,
+    WU_DELETE,
     WU_LIST,
+    ZA_INFO_BUTTON,
+    ZA_NAME_BUTTON,
+    ZA_OK,
+    ZA_START_BUTTON,
+    ZA_STOP_BUTTON,
+    ZN_LIST,
+    ZN_SETTINGS,
+    ScreensaverMode,
+    dst_from_screen,
+    language_from_screen,
+    row_index,
     web_users_from_screen,
+    zone_attributes_from_screen,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable
     from contextlib import AbstractAsyncContextManager
 
+    from .client import ItmClient
     from .menu import ItmInfo
     from .protocol import Reply
     from .session import _Session
@@ -55,6 +128,7 @@ if TYPE_CHECKING:
         EmailSettings,
         SystemSettings,
         WebUser,
+        ZoneAttributes,
     )
 
 _T = TypeVar("_T")
@@ -1566,3 +1640,511 @@ class SystemMixin:  # pylint: disable=too-many-public-methods
             msg = f"the iTM's clock reads {info.clock}, expected about {expected}"
             raise ItmCommandError(msg)
         return info
+
+
+class SystemSessionMixin:  # pylint: disable=too-many-public-methods
+    """_Session's system screen reads and writes."""
+
+    if TYPE_CHECKING:
+        # pylint: disable=unused-argument
+        state: UIState
+        _client: ItmClient
+
+        async def send(  # noqa: PLR0913, PLR0917  # pylint: disable=too-many-arguments
+            self,
+            screen: int = -1,
+            part: int = -1,
+            event: int = EventType.CLICK,
+            data_type: int = DataType.NONE,
+            number: int = -1,
+            string: str = "",
+            array: tuple[int, ...] = (),
+        ) -> Reply:
+            """Send a GUI event and merge the reply into the UI state."""
+
+        async def write(  # noqa: PLR0913, PLR0917  # pylint: disable=too-many-arguments
+            self,
+            label: str,
+            screen: int,
+            part: int,
+            event: int = EventType.CLICK,
+            data_type: int = DataType.NONE,
+            number: int = -1,
+            string: str = "",
+        ) -> Reply | None:
+            """Send the request that makes a change, unless this is a dry run."""
+
+        async def press_ok(self, label: str, screen: int, ok: int, cancel: int) -> bool:
+            """Press a screen's OK, or cancel in a dry run."""
+
+        async def _answer_confirm(self, screen: int, reply: Reply) -> None: ...
+
+        async def open_menu_screen(self, button: int, screen: MenuScreen) -> bool:
+            """Press a menu list button and tell whether its screen opened."""
+
+        async def close_screen(self, screen: MenuScreen) -> None:
+            """Close (or cancel) a menu screen, if it is open. Never OK."""
+
+        async def _select_listed(
+            self, screen: int, part: int, column: int, name: str, what: str
+        ) -> None: ...
+
+        async def click(self, screen: int, part: int, what: str) -> Reply:
+            """Click a button, naming it when the iTM has it disabled."""
+
+        async def answer_number(
+            self, button: int, value: float, what: str, screen: int = ScreenID.SETTINGS
+        ) -> None:
+            """Press a "change" button and enter a number in the dialog it opens."""
+
+        async def answer_text(
+            self, screen: int, button: int, text: str, what: str
+        ) -> None:
+            """Press a "change" button and enter text in the input dialog it opens."""
+
+    async def _pick_option(
+        self, screen: int, part: int, index: int | None, what: str
+    ) -> None:
+        """Pick a combo option by index, refusing one the iTM doesn't offer."""
+        options = self.state.get(screen, part, "COMBO_STRS") or []
+        if index is None or not 0 <= index < len(options):
+            msg = f"{what}: not offered: {options}"
+            raise ItmCommandError(msg)
+        await self.send(screen, part, EventType.CLICK, DataType.INT, index)
+
+    def _option_index(self, screen: int, part: int, value: int) -> int | None:
+        options = [
+            str(o).strip() for o in self.state.get(screen, part, "COMBO_STRS") or []
+        ]
+        return options.index(str(value)) if str(value) in options else None
+
+    async def set_hardware(self, changes: dict[str, Any]) -> None:
+        """Pick backlight, buzzer and key click settings and press OK."""
+        s = MenuScreen.HARDWARE
+        if not await self.open_menu_screen(MB_HARDWARE, s):
+            msg = "the hardware settings screen did not open"
+            raise ItmCommandError(msg)
+        try:
+            for key, part in (
+                ("backlight", HW_BACKLIGHT),
+                ("buzzer_volume", HW_BUZZER_VOLUME),
+                ("key_click_volume", HW_KEY_VOLUME),
+            ):
+                if key in changes:
+                    index = self._option_index(s, part, changes[key])
+                    await self._pick_option(s, part, index, f"{key} {changes[key]}")
+            if "buzzer_minutes" in changes:
+                minutes = changes["buzzer_minutes"]
+                index = (
+                    BUZZER_DURATIONS.index(minutes)
+                    if minutes in BUZZER_DURATIONS
+                    else None
+                )
+                await self._pick_option(
+                    s, HW_BUZZER_DURATION, index, f"buzzer duration {minutes}"
+                )
+            await self.press_ok("save hardware settings", s, HW_OK, CLOSE_PART[s])
+        finally:
+            await self.close_screen(s)
+
+    async def set_screensaver(self, changes: dict[str, Any]) -> None:
+        """Pick the screensaver mode, delay and error behaviour and press OK."""
+        s = MenuScreen.SCREENSAVER
+        if not await self.open_menu_screen(MB_SCREENSAVER, s):
+            msg = "the screensaver screen did not open"
+            raise ItmCommandError(msg)
+        try:
+            if "mode" in changes:
+                modes = list(ScreensaverMode)
+                await self._pick_option(
+                    s, SS_MODE, modes.index(changes["mode"]), f"mode {changes['mode']}"
+                )
+            if "delay_minutes" in changes:
+                await self.answer_number(
+                    SS_DELAY_BUTTON,
+                    changes["delay_minutes"],
+                    "screensaver delay",
+                    screen=s,
+                )
+            if "off_on_error" in changes:
+                await self.send(
+                    s, SS_OFF_ON_ERROR if changes["off_on_error"] else SS_ON_ON_ERROR
+                )
+            await self.press_ok("save screensaver settings", s, SS_OK, CLOSE_PART[s])
+        finally:
+            await self.close_screen(s)
+
+    async def _open_system_screen(self, button: int, screen: MenuScreen) -> None:
+        if not await self.open_menu_screen(button, screen):
+            msg = f"the {screen.name.lower()} screen did not open"
+            raise ItmCommandError(msg)
+
+    async def read_zone_attributes(self, zone: str) -> ZoneAttributes:
+        """Open a zone's settings screen, read it and cancel."""
+        s, a = MenuScreen.ZONES, MenuScreen.ZONE_SETTINGS
+        await self._open_system_screen(MB_ZONES, s)
+        try:
+            await self._select_listed(s, ZN_LIST, 0, zone, "zone")
+            await self.click(s, ZN_SETTINGS, "zone")
+            return zone_attributes_from_screen(self.state)
+        finally:
+            await self.close_screen(a)
+            await self.close_screen(s)
+
+    async def read_dst(self) -> DstSettings:
+        """Read the time screen's summer time switch and rule."""
+        await self._open_system_screen(MB_TIME, MenuScreen.TIME)
+        try:
+            return dst_from_screen(self.state)
+        finally:
+            await self.close_screen(MenuScreen.TIME)
+
+    async def _network_input(self, field: str, value: str) -> None:
+        """Open a network field's input, check it, and enter value (or plan it)."""
+        n = MenuScreen.NETWORK
+        text = field in NW_TEXT_FIELDS
+        kind = "CHARINPUT" if text else "IPADDR"
+        reply = await self.click(n, NW_BUTTONS[field], f"network {field}")
+        dialogs = [
+            u for u in reply.screens if u.update == "DLG_OPEN" and u.data[1] == kind
+        ]
+        if not dialogs:
+            msg = f"network {field}: no {kind} input opened: {reply.dialogs()}"
+            raise ItmCommandError(msg)
+        d = dialogs[0]
+        if text and not d.data[4] <= len(value) <= d.data[5]:
+            await self.send(d.screen, d.data[0], EventType.CLICK2)
+            msg = f"network {field}: {value!r} must be {d.data[4]}-{d.data[5]} long"
+            raise ItmCommandError(msg)
+        data_type = DataType.STRING if text else DataType.IPADDRESS
+        if self._client.dry_run:
+            # Not even into the input: a dry run of a network change sends no value.
+            await self.send(d.screen, d.data[0], EventType.CLICK2)
+            self._client.planned.append(
+                f"network {field} = {value}: screen {n} part {d.data[0]} "
+                f"event {EventType.CLICK} type {data_type}"
+            )
+            return
+        reply = await self.send(
+            d.screen, d.data[0], EventType.CLICK, data_type, string=value
+        )
+        if reply.dialogs():
+            msg = f"network {field}: the iTM refused {value!r}: {reply.dialogs()}"
+            raise ItmCommandError(msg)
+
+    async def set_network(self, changes: dict[str, str]) -> None:
+        """Enter the network changes and press OK (in a dry run: plan, Cancel)."""
+        n = MenuScreen.NETWORK
+        await self._open_system_screen(MB_NETWORK, n)
+        try:
+            for field, value in changes.items():
+                await self._network_input(field, value)
+            await self.press_ok("save network settings", n, NW_OK, CLOSE_PART[n])
+        finally:
+            await self.close_screen(n)
+
+    async def set_maintenance(self, point: str, *, on: bool) -> None:
+        """Move a point into (or out of) the maintenance list and press OK."""
+        s = MenuScreen.MAINTENANCE
+        await self._open_system_screen(MB_MAINTENANCE, s)
+        try:
+            source, button = (
+                (MT_AVAILABLE, MT_ADD) if on else (MT_IN_MAINTENANCE, MT_REMOVE)
+            )
+            target = MT_IN_MAINTENANCE if on else MT_AVAILABLE
+            if row_index(self.state, s, target, 1, point) is not None:
+                return
+            await self._select_listed(s, source, 1, point, "maintenance")
+            await self.click(s, button, "maintenance")
+            verb = "into" if on else "out of"
+            await self.press_ok(
+                f"put {point} {verb} maintenance", s, MT_OK, CLOSE_PART[s]
+            )
+        finally:
+            await self.close_screen(s)
+
+    async def set_point_attributes(
+        self, point: str, *, name: str | None, info: str | None
+    ) -> None:
+        """Change a management point's name and/or description, then OK."""
+        s, a = MenuScreen.POINTS, MenuScreen.POINT_SETTINGS
+        await self._open_system_screen(MB_POINTS, s)
+        try:
+            await self._select_listed(s, PT_LIST, 1, point, "point")
+            await self.click(s, PT_CHANGE, "point")
+            if a not in self.state.screens:
+                msg = f"{point}: the point settings did not open"
+                raise ItmCommandError(msg)
+            if name is not None:
+                await self.answer_text(a, PA_NAME_BUTTON, name, f"{point} name")
+            if info is not None:
+                await self.answer_text(a, PA_INFO_BUTTON, info, f"{point} description")
+            await self.press_ok(f"save point {point}", a, PA_OK, CLOSE_PART[a])
+        finally:
+            await self.close_screen(a)
+            await self.close_screen(s)
+
+    async def set_zone_attributes(
+        self,
+        zone: str,
+        *,
+        name: str | None,
+        info: str | None,
+        start_interval: int | None,
+        stop_interval: int | None,
+    ) -> None:
+        """Change a zone's name, description and/or intervals, then OK."""
+        s, a = MenuScreen.ZONES, MenuScreen.ZONE_SETTINGS
+        await self._open_system_screen(MB_ZONES, s)
+        try:
+            await self._select_listed(s, ZN_LIST, 0, zone, "zone")
+            await self.click(s, ZN_SETTINGS, "zone")
+            if a not in self.state.screens:
+                msg = f"{zone}: the zone settings did not open"
+                raise ItmCommandError(msg)
+            if name is not None:
+                await self.answer_text(a, ZA_NAME_BUTTON, name, f"{zone} name")
+            if info is not None:
+                await self.answer_text(a, ZA_INFO_BUTTON, info, f"{zone} description")
+            for button, value, what in (
+                (ZA_START_BUTTON, start_interval, "start interval"),
+                (ZA_STOP_BUTTON, stop_interval, "stop interval"),
+            ):
+                if value is not None:
+                    await self.answer_number(button, value, f"{zone} {what}", screen=a)
+            async with zones_edit.zone_errors(cast("_Session", self)):
+                await self.press_ok(f"save zone {zone}", a, ZA_OK, CLOSE_PART[a])
+        finally:
+            await self.close_screen(a)
+            await self.close_screen(s)
+
+    async def _answer_password(
+        self, reply: Reply, password: str, what: str = "password"
+    ) -> None:
+        """Enter the password in the dialog(s) a reply opened (new, then repeat).
+
+        A dry run never types it: it cancels the input and plans ``***``.
+        """
+        for _ in range(2):
+            dialogs = [
+                u
+                for u in reply.screens
+                if u.update == "DLG_OPEN" and u.data[1] == "PASSWORD"
+            ]
+            if not dialogs:
+                break
+            d = dialogs[0]
+            low, high = d.data[3], d.data[4]
+            if not low <= len(password) <= high:
+                await self.send(d.screen, d.data[0], EventType.CLICK2, DataType.INT, 0)
+                msg = f"the password must be {low}-{high} characters"
+                raise ItmCommandError(msg)
+            if self._client.dry_run:
+                await self.send(d.screen, d.data[0], EventType.CLICK2, DataType.INT, 0)
+                self._client.planned.append(
+                    f"{what} = ***: screen {d.screen} input {d.data[0]}"
+                )
+                return
+            reply = await self.send(
+                d.screen, d.data[0], EventType.CLICK, DataType.STRING, string=password
+            )
+        errors = [d for d in reply.dialogs() if d[1] in {"ERROR", "INFO"}]
+        if errors:
+            msg = f"the iTM refused the password: {errors}"
+            raise ItmCommandError(msg)
+
+    async def _pick_user_zones(self, zones: tuple[str, ...]) -> None:
+        """Select the zones a web user manages in 1202 and press its OK."""
+        z = MenuScreen.USER_ZONES
+        await self.click(MenuScreen.USER_SETUP, US_ZONES_BUTTON, "user zones")
+        if z not in self.state.screens:
+            msg = "the user's zone list did not open"
+            raise ItmCommandError(msg)
+        rows = []
+        for zone in zones:
+            row = row_index(self.state, z, UZ_LIST, 0, zone)
+            if row is None:
+                await self.close_screen(z)
+                msg = f"zone {zone!r} not offered for web users"
+                raise ItmCommandError(msg)
+            rows.append(row)
+        await self.send(
+            z, UZ_LIST, EventType.CLICK, DataType.INTARRAY, len(rows), array=tuple(rows)
+        )
+        reply = await self.send(z, UZ_OK)
+        await self._answer_confirm(z, reply)
+        self.state.screens.pop(z, None)
+
+    async def save_web_user(
+        self,
+        name: str,
+        *,
+        new: bool,
+        password: str | None,
+        admin: bool | None,
+        zones: tuple[str, ...] | None = None,
+    ) -> None:
+        """Add a web user, or change one: name, password, type and zones, then OK."""
+        s, u = MenuScreen.WEB_USERS, MenuScreen.USER_SETUP
+        await self._open_system_screen(MB_WEB_USERS, s)
+        try:
+            listed = row_index(self.state, s, WU_LIST, 0, name) is not None
+            if new and listed:
+                msg = f"web user {name!r} exists already"
+                raise ItmCommandError(msg)
+            if new:
+                await self.click(s, WU_ADD, "add web user")
+            else:
+                await self._select_listed(s, WU_LIST, 0, name, "web user")
+                await self.click(s, WU_CHANGE, "change web user")
+            if u not in self.state.screens:
+                msg = f"{name}: the user setup did not open"
+                raise ItmCommandError(msg)
+            if new:
+                await self.answer_text(u, US_NAME_BUTTON, name, "user name")
+            if password is not None:
+                reply = await self.send(u, US_PASSWORD_BUTTON)
+                await self._answer_password(
+                    reply, password, f"web user {name} password"
+                )
+            if admin is not None:
+                await self.send(u, US_ADMIN if admin else US_USER)
+            if zones is not None:
+                await self._pick_user_zones(zones)
+            verb = "add" if new else "change"
+            await self.press_ok(f"{verb} web user {name}", u, US_OK, CLOSE_PART[u])
+        finally:
+            await self.close_screen(u)
+            await self.close_screen(s)
+
+    async def delete_web_user(self, name: str) -> None:
+        """Select a web user, press Delete and confirm."""
+        s = MenuScreen.WEB_USERS
+        await self._open_system_screen(MB_WEB_USERS, s)
+        try:
+            await self._select_listed(s, WU_LIST, 0, name, "web user")
+            if self.state.get(s, WU_DELETE, "ENABLED") == 0:
+                msg = f"the iTM does not allow deleting {name!r}"
+                raise ItmCommandError(msg)
+            reply = await self.write(f"delete web user {name}", s, WU_DELETE)
+            if reply is not None:
+                await self._answer_confirm(s, reply)
+        finally:
+            await self.close_screen(s)
+
+    async def read_language(self) -> str | None:
+        """Open the language screen from the region screen and read the language."""
+        r, g = MenuScreen.REGION, MenuScreen.LANGUAGE
+        await self._open_system_screen(MB_REGION, r)
+        try:
+            await self.send(r, RG_LANGUAGE_BUTTON)
+            return language_from_screen(self.state)
+        finally:
+            await self.close_screen(g)
+            await self.close_screen(r)
+
+    async def set_language(self, code: str) -> None:
+        """Pick a display language: language screen OK, then region screen OK."""
+        r, g = MenuScreen.REGION, MenuScreen.LANGUAGE
+        await self._open_system_screen(MB_REGION, r)
+        try:
+            await self.send(r, RG_LANGUAGE_BUTTON)
+            if g not in self.state.screens:
+                msg = "the language screen did not open"
+                raise ItmCommandError(msg)
+            await self.send(g, LANGUAGE_RADIOS[code])
+            await self.press_ok(f"pick language {code}", g, LG_OK, CLOSE_PART[g])
+            await self.press_ok(f"save language {code}", r, RG_OK, CLOSE_PART[r])
+        finally:
+            await self.close_screen(g)
+            await self.close_screen(r)
+
+    async def _pick_dst_rule(self, parts: tuple[int, ...], rule: DstRule) -> None:
+        """Pick a summer time rule's month, week, weekday and hour."""
+        t = MenuScreen.TIME
+        month, week, weekday, hour_part = parts
+        hours = [_hour(o) for o in self.state.get(t, hour_part, "COMBO_STRS") or []]
+        picks = (
+            (month, rule.month - 1),
+            (week, rule.week - 1),
+            (weekday, rule.weekday),
+            (hour_part, hours.index(rule.hour) if rule.hour in hours else None),
+        )
+        for part, index in picks:
+            if self.state.get(t, part, "ENABLED") == 0:
+                msg = "summer time: the rule is disabled on the iTM"
+                raise ItmCommandError(msg)
+            await self._pick_option(t, part, index, f"summer time {rule}")
+
+    async def set_region(self, changes: dict[str, Any]) -> None:
+        """Pick date format, 12/24 hours, °C/°F and decimal separator, then OK."""
+        r = MenuScreen.REGION
+        await self._open_system_screen(MB_REGION, r)
+        try:
+            if (fmt := changes.get("date_format")) is not None:
+                await self._pick_option(
+                    r, R_DATE_FORMAT, DATE_FORMATS.index(fmt), f"date format {fmt}"
+                )
+            for key, (first, second), values in (
+                ("time_24h", (R_24H, R_12H), (True, False)),
+                ("temperature_unit", (R_CELSIUS, R_FAHRENHEIT), ("°C", "°F")),
+                ("decimal_separator", (R_DECIMAL_POINT, R_DECIMAL_COMMA), (".", ",")),
+            ):
+                if (value := changes.get(key)) is not None:
+                    await self.send(r, first if value == values[0] else second)
+            await self.press_ok("save region settings", r, RG_OK, CLOSE_PART[r])
+        finally:
+            await self.close_screen(r)
+
+    async def set_dst(self, *, enabled: bool, start: DstRule, end: DstRule) -> None:
+        """Switch summer time on (with its rule) or off, then OK."""
+        t = MenuScreen.TIME
+        await self._open_system_screen(MB_TIME, t)
+        try:
+            await self.send(t, TM_DST_ON if enabled else TM_DST_OFF)
+            if enabled:
+                await self._pick_dst_rule(TM_DST_START, start)
+                await self._pick_dst_rule(TM_DST_END, end)
+            await self.press_ok("save summer time", t, TM_OK, CLOSE_PART[t])
+        finally:
+            await self.close_screen(t)
+
+    async def set_clock(self, when: datetime) -> None:
+        """Enter a date and time in the clock's input, then OK."""
+        t = MenuScreen.TIME
+        await self._open_system_screen(MB_TIME, t)
+        try:
+            reply = await self.send(t, TM_CHANGE)
+            dialogs = [
+                u
+                for u in reply.screens
+                if u.update == "DLG_OPEN" and u.data[1] == "TIME"
+            ]
+            if not dialogs:
+                msg = f"the clock input did not open: {reply.dialogs()}"
+                raise ItmCommandError(msg)
+            d = dialogs[0]
+            value = (
+                when.year,
+                when.month - 1,
+                when.day,
+                when.hour,
+                when.minute,
+                when.second,
+            )
+            low, high = tuple(d.data[10:16]), tuple(d.data[16:22])
+            if not low <= value <= high:
+                await self.send(d.screen, d.data[0], EventType.CLICK2)
+                msg = f"the clock: {when} outside the iTM's range"
+                raise ItmCommandError(msg)
+            await self.send(
+                d.screen, d.data[0], EventType.CLICK, DataType.TIME, 6, array=value
+            )
+            await self.press_ok("save the clock", t, TM_OK, CLOSE_PART[t])
+        finally:
+            await self.close_screen(t)
+
+
+def _hour(option: str) -> int | None:
+    m = re.match(r"\s*(\d+)", str(option))
+    return int(m.group(1)) if m else None

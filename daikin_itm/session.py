@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 import aiohttp
 
-from . import zones_edit
 from .changeover import ChangeoverSessionMixin
 from .exceptions import (
     ItmCommandError,
@@ -31,9 +30,6 @@ from .menu import (
     CO_LIST,
     CO_MEMBERS_BUTTON,
     CO_SETTINGS_BUTTON,
-    DATE_FORMATS,
-    EV_EDIT,
-    EV_LIST,
     H_CLASS_MANAGEMENT,
     H_DATE,
     H_DAY_NEXT,
@@ -54,13 +50,6 @@ from .menu import (
     OPTIONAL_FUNCTIONS,
     OT_DURATION,
     OT_OK,
-    R_12H,
-    R_24H,
-    R_CELSIUS,
-    R_DATE_FORMAT,
-    R_DECIMAL_COMMA,
-    R_DECIMAL_POINT,
-    R_FAHRENHEIT,
     SB_ADVANCED,
     SB_HIGH_BACK,
     SB_HIGH_UP,
@@ -70,24 +59,6 @@ from .menu import (
     SBA_COOL,
     SBA_HEAT,
     SBA_OK,
-    SCH_ADD_BUTTON,
-    SCH_DAY_BUTTON,
-    SCH_DELETE_BUTTON,
-    SCH_EDIT_BUTTON,
-    SCH_PANEL,
-    SD_NEXT,
-    SE_DAY_RADIOS,
-    SE_DISABLED,
-    SE_EDIT_DAY,
-    SE_EDIT_SPECIAL,
-    SE_ENABLED,
-    SE_OK,
-    SE_RENAME,
-    SE_SPECIAL_RADIOS,
-    SE_TAB,
-    SE_TAB_CALENDAR,
-    SE_TAB_SPECIAL,
-    SE_TAB_WEEKLY,
     ChangeoverGroup,
     EmergencyStopProgram,
     History,
@@ -95,9 +66,6 @@ from .menu import (
     ItmInfo,
     MenuScreen,
     OptionalFunction,
-    ScheduleDay,
-    ScheduleEvent,
-    ScheduleProgram,
     ScheduleSummary,
     SetbackSettings,
     changeover_candidates_from_screen,
@@ -105,83 +73,28 @@ from .menu import (
     changeover_members_from_screen,
     changeover_settings_from_screen,
     clock_from_screen,
-    day_events_from_screen,
     emergency_stop_from_screen,
-    event_from_screen,
     history_from_screen,
     indicators_from_screen,
     overtime_from_screen,
     parse_shown_date,
-    program_from_editor,
     region_from_screen,
-    schedule_day_from_screen,
     schedules_from_screen,
     setback_from_screen,
     version_from_screen,
 )
 from .models import (
-    AIRFLOW_DIRECTIONS,
-    AIRFLOW_ICONS,
-    D_AIRFLOW_CHECK,
-    D_AIRFLOW_DOWN,
-    D_AIRFLOW_ICON,
-    D_AIRFLOW_UP,
-    D_CANCEL,
-    D_COOL_LIMIT,
-    D_COOL_MAX_BUTTON,
-    D_COOL_MIN_BUTTON,
-    D_DUST_FORCED_RESET,
-    D_DUST_RESET,
-    D_FAN_CHECK,
-    D_FAN_ICON,
-    D_FAN_UP,
-    D_FILTER_RESET,
-    D_HEAT_LIMIT,
-    D_HEAT_MAX_BUTTON,
-    D_HEAT_MIN_BUTTON,
-    D_LIMIT_CHECK,
-    D_LOCK_MODE,
-    D_LOCK_MODE_CHECK,
-    D_LOCK_SETPOINT,
-    D_LOCK_SETPOINT_CHECK,
-    D_LOCK_START_STOP,
-    D_LOCK_START_STOP_CHECK,
-    D_MODE,
-    D_MODE_CHECK,
-    D_OK,
-    D_OVERTIME,
-    D_OVERTIME_CHECK,
-    D_POWER_CHECK,
-    D_POWER_START,
-    D_POWER_STOP,
-    D_VENT_AMOUNT,
-    D_VENT_AMOUNT_CHECK,
-    D_VENT_MODE,
-    D_VENT_MODE_CHECK,
-    DIALOG_SETTINGS,
-    DT_CLOSE,
     E_CLOSE,
-    FAN_ICONS,
     L_BTN_ICON,
     L_LIST,
     MM_ERROR_BUTTON,
-    P_DETAILS_BUTTON,
     P_NAME,
-    P_SETTINGS_BUTTON,
-    Capabilities,
-    DialogSetting,
     ErrorInformation,
     PointKind,
-    RemoteLock,
     Unit,
-    analog_details_from_screen,
     analog_from_panel,
-    capabilities_from_dialog,
-    details_from_screen,
-    dialog_setting_choice,
     error_information_from_screen,
     point_kind,
-    status_from_details,
     unit_from_panel,
     units_from_list,
 )
@@ -200,7 +113,7 @@ from .protocol import (
     is_token,
     parse_reply,
 )
-from .schedule_edit import special_day_names
+from .schedule_edit import ScheduleSessionMixin
 from .service import (
     MB_ACTIVATION,
     MB_CENTRAL_MONITOR,
@@ -222,16 +135,9 @@ from .service import (
     time_zone_from_screen,
 )
 from .service import logged_in as service_logged_in
+from .settings_dialog import SettingsDialogMixin
 from .state import UIState
 from .system import (
-    BUZZER_DURATIONS,
-    HW_BACKLIGHT,
-    HW_BUZZER_DURATION,
-    HW_BUZZER_VOLUME,
-    HW_KEY_VOLUME,
-    HW_OK,
-    LANGUAGE_RADIOS,
-    LG_OK,
     MB_CONFIRM_DIALOGS,
     MB_EMAIL,
     MB_ENERGY_EQUIPMENT,
@@ -245,64 +151,13 @@ from .system import (
     MB_SCREENSAVER,
     MB_WEB_USERS,
     MB_ZONES,
-    MT_ADD,
-    MT_AVAILABLE,
-    MT_IN_MAINTENANCE,
-    MT_OK,
-    MT_REMOVE,
-    NW_BUTTONS,
-    NW_OK,
-    NW_TEXT_FIELDS,
-    PA_INFO_BUTTON,
-    PA_NAME_BUTTON,
-    PA_OK,
-    PT_CHANGE,
-    PT_LIST,
-    RG_LANGUAGE_BUTTON,
-    RG_OK,
-    SS_DELAY_BUTTON,
-    SS_MODE,
-    SS_OFF_ON_ERROR,
-    SS_OK,
-    SS_ON_ON_ERROR,
-    TM_CHANGE,
-    TM_DST_END,
-    TM_DST_OFF,
-    TM_DST_ON,
-    TM_DST_START,
-    TM_OK,
-    US_ADMIN,
-    US_NAME_BUTTON,
-    US_OK,
-    US_PASSWORD_BUTTON,
-    US_USER,
-    US_ZONES_BUTTON,
-    UZ_LIST,
-    UZ_OK,
-    WU_ADD,
-    WU_CHANGE,
-    WU_DELETE,
-    WU_LIST,
-    ZA_INFO_BUTTON,
-    ZA_NAME_BUTTON,
-    ZA_OK,
-    ZA_START_BUTTON,
-    ZA_STOP_BUTTON,
-    ZN_LIST,
-    ZN_SETTINGS,
-    DstRule,
-    DstSettings,
     EnergyNavigatorInfo,
-    ScreensaverMode,
     SystemSettings,
-    ZoneAttributes,
     confirm_dialogs_from_screen,
-    dst_from_screen,
     email_from_screen,
     energy_export_from_screen,
     energy_sampling_from_screen,
     hardware_from_screen,
-    language_from_screen,
     maintenance_from_screen,
     network_from_screen,
     points_from_screen,
@@ -311,12 +166,12 @@ from .system import (
     row_index,
     screensaver_from_screen,
     web_users_from_screen,
-    zone_attributes_from_screen,
     zones_from_screen,
 )
+from .system_edit import SystemSessionMixin
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Coroutine
+    from collections.abc import Awaitable, Callable
 
     from .client import ItmClient, Point, SessionStore
     from .protocol import Reply
@@ -332,46 +187,12 @@ LOGIN_BUTTON = 4
 _T = TypeVar("_T")
 
 
-async def _run_to_completion(coro: Coroutine[Any, Any, _T]) -> _T:
-    """Run cleanup to the end even if the caller is cancelled meanwhile.
-
-    Each request is bounded by the HTTP timeout, so this ends. The cancellation is
-    passed on once the cleanup is done. A plain asyncio.shield would return at once
-    on cancellation and leave the cleanup running unsupervised.
-
-    Args:
-    ----
-        coro: The cleanup to run.
-
-    Returns:
-    -------
-        What the cleanup returned.
-
-    Raises:
-    ------
-        asyncio.CancelledError: The caller was cancelled while the cleanup ran.
-
-    """
-    task = asyncio.ensure_future(coro)
-    cancelled = False
-    while True:
-        try:
-            result = await asyncio.shield(task)
-        except asyncio.CancelledError:
-            if task.cancelled():  # the cleanup itself was cancelled, not just us
-                raise
-            cancelled = True
-            continue
-        except BaseException as e:
-            if cancelled:
-                raise asyncio.CancelledError from e
-            raise
-        if cancelled:
-            raise asyncio.CancelledError
-        return result
-
-
-class _Session(ChangeoverSessionMixin):  # pylint: disable=too-many-public-methods
+class _Session(
+    ChangeoverSessionMixin,
+    SettingsDialogMixin,
+    SystemSessionMixin,
+    ScheduleSessionMixin,
+):  # pylint: disable=too-many-public-methods
     """One logged-in conversation with the iTM. Only created by ItmClient."""
 
     def __init__(
@@ -623,364 +444,6 @@ class _Session(ChangeoverSessionMixin):  # pylint: disable=too-many-public-metho
         # sends a TIMER event.
         await asyncio.sleep(delay)
         await self.send(ScreenID.OPERATION, -1, EventType.TIMER)
-
-    # -- settings dialog (screen 7): tick what to change, set it, press OK ---------
-    async def open_settings(self) -> None:
-        """Open the selected unit's settings dialog."""
-        reply = await self.send(ScreenID.OPERATION, P_SETTINGS_BUTTON)
-        if not any(
-            s.screen == ScreenID.SETTINGS and s.update == "OPEN" for s in reply.screens
-        ):
-            msg = f"settings dialog did not open: {reply.dialogs()}"
-            raise ItmCommandError(msg)
-
-    async def dialog_click(self, part: int, number: int | None = None) -> None:
-        """Click a settings dialog control, optionally picking an option."""
-        if number is None:
-            reply = await self.send(ScreenID.SETTINGS, part)
-        else:
-            reply = await self.send(
-                ScreenID.SETTINGS, part, EventType.CLICK, DataType.INT, number
-            )
-        if reply.dialogs():
-            msg = f"iTM opened a dialog: {reply.dialogs()}"
-            raise ItmCommandError(msg)
-
-    async def close_settings(self, *, ok: bool) -> None:
-        """Close the settings dialog with OK (and confirm) or Cancel."""
-        if ok:
-            self._writable()
-            if self._client.dry_run:
-                self._client.planned.append(
-                    f"save settings: screen {ScreenID.SETTINGS} part {D_OK} event 1"
-                )
-                ok = False
-        reply = await self.send(ScreenID.SETTINGS, D_OK if ok else D_CANCEL)
-        # OK asks "Instelling uitvoeren?" (apply settings?). The browser answers "Ja"
-        # with a CLICK on the dialog's ID (onClickDialog1) and "Nee" with CLICK2
-        # (onClickDialog2).
-        opened = [s for s in reply.screens if s.update == "DLG_OPEN"]
-        confirms = [(s.screen, s.data[0]) for s in opened if s.data[1] == "CONFIRM"]
-        others = [s.data for s in opened if s.data[1] != "CONFIRM"]
-        if others:
-            msg = f"iTM refused the settings: {others}"
-            raise ItmCommandError(msg)
-        if ok and confirms:
-            screen, dialog_id = confirms[0]
-            reply = await self.send(screen, dialog_id, EventType.CLICK)
-            if reply.dialogs():
-                msg = f"iTM refused the settings: {reply.dialogs()}"
-                raise ItmCommandError(msg)
-        if not self.settings_open or any(
-            s.screen == ScreenID.SETTINGS and s.update == "CLOSE" for s in reply.screens
-        ):
-            return
-        msg = "settings dialog did not close"
-        raise ItmCommandError(msg)
-
-    async def set_dialog_power(self, *, power: bool) -> None:
-        """Tick power in the settings dialog and pick start or stop."""
-        await self.dialog_click(D_POWER_CHECK, 1)
-        await self.dialog_click(D_POWER_START if power else D_POWER_STOP)
-
-    async def set_dialog_mode(self, caps: Capabilities, mode: str) -> None:
-        """Tick the operation mode in the settings dialog and pick one."""
-        if mode not in caps.mode_labels:
-            msg = f"{caps.name}: mode {mode!r} not offered; available: {caps.modes}"
-            raise ItmCommandError(msg)
-        labels = self.state.get(ScreenID.SETTINGS, D_MODE, "COMBO_STRS")
-        await self.dialog_click(D_MODE_CHECK, 1)
-        await self.dialog_click(D_MODE, labels.index(caps.mode_labels[mode]))
-
-    async def set_dialog_fan_speed(self, caps: Capabilities, fan_speed: str) -> None:
-        """Tick the fan speed in the settings dialog and cycle to the wanted one."""
-        if not caps.fan_speed:
-            msg = f"{caps.name}: fan speed cannot be changed on this unit"
-            raise ItmCommandError(msg)
-        await self.dialog_click(D_FAN_CHECK, 1)
-        # The up button cycles low -> medium -> high -> auto -> low; the iTM reports
-        # the new icon.
-        for _ in range(len(FAN_ICONS) + 1):
-            icon = self.state.get(ScreenID.SETTINGS, D_FAN_ICON, "ICONID")
-            if FAN_ICONS.get(icon) == fan_speed:
-                return
-            await self.dialog_click(D_FAN_UP)
-        msg = f"{caps.name}: could not select fan speed {fan_speed!r}"
-        raise ItmCommandError(msg)
-
-    async def answer_number(  # pylint: disable=too-many-locals
-        self, button: int, value: float, what: str, screen: int = ScreenID.SETTINGS
-    ) -> None:
-        """Press a "change" button and enter a number in the dialog it opens.
-
-        The dialog says which kind of number it takes (type) and its range; the
-        browser sends the value as an int, or as [integer part, thousandths].
-        """
-        reply = await self.send(screen, button)
-        dialogs = [
-            u for u in reply.screens if u.update == "DLG_OPEN" and u.data[1] == "NUMBER"
-        ]
-        if not dialogs:
-            msg = f"{what}: no number input opened: {reply.dialogs()}"
-            raise ItmCommandError(msg)
-        d = dialogs[0]
-        dialog_id, kind = d.data[0], d.data[2]
-        low = d.data[6] + d.data[7] / 1000
-        high = d.data[8] + d.data[9] / 1000
-        if not low <= value <= high:
-            await self.send(d.screen, dialog_id, EventType.CLICK2)
-            msg = f"{what}: {value} outside the iTM's range {low}-{high}"
-            raise ItmCommandError(msg)
-        whole = int(value)
-        thousandths = round((value - whole) * 1000)
-        if kind == 0:
-            await self.send(d.screen, dialog_id, EventType.CLICK, DataType.INT, whole)
-        elif kind in {1, 2}:
-            data_type = DataType.FLOAT if kind == 1 else DataType.SETTEMP_C
-            await self.send(
-                d.screen,
-                dialog_id,
-                EventType.CLICK,
-                data_type,
-                2,
-                array=(whole, thousandths),
-            )
-        elif kind == 3:
-            await self.send(
-                d.screen, dialog_id, EventType.CLICK, DataType.SETTEMP_F, round(value)
-            )
-        else:
-            await self.send(d.screen, dialog_id, EventType.CLICK2)
-            msg = f"{what}: number input of kind {kind} is not supported"
-            raise ItmCommandError(msg)
-
-    async def answer_text(self, screen: int, button: int, text: str, what: str) -> None:
-        """Press a "change" button and enter text in the input dialog it opens.
-
-        The dialog (CHARINPUT) says how long the text may be; a text outside that
-        is refused before it is sent, and the dialog is cancelled.
-        """
-        reply = await self.send(screen, button)
-        dialogs = [
-            u
-            for u in reply.screens
-            if u.update == "DLG_OPEN" and u.data[1] == "CHARINPUT"
-        ]
-        if not dialogs:
-            msg = f"{what}: no text input opened: {reply.dialogs()}"
-            raise ItmCommandError(msg)
-        d = dialogs[0]
-        dialog_id, low, high = d.data[0], d.data[4], d.data[5]
-        if not low <= len(text) <= high:
-            await self.send(d.screen, dialog_id, EventType.CLICK2)
-            msg = f"{what}: {text!r} must be {low}-{high} characters"
-            raise ItmCommandError(msg)
-        reply = await self.send(
-            d.screen, dialog_id, EventType.CLICK, DataType.STRING, string=text
-        )
-        if reply.dialogs():
-            msg = f"{what}: the iTM refused {text!r}: {reply.dialogs()}"
-            raise ItmCommandError(msg)
-
-    async def change_unit_settings(self, changes: dict[str, Any]) -> None:
-        """Change the selected unit's locks, overtime and limits, then OK.
-
-        The dialog is cancelled when anything goes wrong.
-        """
-        await self.open_settings()
-        try:
-            # Refuse an optional setting the unit doesn't offer before any click.
-            picks = {
-                d.key: dialog_setting_choice(self.state, d, changes[d.key])
-                for d in DIALOG_SETTINGS
-                if changes.get(d.key) is not None
-            }
-            for key, check, radios in (
-                ("start_stop_lock", D_LOCK_START_STOP_CHECK, D_LOCK_START_STOP),
-                ("mode_lock", D_LOCK_MODE_CHECK, D_LOCK_MODE),
-                ("setpoint_lock", D_LOCK_SETPOINT_CHECK, D_LOCK_SETPOINT),
-            ):
-                if (lock := changes.get(key)) is None:
-                    continue
-                radio = _lock_radio(key, lock, radios)
-                await self.dialog_click(check, 1)
-                await self.dialog_click(radio)
-            if (overtime := changes.get("overtime")) is not None:
-                await self.dialog_click(D_OVERTIME_CHECK, 1)
-                await self.dialog_click(D_OVERTIME, 0 if overtime else 1)
-            limits = [
-                ("cool_limit", D_COOL_LIMIT, D_COOL_MIN_BUTTON, D_COOL_MAX_BUTTON),
-                ("heat_limit", D_HEAT_LIMIT, D_HEAT_MIN_BUTTON, D_HEAT_MAX_BUTTON),
-            ]
-            if any(changes.get(key) is not None for key, *_ in limits):
-                await self.dialog_click(D_LIMIT_CHECK, 1)
-            for key, combo, min_button, max_button in limits:
-                if (limit := changes.get(key)) is None:
-                    continue
-                await self.dialog_click(combo, 0 if limit.enabled else 1)
-                if limit.enabled and limit.maximum is not None:
-                    await self.answer_number(max_button, limit.maximum, f"{key} max")
-                if limit.enabled and limit.minimum is not None:
-                    await self.answer_number(min_button, limit.minimum, f"{key} min")
-            await self._change_unit_extras(changes)
-            for d in DIALOG_SETTINGS:
-                if d.key in picks:
-                    await self.set_dialog_setting(d, picks[d.key])
-            await self.close_settings(ok=True)
-        except BaseException:
-            if self.settings_open and self.logged_in:
-                with contextlib.suppress(Exception):
-                    await _run_to_completion(self.close_settings(ok=False))
-            raise
-
-    async def _change_unit_extras(self, changes: dict[str, Any]) -> None:
-        """Airflow direction, ventilation mode/amount and the resets, if asked."""
-        if (direction := changes.get("airflow_direction")) is not None:
-            await self.set_dialog_airflow(direction)
-        for key, part in (
-            ("reset_filter_sign", D_FILTER_RESET),
-            ("reset_dust_alarm", D_DUST_RESET),
-            ("force_dust_alarm_reset", D_DUST_FORCED_RESET),
-        ):
-            if changes.get(key):
-                await self._tick_reset(part, key)
-        for key, check, combo in (
-            ("ventilation_mode", D_VENT_MODE_CHECK, D_VENT_MODE),
-            ("ventilation_amount", D_VENT_AMOUNT_CHECK, D_VENT_AMOUNT),
-        ):
-            if (value := changes.get(key)) is not None:
-                await self.set_dialog_option(check, combo, value, key)
-
-    async def _tick_reset(self, part: int, what: str) -> None:
-        """Tick a reset the dialog offers (only while there is something to reset)."""
-        if not self.state.visible(ScreenID.SETTINGS, part):
-            msg = f"{what.replace('_', ' ')}: nothing to reset on this unit"
-            raise ItmCommandError(msg)
-        await self.dialog_click(part, 1)
-
-    async def set_dialog_option(
-        self, check: int, combo: int, value: str, what: str
-    ) -> None:
-        """Tick an optional dialog setting and pick an option by its label."""
-        s = ScreenID.SETTINGS
-        options = [str(o).strip() for o in self.state.get(s, combo, "COMBO_STRS") or []]
-        disabled = self.state.get(s, check, "ENABLED") == 0
-        if not self.state.visible(s, check) or disabled or not options:
-            msg = f"{what.replace('_', ' ')}: not offered by this unit"
-            raise ItmCommandError(msg)
-        wanted = [o.casefold() for o in options]
-        if value.strip().casefold() not in wanted:
-            msg = f"{what.replace('_', ' ')}: {value!r} not offered: {options}"
-            raise ItmCommandError(msg)
-        await self.dialog_click(check, 1)
-        await self.dialog_click(combo, wanted.index(value.strip().casefold()))
-
-    async def set_dialog_setting(self, setting: DialogSetting, pick: Any) -> None:
-        """Tick an optional setting (models.DIALOG_SETTINGS) and set it.
-
-        pick comes from dialog_setting_choice. The setting's controls are enabled by
-        ticking its checkbox; one still disabled is refused, never clicked.
-        """
-        what = setting.key.replace("_", " ")
-        await self.dialog_click(setting.check, 1)
-        control = {"radios": pick, "number": setting.parts[-1]}.get(
-            setting.kind, setting.parts[0]
-        )
-        if self.state.get(ScreenID.SETTINGS, control, "ENABLED") == 0:
-            msg = f"{what}: the iTM keeps its control disabled"
-            raise ItmCommandError(msg)
-        if setting.kind == "radios":
-            await self.dialog_click(control)
-        elif setting.kind == "number":
-            await self.answer_number(control, pick, what)
-        else:
-            await self.dialog_click(control, pick)
-
-    async def set_dialog_airflow(self, direction: str) -> None:
-        """Tick airflow direction in the settings dialog and step to the wanted one.
-
-        The down button steps position 0 -> 1 -> ... -> 4 -> swing -> 0, up the other
-        way; take the shorter way and check the icon after each step.
-        """
-        s = ScreenID.SETTINGS
-        if not self.state.visible(s, D_AIRFLOW_CHECK):
-            msg = "this unit has no adjustable airflow direction"
-            raise ItmCommandError(msg)
-        await self.dialog_click(D_AIRFLOW_CHECK, 1)
-        current = AIRFLOW_ICONS.get(self.state.get(s, D_AIRFLOW_ICON, "ICONID"))
-        if current is None:
-            msg = "the iTM shows an unknown airflow direction"
-            raise ItmCommandError(msg)
-        n = len(AIRFLOW_DIRECTIONS)
-        down = (
-            AIRFLOW_DIRECTIONS.index(direction) - AIRFLOW_DIRECTIONS.index(current)
-        ) % n
-        button, steps = (
-            (D_AIRFLOW_DOWN, down) if down <= n - down else (D_AIRFLOW_UP, n - down)
-        )
-        for _ in range(steps):
-            if self.state.get(s, button, "ENABLED") == 0:
-                msg = "the airflow direction buttons are disabled"
-                raise ItmCommandError(msg)
-            await self.dialog_click(button)
-        shown = AIRFLOW_ICONS.get(self.state.get(s, D_AIRFLOW_ICON, "ICONID"))
-        if shown != direction:
-            msg = f"could not select airflow direction {direction!r} (shows {shown!r})"
-            raise ItmCommandError(msg)
-
-    async def change_settings(
-        self,
-        unit: str,
-        *,
-        power: bool | None,
-        mode: str | None,
-        fan_speed: str | None,
-    ) -> None:
-        """Change the selected unit through its settings dialog.
-
-        The dialog is cancelled when anything goes wrong.
-        """
-        await self.open_settings()
-        try:
-            caps = capabilities_from_dialog(unit, self.state)
-            if power is not None:
-                await self.set_dialog_power(power=power)
-            if mode is not None:
-                await self.set_dialog_mode(caps, mode)
-            if fan_speed is not None:
-                await self.set_dialog_fan_speed(caps, fan_speed)
-            await self.close_settings(ok=True)
-        except BaseException:
-            if self.settings_open and self.logged_in:
-                with contextlib.suppress(Exception):
-                    await _run_to_completion(self.close_settings(ok=False))
-            raise
-
-    async def _with_details(
-        self, read: Callable[[UIState], dict[str, Any]]
-    ) -> dict[str, Any]:
-        """Open the selected point's Details screen, read it with read, close it."""
-        reply = await self.send(ScreenID.OPERATION, P_DETAILS_BUTTON)
-        if not any(
-            s.screen == ScreenID.DETAILS and s.update == "OPEN" for s in reply.screens
-        ):
-            msg = f"details screen did not open: {reply.dialogs()}"
-            raise ItmCommandError(msg)
-        result = read(self.state)
-        await self.send(ScreenID.DETAILS, DT_CLOSE)
-        return result
-
-    async def read_details(self) -> dict[str, Any]:
-        """Read the selected unit's identity from its Details screen."""
-        return await self._with_details(details_from_screen)
-
-    async def read_detail_status(self) -> dict[str, Any]:
-        """Read the selected unit's status lines from its Details screen."""
-        return await self._with_details(status_from_details)
-
-    async def read_analog_details(self) -> dict[str, Any]:
-        """Read the selected analog point's attributes from its Details screen."""
-        return await self._with_details(analog_details_from_screen)
 
     # -- points of any kind -------------------------------------------------------
     async def read_points(self, *, details: bool = False) -> dict[str, Point]:
@@ -1389,7 +852,7 @@ class _Session(ChangeoverSessionMixin):  # pylint: disable=too-many-public-metho
                 msg = f"iTM refused: {dialog[2]!r}"
                 raise ItmCommandError(msg)
 
-    # -- setback and overtime writes ----------------------------------------------
+    # -- setback, overtime, service and history -----------------------------------
     async def _pick_number(self, screen: int, part: int, value: int, what: str) -> None:
         """Pick a value in a numeric combo, refusing one the iTM doesn't offer."""
         options = self.state.get(screen, part, "COMBO_NUMS") or []
@@ -1450,78 +913,6 @@ class _Session(ChangeoverSessionMixin):  # pylint: disable=too-many-public-metho
         finally:
             await self.close_screen(s)
 
-    async def _pick_option(
-        self, screen: int, part: int, index: int | None, what: str
-    ) -> None:
-        """Pick a combo option by index, refusing one the iTM doesn't offer."""
-        options = self.state.get(screen, part, "COMBO_STRS") or []
-        if index is None or not 0 <= index < len(options):
-            msg = f"{what}: not offered: {options}"
-            raise ItmCommandError(msg)
-        await self.send(screen, part, EventType.CLICK, DataType.INT, index)
-
-    def _option_index(self, screen: int, part: int, value: int) -> int | None:
-        options = [
-            str(o).strip() for o in self.state.get(screen, part, "COMBO_STRS") or []
-        ]
-        return options.index(str(value)) if str(value) in options else None
-
-    async def set_hardware(self, changes: dict[str, Any]) -> None:
-        """Pick backlight, buzzer and key click settings and press OK."""
-        s = MenuScreen.HARDWARE
-        if not await self.open_menu_screen(MB_HARDWARE, s):
-            msg = "the hardware settings screen did not open"
-            raise ItmCommandError(msg)
-        try:
-            for key, part in (
-                ("backlight", HW_BACKLIGHT),
-                ("buzzer_volume", HW_BUZZER_VOLUME),
-                ("key_click_volume", HW_KEY_VOLUME),
-            ):
-                if key in changes:
-                    index = self._option_index(s, part, changes[key])
-                    await self._pick_option(s, part, index, f"{key} {changes[key]}")
-            if "buzzer_minutes" in changes:
-                minutes = changes["buzzer_minutes"]
-                index = (
-                    BUZZER_DURATIONS.index(minutes)
-                    if minutes in BUZZER_DURATIONS
-                    else None
-                )
-                await self._pick_option(
-                    s, HW_BUZZER_DURATION, index, f"buzzer duration {minutes}"
-                )
-            await self.press_ok("save hardware settings", s, HW_OK, CLOSE_PART[s])
-        finally:
-            await self.close_screen(s)
-
-    async def set_screensaver(self, changes: dict[str, Any]) -> None:
-        """Pick the screensaver mode, delay and error behaviour and press OK."""
-        s = MenuScreen.SCREENSAVER
-        if not await self.open_menu_screen(MB_SCREENSAVER, s):
-            msg = "the screensaver screen did not open"
-            raise ItmCommandError(msg)
-        try:
-            if "mode" in changes:
-                modes = list(ScreensaverMode)
-                await self._pick_option(
-                    s, SS_MODE, modes.index(changes["mode"]), f"mode {changes['mode']}"
-                )
-            if "delay_minutes" in changes:
-                await self.answer_number(
-                    SS_DELAY_BUTTON,
-                    changes["delay_minutes"],
-                    "screensaver delay",
-                    screen=s,
-                )
-            if "off_on_error" in changes:
-                await self.send(
-                    s, SS_OFF_ON_ERROR if changes["off_on_error"] else SS_ON_ON_ERROR
-                )
-            await self.press_ok("save screensaver settings", s, SS_OK, CLOSE_PART[s])
-        finally:
-            await self.close_screen(s)
-
     async def select_row(self, screen: int, part: int, row: int) -> Reply:
         """Select a list row, as the browser does.
 
@@ -1546,75 +937,6 @@ class _Session(ChangeoverSessionMixin):  # pylint: disable=too-many-public-metho
         """Click a button, naming it when the iTM has it disabled."""
         self.refuse_disabled(screen, part, what)
         return await self.send(screen, part)
-
-    async def _open_system_screen(self, button: int, screen: MenuScreen) -> None:
-        if not await self.open_menu_screen(button, screen):
-            msg = f"the {screen.name.lower()} screen did not open"
-            raise ItmCommandError(msg)
-
-    async def read_zone_attributes(self, zone: str) -> ZoneAttributes:
-        """Open a zone's settings screen, read it and cancel."""
-        s, a = MenuScreen.ZONES, MenuScreen.ZONE_SETTINGS
-        await self._open_system_screen(MB_ZONES, s)
-        try:
-            await self._select_listed(s, ZN_LIST, 0, zone, "zone")
-            await self.click(s, ZN_SETTINGS, "zone")
-            return zone_attributes_from_screen(self.state)
-        finally:
-            await self.close_screen(a)
-            await self.close_screen(s)
-
-    async def read_dst(self) -> DstSettings:
-        """Read the time screen's summer time switch and rule."""
-        await self._open_system_screen(MB_TIME, MenuScreen.TIME)
-        try:
-            return dst_from_screen(self.state)
-        finally:
-            await self.close_screen(MenuScreen.TIME)
-
-    async def _network_input(self, field: str, value: str) -> None:
-        """Open a network field's input, check it, and enter value (or plan it)."""
-        n = MenuScreen.NETWORK
-        text = field in NW_TEXT_FIELDS
-        kind = "CHARINPUT" if text else "IPADDR"
-        reply = await self.click(n, NW_BUTTONS[field], f"network {field}")
-        dialogs = [
-            u for u in reply.screens if u.update == "DLG_OPEN" and u.data[1] == kind
-        ]
-        if not dialogs:
-            msg = f"network {field}: no {kind} input opened: {reply.dialogs()}"
-            raise ItmCommandError(msg)
-        d = dialogs[0]
-        if text and not d.data[4] <= len(value) <= d.data[5]:
-            await self.send(d.screen, d.data[0], EventType.CLICK2)
-            msg = f"network {field}: {value!r} must be {d.data[4]}-{d.data[5]} long"
-            raise ItmCommandError(msg)
-        data_type = DataType.STRING if text else DataType.IPADDRESS
-        if self._client.dry_run:
-            # Not even into the input: a dry run of a network change sends no value.
-            await self.send(d.screen, d.data[0], EventType.CLICK2)
-            self._client.planned.append(
-                f"network {field} = {value}: screen {n} part {d.data[0]} "
-                f"event {EventType.CLICK} type {data_type}"
-            )
-            return
-        reply = await self.send(
-            d.screen, d.data[0], EventType.CLICK, data_type, string=value
-        )
-        if reply.dialogs():
-            msg = f"network {field}: the iTM refused {value!r}: {reply.dialogs()}"
-            raise ItmCommandError(msg)
-
-    async def set_network(self, changes: dict[str, str]) -> None:
-        """Enter the network changes and press OK (in a dry run: plan, Cancel)."""
-        n = MenuScreen.NETWORK
-        await self._open_system_screen(MB_NETWORK, n)
-        try:
-            for field, value in changes.items():
-                await self._network_input(field, value)
-            await self.press_ok("save network settings", n, NW_OK, CLOSE_PART[n])
-        finally:
-            await self.close_screen(n)
 
     async def service_login(self, password: str) -> None:
         """Log in to service mode: tap the menu's four corners, enter the password."""
@@ -1673,514 +995,6 @@ class _Session(ChangeoverSessionMixin):  # pylint: disable=too-many-public-metho
             if result is not None:
                 values.update(result)
         return ServiceSettings(**values)
-
-    async def set_maintenance(self, point: str, *, on: bool) -> None:
-        """Move a point into (or out of) the maintenance list and press OK."""
-        s = MenuScreen.MAINTENANCE
-        await self._open_system_screen(MB_MAINTENANCE, s)
-        try:
-            source, button = (
-                (MT_AVAILABLE, MT_ADD) if on else (MT_IN_MAINTENANCE, MT_REMOVE)
-            )
-            target = MT_IN_MAINTENANCE if on else MT_AVAILABLE
-            if row_index(self.state, s, target, 1, point) is not None:
-                return
-            await self._select_listed(s, source, 1, point, "maintenance")
-            await self.click(s, button, "maintenance")
-            verb = "into" if on else "out of"
-            await self.press_ok(
-                f"put {point} {verb} maintenance", s, MT_OK, CLOSE_PART[s]
-            )
-        finally:
-            await self.close_screen(s)
-
-    async def set_point_attributes(
-        self, point: str, *, name: str | None, info: str | None
-    ) -> None:
-        """Change a management point's name and/or description, then OK."""
-        s, a = MenuScreen.POINTS, MenuScreen.POINT_SETTINGS
-        await self._open_system_screen(MB_POINTS, s)
-        try:
-            await self._select_listed(s, PT_LIST, 1, point, "point")
-            await self.click(s, PT_CHANGE, "point")
-            if a not in self.state.screens:
-                msg = f"{point}: the point settings did not open"
-                raise ItmCommandError(msg)
-            if name is not None:
-                await self.answer_text(a, PA_NAME_BUTTON, name, f"{point} name")
-            if info is not None:
-                await self.answer_text(a, PA_INFO_BUTTON, info, f"{point} description")
-            await self.press_ok(f"save point {point}", a, PA_OK, CLOSE_PART[a])
-        finally:
-            await self.close_screen(a)
-            await self.close_screen(s)
-
-    async def set_zone_attributes(
-        self,
-        zone: str,
-        *,
-        name: str | None,
-        info: str | None,
-        start_interval: int | None,
-        stop_interval: int | None,
-    ) -> None:
-        """Change a zone's name, description and/or intervals, then OK."""
-        s, a = MenuScreen.ZONES, MenuScreen.ZONE_SETTINGS
-        await self._open_system_screen(MB_ZONES, s)
-        try:
-            await self._select_listed(s, ZN_LIST, 0, zone, "zone")
-            await self.click(s, ZN_SETTINGS, "zone")
-            if a not in self.state.screens:
-                msg = f"{zone}: the zone settings did not open"
-                raise ItmCommandError(msg)
-            if name is not None:
-                await self.answer_text(a, ZA_NAME_BUTTON, name, f"{zone} name")
-            if info is not None:
-                await self.answer_text(a, ZA_INFO_BUTTON, info, f"{zone} description")
-            for button, value, what in (
-                (ZA_START_BUTTON, start_interval, "start interval"),
-                (ZA_STOP_BUTTON, stop_interval, "stop interval"),
-            ):
-                if value is not None:
-                    await self.answer_number(button, value, f"{zone} {what}", screen=a)
-            async with zones_edit.zone_errors(self):
-                await self.press_ok(f"save zone {zone}", a, ZA_OK, CLOSE_PART[a])
-        finally:
-            await self.close_screen(a)
-            await self.close_screen(s)
-
-    async def _answer_password(
-        self, reply: Reply, password: str, what: str = "password"
-    ) -> None:
-        """Enter the password in the dialog(s) a reply opened (new, then repeat).
-
-        A dry run never types it: it cancels the input and plans ``***``.
-        """
-        for _ in range(2):
-            dialogs = [
-                u
-                for u in reply.screens
-                if u.update == "DLG_OPEN" and u.data[1] == "PASSWORD"
-            ]
-            if not dialogs:
-                break
-            d = dialogs[0]
-            low, high = d.data[3], d.data[4]
-            if not low <= len(password) <= high:
-                await self.send(d.screen, d.data[0], EventType.CLICK2, DataType.INT, 0)
-                msg = f"the password must be {low}-{high} characters"
-                raise ItmCommandError(msg)
-            if self._client.dry_run:
-                await self.send(d.screen, d.data[0], EventType.CLICK2, DataType.INT, 0)
-                self._client.planned.append(
-                    f"{what} = ***: screen {d.screen} input {d.data[0]}"
-                )
-                return
-            reply = await self.send(
-                d.screen, d.data[0], EventType.CLICK, DataType.STRING, string=password
-            )
-        errors = [d for d in reply.dialogs() if d[1] in {"ERROR", "INFO"}]
-        if errors:
-            msg = f"the iTM refused the password: {errors}"
-            raise ItmCommandError(msg)
-
-    async def _pick_user_zones(self, zones: tuple[str, ...]) -> None:
-        """Select the zones a web user manages in 1202 and press its OK."""
-        z = MenuScreen.USER_ZONES
-        await self.click(MenuScreen.USER_SETUP, US_ZONES_BUTTON, "user zones")
-        if z not in self.state.screens:
-            msg = "the user's zone list did not open"
-            raise ItmCommandError(msg)
-        rows = []
-        for zone in zones:
-            row = row_index(self.state, z, UZ_LIST, 0, zone)
-            if row is None:
-                await self.close_screen(z)
-                msg = f"zone {zone!r} not offered for web users"
-                raise ItmCommandError(msg)
-            rows.append(row)
-        await self.send(
-            z, UZ_LIST, EventType.CLICK, DataType.INTARRAY, len(rows), array=tuple(rows)
-        )
-        reply = await self.send(z, UZ_OK)
-        await self._answer_confirm(z, reply)
-        self.state.screens.pop(z, None)
-
-    async def save_web_user(
-        self,
-        name: str,
-        *,
-        new: bool,
-        password: str | None,
-        admin: bool | None,
-        zones: tuple[str, ...] | None = None,
-    ) -> None:
-        """Add a web user, or change one: name, password, type and zones, then OK."""
-        s, u = MenuScreen.WEB_USERS, MenuScreen.USER_SETUP
-        await self._open_system_screen(MB_WEB_USERS, s)
-        try:
-            listed = row_index(self.state, s, WU_LIST, 0, name) is not None
-            if new and listed:
-                msg = f"web user {name!r} exists already"
-                raise ItmCommandError(msg)
-            if new:
-                await self.click(s, WU_ADD, "add web user")
-            else:
-                await self._select_listed(s, WU_LIST, 0, name, "web user")
-                await self.click(s, WU_CHANGE, "change web user")
-            if u not in self.state.screens:
-                msg = f"{name}: the user setup did not open"
-                raise ItmCommandError(msg)
-            if new:
-                await self.answer_text(u, US_NAME_BUTTON, name, "user name")
-            if password is not None:
-                reply = await self.send(u, US_PASSWORD_BUTTON)
-                await self._answer_password(
-                    reply, password, f"web user {name} password"
-                )
-            if admin is not None:
-                await self.send(u, US_ADMIN if admin else US_USER)
-            if zones is not None:
-                await self._pick_user_zones(zones)
-            verb = "add" if new else "change"
-            await self.press_ok(f"{verb} web user {name}", u, US_OK, CLOSE_PART[u])
-        finally:
-            await self.close_screen(u)
-            await self.close_screen(s)
-
-    async def delete_web_user(self, name: str) -> None:
-        """Select a web user, press Delete and confirm."""
-        s = MenuScreen.WEB_USERS
-        await self._open_system_screen(MB_WEB_USERS, s)
-        try:
-            await self._select_listed(s, WU_LIST, 0, name, "web user")
-            if self.state.get(s, WU_DELETE, "ENABLED") == 0:
-                msg = f"the iTM does not allow deleting {name!r}"
-                raise ItmCommandError(msg)
-            reply = await self.write(f"delete web user {name}", s, WU_DELETE)
-            if reply is not None:
-                await self._answer_confirm(s, reply)
-        finally:
-            await self.close_screen(s)
-
-    async def read_language(self) -> str | None:
-        """Open the language screen from the region screen and read the language."""
-        r, g = MenuScreen.REGION, MenuScreen.LANGUAGE
-        await self._open_system_screen(MB_REGION, r)
-        try:
-            await self.send(r, RG_LANGUAGE_BUTTON)
-            return language_from_screen(self.state)
-        finally:
-            await self.close_screen(g)
-            await self.close_screen(r)
-
-    async def set_language(self, code: str) -> None:
-        """Pick a display language: language screen OK, then region screen OK."""
-        r, g = MenuScreen.REGION, MenuScreen.LANGUAGE
-        await self._open_system_screen(MB_REGION, r)
-        try:
-            await self.send(r, RG_LANGUAGE_BUTTON)
-            if g not in self.state.screens:
-                msg = "the language screen did not open"
-                raise ItmCommandError(msg)
-            await self.send(g, LANGUAGE_RADIOS[code])
-            await self.press_ok(f"pick language {code}", g, LG_OK, CLOSE_PART[g])
-            await self.press_ok(f"save language {code}", r, RG_OK, CLOSE_PART[r])
-        finally:
-            await self.close_screen(g)
-            await self.close_screen(r)
-
-    async def _pick_dst_rule(self, parts: tuple[int, ...], rule: DstRule) -> None:
-        """Pick a summer time rule's month, week, weekday and hour."""
-        t = MenuScreen.TIME
-        month, week, weekday, hour_part = parts
-        hours = [_hour(o) for o in self.state.get(t, hour_part, "COMBO_STRS") or []]
-        picks = (
-            (month, rule.month - 1),
-            (week, rule.week - 1),
-            (weekday, rule.weekday),
-            (hour_part, hours.index(rule.hour) if rule.hour in hours else None),
-        )
-        for part, index in picks:
-            if self.state.get(t, part, "ENABLED") == 0:
-                msg = "summer time: the rule is disabled on the iTM"
-                raise ItmCommandError(msg)
-            await self._pick_option(t, part, index, f"summer time {rule}")
-
-    async def set_region(self, changes: dict[str, Any]) -> None:
-        """Pick date format, 12/24 hours, °C/°F and decimal separator, then OK."""
-        r = MenuScreen.REGION
-        await self._open_system_screen(MB_REGION, r)
-        try:
-            if (fmt := changes.get("date_format")) is not None:
-                await self._pick_option(
-                    r, R_DATE_FORMAT, DATE_FORMATS.index(fmt), f"date format {fmt}"
-                )
-            for key, (first, second), values in (
-                ("time_24h", (R_24H, R_12H), (True, False)),
-                ("temperature_unit", (R_CELSIUS, R_FAHRENHEIT), ("°C", "°F")),
-                ("decimal_separator", (R_DECIMAL_POINT, R_DECIMAL_COMMA), (".", ",")),
-            ):
-                if (value := changes.get(key)) is not None:
-                    await self.send(r, first if value == values[0] else second)
-            await self.press_ok("save region settings", r, RG_OK, CLOSE_PART[r])
-        finally:
-            await self.close_screen(r)
-
-    async def set_dst(self, *, enabled: bool, start: DstRule, end: DstRule) -> None:
-        """Switch summer time on (with its rule) or off, then OK."""
-        t = MenuScreen.TIME
-        await self._open_system_screen(MB_TIME, t)
-        try:
-            await self.send(t, TM_DST_ON if enabled else TM_DST_OFF)
-            if enabled:
-                await self._pick_dst_rule(TM_DST_START, start)
-                await self._pick_dst_rule(TM_DST_END, end)
-            await self.press_ok("save summer time", t, TM_OK, CLOSE_PART[t])
-        finally:
-            await self.close_screen(t)
-
-    async def set_clock(self, when: datetime) -> None:
-        """Enter a date and time in the clock's input, then OK."""
-        t = MenuScreen.TIME
-        await self._open_system_screen(MB_TIME, t)
-        try:
-            reply = await self.send(t, TM_CHANGE)
-            dialogs = [
-                u
-                for u in reply.screens
-                if u.update == "DLG_OPEN" and u.data[1] == "TIME"
-            ]
-            if not dialogs:
-                msg = f"the clock input did not open: {reply.dialogs()}"
-                raise ItmCommandError(msg)
-            d = dialogs[0]
-            value = (
-                when.year,
-                when.month - 1,
-                when.day,
-                when.hour,
-                when.minute,
-                when.second,
-            )
-            low, high = tuple(d.data[10:16]), tuple(d.data[16:22])
-            if not low <= value <= high:
-                await self.send(d.screen, d.data[0], EventType.CLICK2)
-                msg = f"the clock: {when} outside the iTM's range"
-                raise ItmCommandError(msg)
-            await self.send(
-                d.screen, d.data[0], EventType.CLICK, DataType.TIME, 6, array=value
-            )
-            await self.press_ok("save the clock", t, TM_OK, CLOSE_PART[t])
-        finally:
-            await self.close_screen(t)
-
-    # -- schedules ----------------------------------------------------------------
-    async def _select_program(self, name: str) -> None:
-        await self.open_menu_screen(MB_SCHEDULE, MenuScreen.SCHEDULE)
-        names = [p.name for p in schedules_from_screen(self.state)]
-        if name not in names:
-            msg = f"schedule program {name!r} not found; available: {names}"
-            raise ItmCommandError(msg)
-        await self.send(
-            MenuScreen.SCHEDULE,
-            SCH_PANEL,
-            EventType.CLICK,
-            DataType.INT,
-            names.index(name),
-        )
-
-    async def read_schedule_day(self, name: str, *, days_ahead: int = 0) -> ScheduleDay:
-        """Read what a program does on a day, from its day overview."""
-        await self._select_program(name)
-        try:
-            await self.send(MenuScreen.SCHEDULE, SCH_DAY_BUTTON)
-            if MenuScreen.SCHEDULE_DAY not in self.state.screens:
-                msg = "the day overview did not open"
-                raise ItmCommandError(msg)
-            for _ in range(days_ahead):
-                await self.send(MenuScreen.SCHEDULE_DAY, SD_NEXT)
-            return schedule_day_from_screen(self.state)
-        finally:
-            await self.close_screen(MenuScreen.SCHEDULE_DAY)
-            await self.close_screen(MenuScreen.SCHEDULE)
-
-    async def _read_day_events(
-        self, radio: int, edit_button: int, *, details: bool
-    ) -> tuple[ScheduleEvent, ...]:
-        """Open a weekday's or special day's event list and read it (and each event)."""
-        await self.send(MenuScreen.SCHEDULE_EDITOR, radio)
-        await self.send(MenuScreen.SCHEDULE_EDITOR, edit_button)
-        if MenuScreen.SCHEDULE_EVENTS not in self.state.screens:
-            msg = "the event list did not open"
-            raise ItmCommandError(msg)
-        try:
-            events = day_events_from_screen(self.state)
-            if not details:
-                return tuple(events)
-            detailed = []
-            for event in events:
-                # The list has separator rows too.
-                await self.send(
-                    MenuScreen.SCHEDULE_EVENTS,
-                    EV_LIST,
-                    EventType.CLICK,
-                    DataType.INTARRAY,
-                    1,
-                    array=(event.row,),
-                )
-                # The iTM disables the buttons for a row that is no event; clicking
-                # a disabled button hangs its web server, so never do that.
-                if self.state.get(MenuScreen.SCHEDULE_EVENTS, EV_EDIT, "ENABLED") == 0:
-                    msg = f"the iTM does not open the event at row {event.row}"
-                    raise ItmCommandError(msg)
-                await self.send(MenuScreen.SCHEDULE_EVENTS, EV_EDIT)
-                if MenuScreen.SCHEDULE_EVENT in self.state.screens:
-                    detailed.append(event_from_screen(self.state, event))
-                    await self.close_screen(MenuScreen.SCHEDULE_EVENT)
-                else:
-                    detailed.append(event)
-            return tuple(detailed)
-        finally:
-            await self.close_screen(MenuScreen.SCHEDULE_EVENT)
-            await self.close_screen(MenuScreen.SCHEDULE_EVENTS)
-
-    async def close_editor(self) -> None:
-        """Leave the schedule editor without saving: Cancel, then Yes."""
-        if MenuScreen.SCHEDULE_EDITOR not in self.state.screens:
-            return
-        reply = await self.send(
-            MenuScreen.SCHEDULE_EDITOR, CLOSE_PART[MenuScreen.SCHEDULE_EDITOR]
-        )
-        for dialog in reply.dialogs():
-            if dialog[1] == "CONFIRM":
-                await self.send(MenuScreen.SCHEDULE_EDITOR, dialog[0])
-        if MenuScreen.SCHEDULE_EDITOR in self.state.screens:
-            msg = "the schedule editor did not close"
-            raise ItmCommandError(msg)
-
-    async def set_schedule_enabled(self, name: str, *, enabled: bool) -> None:
-        """Open a program's editor, pick enabled or disabled, OK (and confirm)."""
-        await self._select_program(name)
-        try:
-            await self.send(MenuScreen.SCHEDULE, SCH_EDIT_BUTTON)
-            e = MenuScreen.SCHEDULE_EDITOR
-            if e not in self.state.screens:
-                msg = "the schedule editor did not open"
-                raise ItmCommandError(msg)
-            program = program_from_editor(self.state)
-            if program.enabled == enabled:
-                return
-            await self.send(e, SE_ENABLED if enabled else SE_DISABLED)
-            verb = "enable" if enabled else "disable"
-            reply = await self.write(f"{verb} schedule {name}", e, SE_OK)
-            if reply is not None:
-                await self._answer_confirm(e, reply)
-                if e in self.state.screens:
-                    msg = f"{name}: the editor did not close after OK"
-                    raise ItmCommandError(msg)
-        finally:
-            await self.close_editor()
-            await self.close_screen(MenuScreen.SCHEDULE)
-
-    async def create_schedule(self, name: str) -> None:
-        """Press Add, rename the new program, OK (and confirm).
-
-        The iTM opens the editor on a new, disabled program without events (with a
-        default name); nothing exists until OK.
-        """
-        await self.open_menu_screen(MB_SCHEDULE, MenuScreen.SCHEDULE)
-        e = MenuScreen.SCHEDULE_EDITOR
-        try:
-            names = [p.name for p in schedules_from_screen(self.state)]
-            if name in names:
-                msg = f"schedule program {name!r} exists already"
-                raise ItmCommandError(msg)
-            if self.state.get(MenuScreen.SCHEDULE, SCH_ADD_BUTTON, "ENABLED") == 0:
-                msg = "the iTM does not allow another schedule program"
-                raise ItmCommandError(msg)
-            await self.send(MenuScreen.SCHEDULE, SCH_ADD_BUTTON)
-            if e not in self.state.screens:
-                msg = "the schedule editor did not open"
-                raise ItmCommandError(msg)
-            reply = await self.send(e, SE_RENAME)
-            dialogs = [d for d in reply.dialogs() if d[1] == "CHARINPUT"]
-            if not dialogs:
-                msg = f"Change did not ask for a name: {reply.dialogs()}"
-                raise ItmCommandError(msg)
-            reply = await self.send(
-                e, dialogs[0][0], EventType.CLICK, DataType.STRING, string=name
-            )
-            if reply.dialogs():  # a refused name; the read-back checks the rest
-                msg = f"the iTM did not take the name {name!r}: {reply.dialogs()}"
-                raise ItmCommandError(msg)
-            saved = await self.write(f"create schedule {name}", e, SE_OK)
-            if saved is not None:
-                await self._answer_confirm(e, saved)
-                if e in self.state.screens:
-                    msg = f"{name}: the editor did not close after OK"
-                    raise ItmCommandError(msg)
-        finally:
-            await self.close_editor()
-            await self.close_screen(MenuScreen.SCHEDULE)
-
-    async def delete_schedule(self, name: str) -> None:
-        """Select a program, press Delete and confirm."""
-        await self._select_program(name)
-        try:
-            # A disabled button hangs the iTM's web server when clicked.
-            if self.state.get(MenuScreen.SCHEDULE, SCH_DELETE_BUTTON, "ENABLED") == 0:
-                msg = f"the iTM does not allow deleting {name!r}"
-                raise ItmCommandError(msg)
-            reply = await self.write(
-                f"delete schedule {name}", MenuScreen.SCHEDULE, SCH_DELETE_BUTTON
-            )
-            if reply is not None:
-                await self._answer_confirm(MenuScreen.SCHEDULE, reply)
-        finally:
-            await self.close_screen(MenuScreen.SCHEDULE)
-
-    async def read_schedule(
-        self, name: str, *, events: bool = True, details: bool = False
-    ) -> ScheduleProgram:
-        """Read a program through its editor: properties, patterns and calendar.
-
-        Everything is read and the editor left with Cancel; nothing is saved.
-        With events, every weekday's and special day's event list is opened; with
-        details, each event's own settings screen too (two requests per event).
-        """
-        await self._select_program(name)
-        try:
-            await self.send(MenuScreen.SCHEDULE, SCH_EDIT_BUTTON)
-            if MenuScreen.SCHEDULE_EDITOR not in self.state.screens:
-                msg = "the schedule editor did not open"
-                raise ItmCommandError(msg)
-            tab = MenuScreen.SCHEDULE_EDITOR, SE_TAB, EventType.TAB_SELECT, DataType.INT
-            await self.send(*tab, SE_TAB_WEEKLY)
-            program = program_from_editor(self.state)
-            weekly: dict[int, tuple[ScheduleEvent, ...]] = {}
-            for day, slots in program.weekly_slots.items():
-                if slots and events:
-                    weekly[day] = await self._read_day_events(
-                        SE_DAY_RADIOS[day], SE_EDIT_DAY, details=details
-                    )
-            await self.send(*tab, SE_TAB_SPECIAL)
-            program = program_from_editor(self.state)
-            special: dict[str, tuple[ScheduleEvent, ...]] = {}
-            for i, (label, slots) in enumerate(program.special_slots.items()):
-                if slots and events:
-                    special[label] = await self._read_day_events(
-                        SE_SPECIAL_RADIOS[i], SE_EDIT_SPECIAL, details=details
-                    )
-            await self.send(*tab, SE_TAB_CALENDAR)
-            program = program_from_editor(self.state)
-            names = special_day_names(self.state)
-            return replace(program, weekly=weekly, special=special, special_names=names)
-        finally:
-            await self.close_screen(MenuScreen.SCHEDULE_EVENT)
-            await self.close_screen(MenuScreen.SCHEDULE_EVENTS)
-            await self.close_editor()
-            await self.close_screen(MenuScreen.SCHEDULE)
 
     async def read_history(
         self,
@@ -2309,21 +1123,3 @@ def _zone_name(step: str, icons: list[tuple[str, int, int]]) -> str:
         if len(found) == 1:
             return found[0]
     raise ZoneNotFound(step, names)
-
-
-def _hour(option: str) -> int | None:
-    m = re.match(r"\s*(\d+)", str(option))
-    return int(m.group(1)) if m else None
-
-
-def _lock_radio(key: str, lock: RemoteLock, radios: tuple[int, ...]) -> int:
-    """Return the radio part for a lock value, refusing one the dialog lacks."""
-    order = (
-        (RemoteLock.ALLOWED, RemoteLock.STOP_ONLY, RemoteLock.FORBIDDEN)
-        if len(radios) == 3
-        else (RemoteLock.ALLOWED, RemoteLock.FORBIDDEN)
-    )
-    if lock not in order:
-        msg = f"{key}: {lock} is not offered"
-        raise ItmCommandError(msg)
-    return radios[order.index(lock)]
