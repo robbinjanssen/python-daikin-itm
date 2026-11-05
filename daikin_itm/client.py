@@ -29,7 +29,6 @@ from typing import TYPE_CHECKING, Any, Protocol, Self, TypeVar
 import aiohttp
 
 from . import (
-    emergency,
     energy_edit,
     energy_navigator,
     schedule_edit,
@@ -38,6 +37,7 @@ from . import (
 )
 from .dealer_functions import DealerFunctionsMixin
 from .demand import DemandMixin
+from .emergency import EmergencyMixin
 from .exceptions import (
     ExperimentalError,
     ItmCommandError,
@@ -2806,6 +2806,7 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
     DealerFunctionsMixin,
     ServiceEditMixin,
     ExportsMixin,
+    EmergencyMixin,
     DemandMixin,
     LayoutMixin,
     PointRegistryMixin,
@@ -5511,274 +5512,6 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
             msg = f"the iTM's clock reads {info.clock}, expected about {expected}"
             raise ItmCommandError(msg)
         return info
-
-    # -- emergency stop programs ------------------------------------------------------
-    async def _emergency_program(self, name: str) -> EmergencyStopProgram | None:
-        """Return a program as read in a fresh session (armed as its radios show)."""
-        programs = await self._in_session(emergency.read_programs)
-        return next((p for p in programs if p.name == name.strip()), None)
-
-    async def _emergency_names(self) -> list[str]:
-        return [p.name.strip() for p in await self.fetch_emergency_stop()]
-
-    async def fetch_emergency_stop_settings(
-        self, name: str
-    ) -> emergency.EmergencyStopSettings:
-        """Read an emergency stop program's points, release mode and stop.
-
-        The iTM only shows a disarmed program's settings; an armed (or the
-        built-in) program's raise ItmCommandError.
-
-        Args:
-        ----
-            name: The program.
-
-        Returns:
-        -------
-            The settings as the iTM shows them.
-
-        """
-        return await self._in_session(
-            lambda s: emergency.read_program_settings(s, name)
-        )
-
-    async def set_emergency_stop_enabled(
-        self, name: str, *, enabled: bool, allow_safety_change: bool = False
-    ) -> EmergencyStopProgram | None:
-        """Arm or disarm an emergency stop program.
-
-        Disarming switches a safety function off; arming may start a stop at once
-        when the program's input is already in alarm. Refused unless
-        ``allow_safety_change`` (a dry run is always allowed).
-
-        Args:
-        ----
-            name: The program.
-            enabled: Arm (True) or disarm.
-            allow_safety_change: Really change it.
-
-        Returns:
-        -------
-            The program as read back in a fresh session, or None in a dry run.
-
-        Raises:
-        ------
-            ItmCommandError: Not allowed, or the iTM did not take the change.
-
-        """
-        self._experimental("enable or disable an emergency stop program")
-        if not allow_safety_change and not self.dry_run:
-            msg = (
-                "arming or disarming an emergency stop program changes a safety "
-                "function: pass allow_safety_change=True"
-            )
-            raise ItmCommandError(msg)
-        await self._system_write(
-            lambda s: _ignore(emergency.set_program_enabled(s, name, enabled=enabled))
-        )
-        if self.dry_run:
-            return None
-        program = await self._emergency_program(name)
-        if program is None or program.enabled != enabled:
-            msg = f"{name}: the iTM did not {'enable' if enabled else 'disable'} it"
-            raise ItmCommandError(msg)
-        return program
-
-    async def create_emergency_stop_program(
-        self, name: str
-    ) -> EmergencyStopProgram | None:
-        """Add an emergency stop program (needs the emergency stop dealer option).
-
-        Args:
-        ----
-            name: Its name (1-20 characters on the iTM this was built on).
-
-        Returns:
-        -------
-            The program as the list shows it, or None in a dry run.
-
-        """
-        self._experimental("create an emergency stop program")
-        await self._system_write(lambda s: _ignore(emergency.create_program(s, name)))
-        if self.dry_run:
-            return None
-        program = await self._emergency_program(name)
-        if program is None:
-            msg = f"{name}: the iTM did not add the emergency stop program"
-            raise ItmCommandError(msg)
-        return program
-
-    async def rename_emergency_stop_program(
-        self, name: str, new_name: str
-    ) -> EmergencyStopProgram | None:
-        """Rename an emergency stop program (not the built-in one).
-
-        Args:
-        ----
-            name: The program.
-            new_name: Its new name.
-
-        Returns:
-        -------
-            The program as the list shows it, or None in a dry run.
-
-        """
-        self._experimental("rename an emergency stop program")
-        await self._system_write(
-            lambda s: _ignore(emergency.rename_program(s, name, new_name))
-        )
-        if self.dry_run:
-            return None
-        program = await self._emergency_program(new_name)
-        if program is None or name.strip() in await self._emergency_names():
-            msg = f"{name}: the iTM did not rename it to {new_name!r}"
-            raise ItmCommandError(msg)
-        return program
-
-    async def copy_emergency_stop_program(
-        self, name: str, new_name: str
-    ) -> EmergencyStopProgram | None:
-        """Copy an emergency stop program under a new name (not the built-in one).
-
-        Args:
-        ----
-            name: The program to copy.
-            new_name: The copy's name.
-
-        Returns:
-        -------
-            The copy as the list shows it, or None in a dry run.
-
-        """
-        self._experimental("copy an emergency stop program")
-        await self._system_write(
-            lambda s: _ignore(emergency.copy_program(s, name, new_name))
-        )
-        if self.dry_run:
-            return None
-        program = await self._emergency_program(new_name)
-        if program is None:
-            msg = f"{name}: the iTM did not make the copy {new_name!r}"
-            raise ItmCommandError(msg)
-        return program
-
-    async def delete_emergency_stop_program(self, name: str) -> None:
-        """Delete a disarmed emergency stop program (not the built-in one).
-
-        Args:
-        ----
-            name: The program.
-
-        """
-        self._experimental("delete an emergency stop program")
-        await self._system_write(lambda s: _ignore(emergency.delete_program(s, name)))
-        if not self.dry_run and name.strip() in await self._emergency_names():
-            msg = f"{name}: the iTM did not delete the emergency stop program"
-            raise ItmCommandError(msg)
-
-    async def set_emergency_stop_settings(  # pylint: disable=too-many-arguments
-        self,
-        name: str,
-        *,
-        inputs: Iterable[str] | None = None,
-        outputs: Iterable[str] | None = None,
-        release_mode: str | None = None,
-        stop: str | None = None,
-    ) -> emergency.EmergencyStopSettings | None:
-        """Change a disarmed program's input/output points, release mode or stop.
-
-        Args:
-        ----
-            name: The program (disarmed: the iTM only edits those).
-            inputs: The input points, exactly (None: unchanged).
-            outputs: The output points, exactly (None: unchanged).
-            release_mode: The release mode, an option as the iTM shows it.
-            stop: What the stop does, an option as the iTM shows it.
-
-        Returns:
-        -------
-            The settings as read back in a fresh session, or None in a dry run.
-
-        """
-        self._experimental("change an emergency stop program's settings")
-        ins = None if inputs is None else tuple(inputs)
-        outs = None if outputs is None else tuple(outputs)
-        await self._system_write(
-            lambda s: _ignore(
-                emergency.set_program_settings(
-                    s,
-                    name,
-                    inputs=ins,
-                    outputs=outs,
-                    release_mode=release_mode,
-                    stop=stop,
-                )
-            )
-        )
-        if self.dry_run:
-            return None
-        got = await self.fetch_emergency_stop_settings(name)
-        wrong = [
-            what
-            for what, want, have in (
-                ("inputs", ins, got.inputs),
-                ("outputs", outs, got.outputs),
-            )
-            if want is not None and set(want) != set(have)
-        ] + [
-            what
-            for what, want, have in (
-                ("release mode", release_mode, got.release_mode),
-                ("stop", stop, got.stop),
-            )
-            if want is not None and want.strip().casefold() != (have or "").casefold()
-        ]
-        if wrong:
-            msg = f"{name}: the iTM did not take the {', '.join(wrong)}"
-            raise ItmCommandError(msg)
-        return got
-
-    async def fetch_active_emergency_stops(self) -> tuple[str, ...]:
-        """Read the programs whose emergency stop is active (none: empty).
-
-        Returns
-        -------
-            Their names, from the release screen.
-
-        """
-        return await self._in_session(emergency.read_active_stops)
-
-    async def release_emergency_stop(
-        self, name: str, *, allow_safety_change: bool = False
-    ) -> None:
-        """Release an active emergency stop (this library never starts one).
-
-        Releasing restarts equipment a safety input (e.g. a fire alarm) stopped, so
-        it is refused unless ``allow_safety_change`` (a dry run is always allowed).
-
-        Args:
-        ----
-            name: The program whose stop is active.
-            allow_safety_change: Really release it.
-
-        Raises:
-        ------
-            ItmCommandError: Not allowed, or the iTM did not release the stop.
-
-        """
-        self._experimental("release an emergency stop")
-        if not allow_safety_change and not self.dry_run:
-            msg = (
-                "releasing an emergency stop restarts equipment a safety input "
-                "stopped: pass allow_safety_change=True"
-            )
-            raise ItmCommandError(msg)
-        await self._system_write(lambda s: _ignore(emergency.release(s, name)))
-        if self.dry_run:
-            return
-        if name.strip() in await self.fetch_active_emergency_stops():
-            msg = f"{name}: the iTM did not release the emergency stop"
-            raise ItmCommandError(msg)
 
     # -- schedule contents ----------------------------------------------------------
     async def _schedule_write(
