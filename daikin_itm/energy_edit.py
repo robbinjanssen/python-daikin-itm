@@ -41,7 +41,7 @@ import html
 import math
 import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from . import energy_navigator as en
 from .exceptions import ItmCommandError
@@ -50,12 +50,24 @@ from .protocol import DataType, EventType
 from .system import MB_ENERGY_EQUIPMENT
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Awaitable, Callable, Iterable, Mapping
     from datetime import date
 
     from .client import _Session
+    from .energy_navigator import (
+        ActualYear,
+        ConversionType,
+        EnergyInstallerSettings,
+        EnergyNavigator,
+        PlannedYear,
+        RoomTemperaturePoint,
+        RuleDay,
+        RuleRange,
+    )
     from .protocol import Reply
     from .state import UIState
+
+_T = TypeVar("_T")
 
 # Planned consumption (3202): OK, and per fiscal year tab the ratio's Change and
 # the month list's Change (for the selected month).
@@ -1036,3 +1048,432 @@ async def read_installer(s: _Session, password: str) -> en.EnergyInstallerSettin
         msg = "the energy navigator's installer settings did not open"
         raise ItmCommandError(msg)
     return settings
+
+
+async def _ignore(call: Awaitable[Any]) -> None:
+    await call
+
+
+class EnergyMixin:
+    """ItmClient's energy navigator methods."""
+
+    if TYPE_CHECKING:
+        # pylint: disable=unused-argument
+        dry_run: bool
+
+        async def _in_session(
+            self, call: Callable[[_Session], Awaitable[_T]]
+        ) -> _T: ...
+
+        async def _system_write(
+            self, call: Callable[[_Session], Awaitable[None]]
+        ) -> None: ...
+
+        def _writable(self) -> None: ...
+
+        def _experimental(self, what: str) -> None: ...
+
+    async def fetch_energy_navigator(
+        self, only: Iterable[str] | None = None, *, service_password: str | None = None
+    ) -> EnergyNavigator:
+        """Read the energy navigator's screens, in one session. Read only.
+
+        The budget overview (every tab), the planned and the actual consumption of
+        the energy type shown, the management rule names and the sampling targets.
+        Every screen is left with Close or Cancel; nothing is saved.
+
+        Args:
+        ----
+            only: The EnergyNavigator fields to read; the others stay None. None
+                reads the ones above; energy_types, energy_groups, details and
+                rule_editor, rule_settings and installer (tested against the
+                simulated iTM only) when named.
+            service_password: The service password, for installer (behind the
+                service login); sent once, never stored or logged.
+
+        Returns:
+        -------
+            What was read; None for each part whose menu screen did not open.
+
+        """
+        wanted = en.wanted_parts(only)
+        if "installer" in wanted and service_password is None:
+            msg = "the installer's settings need service_password"
+            raise ItmCommandError(msg)
+        return await self._in_session(
+            lambda s: en.read_energy_navigator(s, wanted, service_password)
+        )
+
+    async def set_planned_consumption(  # pylint: disable=too-many-arguments
+        self,
+        *,
+        year: str | None = None,
+        energy_type: str | None = None,
+        ratio: float | None = None,
+        per_month: bool | None = None,
+        months: Mapping[str, float] | None = None,
+    ) -> PlannedYear | None:
+        """Change a fiscal year's planned consumption (3202) and OK.
+
+        Args:
+        ----
+            year: The fiscal year's tab, as shown; None for the first.
+            energy_type: The energy type; None for the one the screen shows first.
+            ratio: The ratio to the previous year (%).
+            per_month: Targets per month (True) or for the whole year (False).
+            months: Targets per month, by the month as listed.
+
+        Returns:
+        -------
+            The fiscal year as read back in a fresh session; None in a dry run.
+
+        """
+        self._experimental("set the energy navigator's planned consumption")
+        change = PlannedChange(year, energy_type, ratio, per_month, dict(months or {}))
+        await self._system_write(lambda s: _ignore(set_planned(s, change)))
+        if self.dry_run:
+            return None
+        return await self._in_session(lambda s: confirm_planned(s, change))
+
+    async def set_actual_consumption(
+        self,
+        *,
+        year: str | None = None,
+        energy_type: str | None = None,
+        co2_factor: float | None = None,
+        months: Mapping[str, float] | None = None,
+    ) -> ActualYear | None:
+        """Enter a fiscal year's actual consumption (3203) and OK.
+
+        Args:
+        ----
+            year: The fiscal year's tab, as shown; None for the first.
+            energy_type: The energy type; None for the one the screen shows first.
+            co2_factor: The CO2 factor.
+            months: Values per month, by the month as listed.
+
+        Returns:
+        -------
+            The fiscal year as read back in a fresh session; None in a dry run.
+
+        """
+        self._experimental("set the energy navigator's actual consumption")
+        change = ActualChange(year, energy_type, co2_factor, dict(months or {}))
+        await self._system_write(lambda s: _ignore(set_actual(s, change)))
+        if self.dry_run:
+            return None
+        return await self._in_session(lambda s: confirm_actual(s, change))
+
+    async def set_energy_sampling(
+        self,
+        *,
+        start: date | None = None,
+        end: date | None = None,
+        target: str | None = None,
+    ) -> tuple[str | None, str | None, str | None] | None:
+        """Change the equipment management's sampling period and target (3210).
+
+        Args:
+        ----
+            start: The first day sampled.
+            end: The last day sampled.
+            target: The sampling target, by its name in the target list (3218).
+
+        Returns:
+        -------
+            From, to and target as read back; None in a dry run.
+
+        """
+        self._experimental("set the energy navigator's sampling")
+        await self._system_write(
+            lambda s: _ignore(set_sampling(s, start=start, end=end, target=target))
+        )
+        if self.dry_run:
+            return None
+        return await self._in_session(
+            lambda s: confirm_sampling(s, start=start, end=end, target=target)
+        )
+
+    async def _energy_names(self, *, group: bool) -> tuple[str, ...]:
+        return await self._in_session(lambda s: read_names(s, group=group))
+
+    async def create_energy_type(self, name: str, *, group: bool = False) -> None:
+        """Create an energy type (3205), or with group=True an energy group (3207).
+
+        Args:
+        ----
+            name: The new name.
+            group: Work on the energy groups instead.
+
+        """
+        await self._system_write(lambda s: _ignore(create_entry(s, name, group=group)))
+        if not self.dry_run and name not in await self._energy_names(group=group):
+            msg = f"{name}: the iTM did not create it"
+            raise ItmCommandError(msg)
+
+    async def rename_energy_type(
+        self, name: str, new_name: str, *, group: bool = False
+    ) -> None:
+        """Rename an energy type, or with group=True an energy group.
+
+        Args:
+        ----
+            name: The current name.
+            new_name: The new name.
+            group: Work on the energy groups instead.
+
+        """
+        if group:
+            self._experimental("rename an energy group")
+        await self._system_write(
+            lambda s: _ignore(rename_entry(s, name, new_name, group=group))
+        )
+        if self.dry_run:
+            return
+        names = await self._energy_names(group=group)
+        if new_name not in names or name in names:
+            msg = f"{name}: the iTM did not rename it to {new_name}"
+            raise ItmCommandError(msg)
+
+    async def delete_energy_type(self, name: str, *, group: bool = False) -> None:
+        """Delete an energy type, or with group=True an energy group.
+
+        Args:
+        ----
+            name: The name.
+            group: Work on the energy groups instead.
+
+        """
+        await self._system_write(lambda s: _ignore(delete_entry(s, name, group=group)))
+        if not self.dry_run and name in await self._energy_names(group=group):
+            msg = f"{name}: the iTM did not delete it"
+            raise ItmCommandError(msg)
+
+    async def _rule_names(self) -> tuple[str, ...]:
+        return await self._in_session(en.read_rules) or ()
+
+    async def create_energy_rule(self, name: str) -> None:
+        """Create a management rule (3213), confirmed by the rule list."""
+        await self._system_write(lambda s: _ignore(create_rule(s, name)))
+        if not self.dry_run and name.strip() not in await self._rule_names():
+            msg = f"rule {name}: the iTM did not create it"
+            raise ItmCommandError(msg)
+
+    async def rename_energy_rule(self, name: str, new_name: str) -> None:
+        """Rename a management rule, confirmed by the rule list."""
+        self._experimental("rename an energy navigator rule")
+        await self._system_write(lambda s: _ignore(rename_rule(s, name, new_name)))
+        if self.dry_run:
+            return
+        names = await self._rule_names()
+        if new_name.strip() not in names or name.strip() in names:
+            msg = f"rule {name}: the iTM did not rename it to {new_name}"
+            raise ItmCommandError(msg)
+
+    async def delete_energy_rule(self, name: str) -> None:
+        """Delete a management rule, confirmed by the rule list."""
+        await self._system_write(lambda s: _ignore(delete_rule(s, name)))
+        if not self.dry_run and name.strip() in await self._rule_names():
+            msg = f"rule {name}: the iTM did not delete it"
+            raise ItmCommandError(msg)
+
+    async def copy_energy_rule(
+        self, name: str, targets: Iterable[str], *, calendar: bool = False
+    ) -> None:
+        """Copy a management rule (3215), or its calendar (3216), to other rules.
+
+        Args:
+        ----
+            name: The rule to copy.
+            targets: The rules to copy to, as listed.
+            calendar: Copy only the calendar.
+
+        Raises:
+        ------
+            ItmCommandError: A target's editor doesn't show the copy afterwards.
+
+        """
+        self._experimental("copy an energy navigator rule")
+        wanted = tuple(t.strip() for t in targets)
+        await self._system_write(
+            lambda s: _ignore(copy_rule(s, name, wanted, calendar=calendar))
+        )
+        if self.dry_run:
+            return
+        rules = {r.name: r for r in await self._in_session(en.read_rule_editor) or ()}
+        source = rules.get(name.strip())
+        for target in wanted:
+            got = rules.get(target)
+            same = (
+                source is not None
+                and got is not None
+                and (
+                    got.calendar == source.calendar
+                    if calendar
+                    else (got.weekdays, got.special_days)
+                    == (source.weekdays, source.special_days)
+                )
+            )
+            if not same:
+                msg = f"rule {target}: the iTM does not show the copy of {name}"
+                raise ItmCommandError(msg)
+
+    async def set_energy_rule_day(
+        self, rule: str, day: str, ranges: Iterable[RuleRange]
+    ) -> RuleDay | None:
+        """Make a management rule's day hold exactly these time ranges (3217).
+
+        Args:
+        ----
+            rule: The rule, as listed.
+            day: A weekday ("sunday" .. "saturday") or a special day's name.
+            ranges: The time ranges, with the setpoints they manage.
+
+        Returns:
+        -------
+            The day as read back in a fresh session; None in a dry run.
+
+        """
+        wanted = tuple(ranges)
+        if any(r.cool is not None or r.heat is not None for r in wanted):
+            self._experimental("set an energy navigator rule's setpoints")
+        await self._system_write(lambda s: _ignore(set_rule_day(s, rule, day, wanted)))
+        if self.dry_run:
+            return None
+        shown = await self._in_session(lambda s: en.read_rule_day(s, rule, day))
+        if not same_ranges(shown.ranges, wanted):
+            msg = f"rule {rule} {day}: the iTM shows {shown.ranges}"
+            raise ItmCommandError(msg)
+        return shown
+
+    async def _installer_write(
+        self,
+        password: str,
+        call: Callable[[_Session], Awaitable[bool]],
+        *,
+        allow_service_change: bool,
+    ) -> EnergyInstallerSettings | None:
+        self._writable()
+        check_service_change(
+            dry_run=self.dry_run, allow_service_change=allow_service_change
+        )
+        await self._in_session(lambda s: _ignore(call(s)))
+        if self.dry_run:
+            return None
+        return await self._in_session(lambda s: read_installer(s, password))
+
+    async def set_energy_room_temperature(
+        self,
+        password: str,
+        point: str,
+        *,
+        analog_point: str | None = None,
+        allow_service_change: bool = False,
+    ) -> RoomTemperaturePoint | None:
+        """Set a point's room temperature source for the energy navigator (3221).
+
+        Behind the service login; refused unless allow_service_change (or a dry
+        run). The password is sent once, never stored or logged.
+
+        Args:
+        ----
+            password: The service password.
+            point: The point, as listed.
+            analog_point: An analog input to take it from; None for the unit's
+                return air temperature.
+            allow_service_change: Really change the installer setting.
+
+        Returns:
+        -------
+            The point as read back; None in a dry run.
+
+        """
+        self._experimental("set the energy navigator's room temperature point")
+        settings = await self._installer_write(
+            password,
+            lambda s: set_room_temperature(s, password, point, analog_point),
+            allow_service_change=allow_service_change,
+        )
+        if settings is None:
+            return None
+        found = [p for p in settings.room_temperature or () if p.name == point.strip()]
+        analog = None if analog_point is None else analog_point.strip()
+        if (
+            not found
+            or found[0].own_sensor is not (analog is None)
+            or found[0].analog_point != analog
+        ):
+            msg = f"{point}: the iTM shows {found}"
+            raise ItmCommandError(msg)
+        return found[0]
+
+    async def set_energy_collection_start(
+        self, password: str, month: str, *, allow_service_change: bool = False
+    ) -> str | None:
+        """Set the month the energy navigator starts collecting data (3223).
+
+        Behind the service login; refused unless allow_service_change (or a dry
+        run).
+
+        Args:
+        ----
+            password: The service password.
+            month: The month, as the iTM lists it.
+            allow_service_change: Really change the installer setting.
+
+        Returns:
+        -------
+            The month as read back; None in a dry run.
+
+        """
+        self._experimental("set the energy navigator's collection start")
+        settings = await self._installer_write(
+            password,
+            lambda s: set_collection_start(s, password, month),
+            allow_service_change=allow_service_change,
+        )
+        if settings is None:
+            return None
+        if settings.collection_start != month.strip():
+            msg = f"collection start: the iTM shows {settings.collection_start}"
+            raise ItmCommandError(msg)
+        return settings.collection_start
+
+    async def set_energy_conversion(
+        self,
+        password: str,
+        change: ConversionType,
+        *,
+        allow_service_change: bool = False,
+    ) -> ConversionType | None:
+        """Change the energy conversion's name and unit texts (3224).
+
+        Behind the service login; refused unless allow_service_change (or a dry
+        run).
+
+        Args:
+        ----
+            password: The service password.
+            change: The texts to set; None keeps one.
+            allow_service_change: Really change the installer setting.
+
+        Returns:
+        -------
+            The conversion as read back; None in a dry run.
+
+        """
+        self._experimental("set the energy navigator's energy conversion")
+        settings = await self._installer_write(
+            password,
+            lambda s: set_conversion(s, password, change),
+            allow_service_change=allow_service_change,
+        )
+        if settings is None:
+            return None
+        shown = settings.conversion or en.ConversionType()
+        for key in ("name", "one", "thousand", "million"):
+            value = getattr(change, key)
+            if value is not None and getattr(shown, key) != value.strip():
+                msg = f"conversion {key}: the iTM shows {getattr(shown, key)!r}"
+                raise ItmCommandError(msg)
+        return shown
