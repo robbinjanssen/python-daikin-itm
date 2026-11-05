@@ -13,17 +13,19 @@ from daikin_itm.system_edit import (
     add_email_address,
     delete_email_address,
     edit_email_address,
-    leave_own_settings,
-    open_own_settings,
-    own_settings_from_screen,
     read_email_server,
     send_test_email,
     set_confirm_dialogs,
     set_email_enabled,
     set_email_server,
-    set_own_settings,
     set_remote_management,
     set_web_server_port,
+)
+from daikin_itm.users_edit import (
+    leave_own_settings,
+    open_own_settings,
+    own_settings_from_screen,
+    set_own_settings,
 )
 
 from .fake_system_edit import FakeSystemEditITM

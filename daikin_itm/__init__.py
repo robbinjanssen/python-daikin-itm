@@ -146,7 +146,8 @@ from .system import (
     ZoneAttributes,
     ZoneInfo,
 )
-from .system_edit import EmailServer, OwnSettings, WebUserScreens
+from .system_edit import EmailServer
+from .users_edit import OwnSettings, WebUserScreens
 
 __all__ = [
     "DEFAULT_ZONE_PATH",

@@ -38,9 +38,10 @@ daikin_itm/
   changeover.py       auto changeover group writes (session and client mixins)
   schedule_edit.py    schedule writes: events, period, special days, calendar, copies
   zones_edit.py       zone tree, members, member order, icons; the zone error screen
-  system_edit.py      e-mail, confirm dialogs, ports, remote management, own settings,
-                      users, region, clock, hardware (session and client mixins),
-                      a web user's allowed screens
+  system_edit.py      e-mail, confirm dialogs, ports, remote management, region, clock,
+                      hardware (session and client mixins)
+  users_edit.py       web users, a web user's allowed screens, own settings (session
+                      and client mixins)
   emergency.py        emergency stop programs, settings, release (never a start)
   dealer_functions.py temperature limit, sliding temperature, heating mode
                       optimisation (dealer options); dealer_cli.py their and

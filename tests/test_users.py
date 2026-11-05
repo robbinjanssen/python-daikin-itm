@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from daikin_itm import ItmCommandError, LoginRejected, ReadOnlyError
-from daikin_itm.system_edit import (
+from daikin_itm.users_edit import (
     WebUserScreens,
     leave_own_settings,
     open_own_settings,

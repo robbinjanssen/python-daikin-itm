@@ -169,6 +169,7 @@ from .system import (
     zones_from_screen,
 )
 from .system_edit import SystemSessionMixin
+from .users_edit import UsersSessionMixin
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -191,6 +192,7 @@ class _Session(
     ChangeoverSessionMixin,
     SettingsDialogMixin,
     SystemSessionMixin,
+    UsersSessionMixin,
     ScheduleSessionMixin,
 ):  # pylint: disable=too-many-public-methods
     """One logged-in conversation with the iTM. Only created by ItmClient."""

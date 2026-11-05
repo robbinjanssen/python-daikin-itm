@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any, Protocol, Self
 
 import aiohttp
 
-from . import system_edit
+from . import users_edit
 from .changeover import ChangeoverMixin
 from .dealer_functions import DealerFunctionsMixin
 from .demand import DemandMixin
@@ -92,6 +92,7 @@ from .system import (
     SystemSettings,
 )
 from .system_edit import SystemMixin
+from .users_edit import UsersMixin
 from .zones_edit import ZonesMixin
 
 if TYPE_CHECKING:
@@ -310,6 +311,7 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
     ExportsMixin,
     EmergencyMixin,
     SystemMixin,
+    UsersMixin,
     ScheduleMixin,
     EnergyMixin,
     ZonesMixin,
@@ -514,10 +516,10 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
             await self.release_saved_session()
             s = self._new_session()
             try:
-                await system_edit.open_own_settings(s, self._username, self._password)
+                await users_edit.open_own_settings(s, self._username, self._password)
                 yield s
             finally:
-                await _run_to_completion(system_edit.leave_own_settings(s))
+                await _run_to_completion(users_edit.leave_own_settings(s))
 
     # -- public API ---------------------------------------------------------------
     async def fetch_units(self, *, view: str = "icons") -> dict[str, Unit]:
