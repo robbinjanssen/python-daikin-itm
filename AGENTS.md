@@ -33,6 +33,7 @@ daikin_itm/
   menu.py             the main menu's screens: IDs, models and readers
   system.py           system settings screens: models and readers
   service.py          the installer's service screens (read only, service login)
+  changeover.py       auto changeover group writes (session and client mixins)
   schedule_edit.py    schedule writes: events, period, special days, calendar, copies
   zones_edit.py       zone tree, members, member order, icons; the zone error screen
   system_edit.py      e-mail, confirm dialogs, ports, remote management, own settings,
