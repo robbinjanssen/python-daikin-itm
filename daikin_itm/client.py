@@ -352,7 +352,6 @@ from .system import (
     ZN_SETTINGS,
     DstRule,
     DstSettings,
-    EmailSettings,
     EnergyNavigatorInfo,
     HardwareSettings,
     ManagementPoint,
@@ -381,6 +380,7 @@ from .system import (
     zone_attributes_from_screen,
     zones_from_screen,
 )
+from .system_edit import SystemMixin
 
 if TYPE_CHECKING:
     from collections.abc import (
@@ -403,7 +403,7 @@ if TYPE_CHECKING:
         RuleRange,
     )
     from .protocol import Reply
-    from .system_edit import EmailServer, OwnSettings, WebUserScreens
+    from .system_edit import OwnSettings, WebUserScreens
 
 # An export (history, energy data) is a CSV file; refuse anything far larger.
 MAX_EXPORT_BYTES = 32 * 1024 * 1024
@@ -2807,6 +2807,7 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
     ServiceEditMixin,
     ExportsMixin,
     EmergencyMixin,
+    SystemMixin,
     DemandMixin,
     LayoutMixin,
     PointRegistryMixin,
@@ -4502,236 +4503,6 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
                 msg = f"conversion {key}: the iTM shows {getattr(shown, key)!r}"
                 raise ItmCommandError(msg)
         return shown
-
-    # -- e-mail notification and other system writes -------------------------------
-    async def _email(self) -> EmailSettings:
-        email = (await self.fetch_system(["email"])).email
-        if email is None:
-            msg = "the e-mail settings screen did not open"
-            raise ItmCommandError(msg)
-        return email
-
-    async def add_email_address(
-        self, address: str, points: Iterable[str]
-    ) -> EmailSettings | None:
-        """Add an address that gets the iTM's error mails for these points.
-
-        Args:
-        ----
-            address: The e-mail address.
-            points: The management points it reports on.
-
-        Returns:
-        -------
-            The e-mail settings as read back, or None in a dry run.
-
-        """
-        chosen = tuple(points)
-        await self._system_write(
-            lambda s: _ignore(system_edit.add_email_address(s, address, chosen))
-        )
-        if self.dry_run:
-            return None
-        email = await self._email()
-        if address not in [a for _, a in email.addresses]:
-            msg = f"{address}: the iTM did not add the address"
-            raise ItmCommandError(msg)
-        return email
-
-    async def edit_email_address(
-        self,
-        address: str,
-        *,
-        new_address: str | None = None,
-        points: Iterable[str] | None = None,
-    ) -> EmailSettings | None:
-        """Change an e-mail address and/or the points it reports on.
-
-        Args:
-        ----
-            address: The address as listed.
-            new_address: Its new address.
-            points: The points it should report on (replacing the current ones).
-
-        Returns:
-        -------
-            The e-mail settings as read back, or None in a dry run.
-
-        """
-        chosen = None if points is None else tuple(points)
-        await self._system_write(
-            lambda s: _ignore(
-                system_edit.edit_email_address(
-                    s, address, new_address=new_address, points=chosen
-                )
-            )
-        )
-        if self.dry_run:
-            return None
-        email = await self._email()
-        if (new_address or address) not in [a for _, a in email.addresses]:
-            msg = f"{address}: the iTM did not take the change"
-            raise ItmCommandError(msg)
-        return email
-
-    async def delete_email_address(self, address: str) -> None:
-        """Delete an e-mail address.
-
-        Args:
-        ----
-            address: The address as listed.
-
-        """
-        await self._system_write(
-            lambda s: _ignore(system_edit.delete_email_address(s, address))
-        )
-        if not self.dry_run and address in [
-            a for _, a in (await self._email()).addresses
-        ]:
-            msg = f"{address}: the iTM did not delete the address"
-            raise ItmCommandError(msg)
-
-    async def set_email_enabled(self, *, enabled: bool) -> EmailSettings | None:
-        """Switch the e-mail notification on or off.
-
-        Args:
-        ----
-            enabled: On (True) or off.
-
-        Returns:
-        -------
-            The e-mail settings as read back, or None in a dry run.
-
-        """
-        await self._system_write(
-            lambda s: _ignore(system_edit.set_email_enabled(s, enabled=enabled))
-        )
-        if self.dry_run:
-            return None
-        email = await self._email()
-        if email.enabled is not enabled:
-            msg = f"the iTM did not switch e-mail {'on' if enabled else 'off'}"
-            raise ItmCommandError(msg)
-        return email
-
-    async def fetch_email_server(self) -> dict[str, Any]:
-        """Read the e-mail server settings (never the password).
-
-        Returns
-        -------
-            The settings by name, as the server screen shows them.
-
-        """
-        return await self._in_session(system_edit.read_email_server)
-
-    async def set_email_server(self, server: EmailServer) -> dict[str, Any] | None:
-        """Change the e-mail server settings; the password is never logged.
-
-        Args:
-        ----
-            server: The fields to change (None leaves a field as it is).
-
-        Returns:
-        -------
-            The server settings as read back, or None in a dry run.
-
-        """
-        await self._system_write(
-            lambda s: _ignore(system_edit.set_email_server(s, server))
-        )
-        if self.dry_run:
-            return None
-        result = await self.fetch_email_server()
-        wanted = {
-            k: v
-            for k, v in vars(server).items()
-            if v is not None and k != "password" and k in result
-        }
-        wrong = {k: result[k] for k, v in wanted.items() if result[k] != v}
-        if wrong:
-            msg = f"the iTM did not take the e-mail server settings: {wrong}"
-            raise ItmCommandError(msg)
-        return result
-
-    async def send_test_email(self, address: str, *, allow_send: bool = False) -> None:
-        """Let the iTM send its test mail to an address (it really sends one).
-
-        Args:
-        ----
-            address: The address as listed.
-            allow_send: Really send it; otherwise only a dry run is allowed.
-
-        """
-        self._experimental("send a test e-mail")
-        self._writable()
-        await self._in_session(
-            lambda s: _ignore(
-                system_edit.send_test_email(s, address, allow_send=allow_send)
-            )
-        )
-
-    async def set_confirm_dialogs(self, *, enabled: bool) -> bool | None:
-        """Switch the iTM's "confirm settings" dialogs on or off.
-
-        Args:
-        ----
-            enabled: On (True) or off.
-
-        Returns:
-        -------
-            The setting as read back, or None in a dry run.
-
-        """
-        await self._system_write(
-            lambda s: _ignore(system_edit.set_confirm_dialogs(s, enabled=enabled))
-        )
-        if self.dry_run:
-            return None
-        shown = (await self.fetch_system(["confirm_dialogs"])).confirm_dialogs
-        if shown is not enabled:
-            msg = f"the iTM did not switch confirm dialogs {'on' if enabled else 'off'}"
-            raise ItmCommandError(msg)
-        return shown
-
-    async def set_web_server_port(
-        self, port: int | None, *, allow_network_change: bool = False
-    ) -> None:
-        """Set the web server's port (None: the default). Can cut off access.
-
-        Args:
-        ----
-            port: The port, or None for the default.
-            allow_network_change: Really change it; otherwise only a dry run.
-
-        """
-        self._experimental("change the web server port")
-        await self._system_write(
-            lambda s: _ignore(
-                system_edit.set_web_server_port(
-                    s, port, allow_network_change=allow_network_change
-                )
-            )
-        )
-
-    async def set_remote_management(
-        self, *, connect: bool, allow_remote_change: bool = False
-    ) -> None:
-        """Connect or disconnect the iTM's remote management.
-
-        Args:
-        ----
-            connect: Connect (True) or disconnect.
-            allow_remote_change: Really do it; otherwise only a dry run.
-
-        """
-        self._experimental("change the remote management connection")
-        await self._system_write(
-            lambda s: _ignore(
-                system_edit.set_remote_management(
-                    s, connect=connect, allow_remote_change=allow_remote_change
-                )
-            )
-        )
 
     # -- zone structure and icons -----------------------------------------------------
     async def _zone_list(self) -> tuple[ZoneInfo, ...]:
