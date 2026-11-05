@@ -116,6 +116,7 @@ max-line-length = 88
 
 [tool.pylint.DESIGN]
 max-attributes = 20
+max-parents = 15
 
 [tool.pytest.ini_options]
 addopts = "--cov"

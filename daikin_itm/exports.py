@@ -29,7 +29,7 @@ import asyncio
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from .exceptions import ItmCommandError
 from .menu import MenuScreen
@@ -42,6 +42,8 @@ if TYPE_CHECKING:
     from .client import _Session
     from .protocol import Reply
     from .state import UIState
+
+_T = TypeVar("_T")
 
 # GETs a path on the iTM (e.g. "/sdlfs/WebExport/x.csv") and returns its body.
 Fetch = Callable[[str], Awaitable[bytes]]
@@ -492,3 +494,173 @@ async def backup(s: _Session, fetch: Fetch) -> Download | None:
         raise
     finally:
         await s.close_menu()
+
+
+async def _ignore(call: Awaitable[Any]) -> None:
+    await call
+
+
+class ExportsMixin:
+    """ItmClient's PPD and export methods."""
+
+    if TYPE_CHECKING:
+        # pylint: disable=unused-argument
+        dry_run: bool
+        planned: list[str]
+
+        async def _in_session(
+            self, call: Callable[[_Session], Awaitable[_T]]
+        ) -> _T: ...
+
+        async def _system_write(
+            self, call: Callable[[_Session], Awaitable[None]]
+        ) -> None: ...
+
+        async def _get_bytes(self, path: str) -> bytes: ...
+
+        def _writable(self) -> None: ...
+
+        def _experimental(self, what: str) -> None: ...
+
+    async def fetch_ppd(
+        self,
+        *,
+        start: date | None = None,
+        end: date | None = None,
+        calculation_day: int | None = None,
+    ) -> PpdSettings:
+        """Calculate power proportional distribution for a period (or a monthly day).
+
+        Without the iTM's PPD licence the result lists no units.
+
+        Args:
+        ----
+            start: The period's first day.
+            end: The period's last day.
+            calculation_day: Or the day of the month a monthly period starts.
+
+        Returns:
+        -------
+            The PPD settings with the use per unit.
+
+        """
+        return await self._in_session(
+            lambda s: read_ppd(s, start=start, end=end, calculation_day=calculation_day)
+        )
+
+    async def fetch_ppd_advanced(self) -> PpdAdvanced:
+        """Read the PPD advanced settings (per weekday, and exclusions).
+
+        Returns
+        -------
+            The settings.
+
+        """
+        return await self._in_session(read_ppd_advanced)
+
+    async def set_ppd_weekday(
+        self, weekday: int, *, enabled: bool | None = None, option: str | None = None
+    ) -> PpdAdvanced | None:
+        """Change a weekday of the PPD advanced settings.
+
+        Args:
+        ----
+            weekday: 0 = Sunday .. 6 = Saturday.
+            enabled: Count the weekday (True) or not.
+            option: One of the options the screen lists for it.
+
+        Returns:
+        -------
+            The settings as read back, or None in a dry run.
+
+        """
+        self._experimental("change the PPD settings")
+        await self._system_write(
+            lambda s: _ignore(
+                set_ppd_weekday(s, weekday, enabled=enabled, option=option)
+            )
+        )
+        return None if self.dry_run else await self.fetch_ppd_advanced()
+
+    async def export_history(self, start: date, end: date) -> Download:
+        """Export the history of a period as the iTM's file (CSV).
+
+        The iTM serves the file without a session token while it exists; the
+        library fetches it at once and tells the iTM it is done.
+
+        Args:
+        ----
+            start: The first day.
+            end: The last day.
+
+        Returns:
+        -------
+            The file's name and contents.
+
+        """
+        return await self._in_session(
+            lambda s: export_history(s, start, end, self._get_bytes)
+        )
+
+    async def export_energy_data(self, period: str) -> Download:
+        """Export the energy navigator's data for a period it lists.
+
+        Args:
+        ----
+            period: As the export screen lists it, e.g. "01/2025-01/2025".
+
+        Returns:
+        -------
+            The file's name and contents.
+
+        """
+        return await self._in_session(
+            lambda s: export_energy_data(s, period, self._get_bytes)
+        )
+
+    async def export_point_list(self, start: date, end: date) -> Download:
+        """Export the energy navigator's point list for a period.
+
+        Args:
+        ----
+            start: The first day.
+            end: The last day.
+
+        Returns:
+        -------
+            The file's name and contents.
+
+        """
+        return await self._in_session(
+            lambda s: export_point_list(s, start, end, self._get_bytes)
+        )
+
+    async def export_setup(self) -> Download:
+        """Export the iTM's setup (its configuration) and fetch the file.
+
+        The file holds the installation's configuration: treat it as sensitive.
+
+        Returns
+        -------
+            The file's name and contents.
+
+        """
+        return await self._in_session(lambda s: export_setup(s, self._get_bytes))
+
+    async def run_backup(self) -> Download | None:
+        """Run the iTM's backup (a job on the device, so a write).
+
+        Returns
+        -------
+            The backup file when the iTM offers it as a download, None when it keeps
+            the backup itself or in a dry run.
+
+        """
+        self._experimental("run a backup")
+        self._writable()
+        if self.dry_run:
+            self.planned.append(
+                f"run the backup: screen {MenuScreen.MENULIST} part {MB_BACKUP}"
+            )
+            return None
+        return await self._in_session(lambda s: backup(s, self._get_bytes))
