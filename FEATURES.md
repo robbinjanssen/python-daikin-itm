@@ -169,13 +169,13 @@ screen 7 belong to schedule events, not to a unit.
 | 3204 | `ScEnergyNaviDisplaySetting` | V | - | energy navigator: display settings (the way to energy types and groups) |
 | 3205 | `ScEnergyNaviEnergyTypeList` | V | V | energy navigator: energy types: create, rename, delete |
 | 3206 | `ScEnergyNaviEnergyTypeSetting` | V | - | energy navigator: an energy type's settings |
-| 3207 | `ScEnergyNaviEnergyGroupList` | V | V | energy navigator: energy groups: create, delete (V); rename (F) |
+| 3207 | `ScEnergyNaviEnergyGroupList` | V | V | energy navigator: energy groups: create, rename, delete |
 | 3208 | `ScEnergyNaviEnergyGroupSetting` | V | - | energy navigator: an energy group's settings |
 | 3209 | `ScEnergyNaviLegendPlanManage` | X | X | energy navigator legend (static help, no data) |
 | 3210 | `ScEnergyNaviEquipmentManage` | V | F | energy navigator: equipment management, sampling period and target (read V; write F) |
 | 3211 | `ScEnergyNaviDetailInfo` | F | - | energy navigator: equipment details (only offered with data) |
 | 3212 | `ScEnergyNaviLegendDriveInfo` | X | X | energy navigator legend (static help, no data) |
-| 3213 | `ScEnergyNaviRuleList` | V | V | energy navigator: management rule list: create, delete (V); rename (F) |
+| 3213 | `ScEnergyNaviRuleList` | V | V | energy navigator: management rule list: create, rename, delete |
 | 3214 | `ScEnergyNaviRuleEdit` | V | - | energy navigator: rule editor (read) |
 | 3215 | `ScEnergyNaviCopySelect` | F | F | energy navigator: rule copy (on a real iTM Copy first asks a new rule's name; not supported yet) |
 | 3216 | `ScEnergyNaviCalenderCopy` | F | F | energy navigator: calendar copy |

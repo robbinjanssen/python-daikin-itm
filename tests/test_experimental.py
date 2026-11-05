@@ -41,8 +41,6 @@ GUARDED: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = [
     ("set_planned_consumption", (), {}),
     ("set_actual_consumption", (), {}),
     ("set_energy_sampling", (), {}),
-    ("rename_energy_type", ("Gas", "Water"), {"group": True}),
-    ("rename_energy_rule", ("Rule A", "Rule C"), {}),
     ("copy_energy_rule", ("Rule A", ("Rule B",)), {}),
     ("set_energy_room_temperature", (SERVICE, "1:1-00"), {}),
     ("set_energy_collection_start", (SERVICE, "April"), {}),
@@ -172,16 +170,16 @@ async def test_energy_navigator() -> None:
     itm = FakeEnergyMoreITM()
     guarded = FakeClient(itm, allow_experimental=False)
     with pytest.raises(ExperimentalError):
-        await guarded.rename_energy_rule("Rule A", "Rule C")
+        await guarded.copy_energy_rule("Rule A", ["Rule B"])
     assert not itm.requests
     dry = FakeClient(itm, allow_experimental=False, dry_run=True)
     dry.progress_interval = 0
-    await dry.rename_energy_rule("Rule A", "Rule C")
+    await dry.copy_energy_rule("Rule A", ["Rule B"])
     assert dry.planned
     client = FakeClient(itm, allow_experimental=True)
     client.progress_interval = 0
-    await client.rename_energy_rule("Rule A", "Rule C")
-    assert "Rule C" in [r[0] for r in itm.rules]
+    await client.copy_energy_rule("Rule A", ["Rule B"])
+    assert itm.rule_days["Rule B"] == itm.rule_days["Rule A"]
 
 
 async def test_test_email() -> None:

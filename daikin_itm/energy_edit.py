@@ -1219,8 +1219,6 @@ class EnergyMixin(ClientCore):
             group: Work on the energy groups instead.
 
         """
-        if group:
-            self._experimental("rename an energy group")
         await self._system_write(
             lambda s: _ignore(rename_entry(s, name, new_name, group=group))
         )
@@ -1257,7 +1255,6 @@ class EnergyMixin(ClientCore):
 
     async def rename_energy_rule(self, name: str, new_name: str) -> None:
         """Rename a management rule, confirmed by the rule list."""
-        self._experimental("rename an energy navigator rule")
         await self._system_write(lambda s: _ignore(rename_rule(s, name, new_name)))
         if self.dry_run:
             return
