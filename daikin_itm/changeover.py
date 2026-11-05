@@ -34,8 +34,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from contextlib import AbstractAsyncContextManager
 
-    from .client import _Session
     from .protocol import Reply
+    from .session import _Session
     from .state import UIState
 
 

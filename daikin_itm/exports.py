@@ -39,8 +39,8 @@ from .system import MB_ENERGY_EXPORT, MB_PPD, PpdSettings, ppd_from_screen
 if TYPE_CHECKING:
     from datetime import date
 
-    from .client import _Session
     from .protocol import Reply
+    from .session import _Session
     from .state import UIState
 
 _T = TypeVar("_T")

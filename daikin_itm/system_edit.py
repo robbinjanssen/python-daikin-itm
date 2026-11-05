@@ -45,9 +45,9 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable
     from contextlib import AbstractAsyncContextManager
 
-    from .client import _Session
     from .menu import ItmInfo
     from .protocol import Reply
+    from .session import _Session
     from .state import UIState
     from .system import (
         DstRule,

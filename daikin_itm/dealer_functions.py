@@ -91,8 +91,8 @@ from .schedule_edit import EVT_SETPOINT_BUTTON, LOCK_ORDER, POWER_RADIOS
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable
 
-    from .client import _Session
     from .protocol import Reply
+    from .session import _Session
     from .state import UIState
 
 _T = TypeVar("_T")

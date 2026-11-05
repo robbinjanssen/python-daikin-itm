@@ -53,7 +53,6 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable, Mapping
     from datetime import date
 
-    from .client import _Session
     from .energy_navigator import (
         ActualYear,
         ConversionType,
@@ -65,6 +64,7 @@ if TYPE_CHECKING:
         RuleRange,
     )
     from .protocol import Reply
+    from .session import _Session
     from .state import UIState
 
 _T = TypeVar("_T")

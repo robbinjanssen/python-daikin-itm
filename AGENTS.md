@@ -26,7 +26,8 @@ The Home Assistant integration
 daikin_itm/
   __init__.py         public API (re-exports)
   client.py           ItmClient (with the feature modules' *Mixin classes), the session
-                      stores, _Session (one logged-in session)
+                      stores
+  session.py          _Session: one logged-in session, the screen work behind ItmClient
   exceptions.py       ItmError and subclasses
   models.py           Unit, UnitSettings, Capabilities, part IDs, screen readers
   lang.py             the labels the iTM only sends as text, per display language

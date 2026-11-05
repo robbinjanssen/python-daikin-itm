@@ -35,7 +35,7 @@ from .protocol import DataType, EventType, ScreenID
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from .client import _Session
+    from .session import _Session
     from .state import UIState
 
 _T = TypeVar("_T")
