@@ -43,6 +43,7 @@ from .exceptions import (
     ZoneNotFound,
 )
 from .exports import ExportsMixin
+from .interlock import InterlockMixin
 from .layout import LayoutMixin
 from .menu import (
     ChangeoverGroup,
@@ -304,6 +305,7 @@ _EXPERIMENTAL_UNIT_SETTINGS = frozenset(
 
 class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public-methods
     DealerFunctionsMixin,
+    InterlockMixin,
     ServiceEditMixin,
     ExportsMixin,
     EmergencyMixin,

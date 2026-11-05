@@ -42,8 +42,11 @@ daikin_itm/
                       users, region, clock, hardware (session and client mixins),
                       a web user's allowed screens
   emergency.py        emergency stop programs, settings, release (never a start)
-  dealer_functions.py temperature limit, sliding temperature, heating mode optimisation,
-                      interlock (dealer options); dealer_cli.py their CLI commands
+  dealer_functions.py temperature limit, sliding temperature, heating mode
+                      optimisation (dealer options); dealer_cli.py their and
+                      interlock's CLI commands
+  interlock.py        interlock programs: list, enable, add, rename, copy,
+                      delete, setup (inputs, outputs, conditions, actions)
   demand.py           demand (power limit) control and energy saving
   layout.py           the graphical layout view; layout_cli.py its CLI command
   point_registry.py   the installer's management point registrations (read only)

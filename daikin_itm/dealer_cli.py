@@ -11,7 +11,7 @@ import sys
 from typing import TYPE_CHECKING, Any
 
 from .cli_common import _out, _print_plan
-from .dealer_functions import (
+from .interlock import (
     InterlockActionSpec,
     InterlockConditionSpec,
     InterlockOutputSpec,
@@ -23,13 +23,8 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from .client import ItmClient
-    from .dealer_functions import (
-        InterlockAction,
-        InterlockCondition,
-        InterlockSetup,
-        SlidingTemperatureGroup,
-        TemperatureLimitGroup,
-    )
+    from .dealer_functions import SlidingTemperatureGroup, TemperatureLimitGroup
+    from .interlock import InterlockAction, InterlockCondition, InterlockSetup
 
 GROUP_ACTIONS = ["show", "enable", "disable", "add", "members", "set", "delete"]
 CONDITION_KEYS = (

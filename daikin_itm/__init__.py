@@ -10,14 +10,6 @@ from .client import (
 )
 from .dealer_functions import (
     HeatingOptimisationUnit,
-    InterlockAction,
-    InterlockActionSpec,
-    InterlockCondition,
-    InterlockConditionSpec,
-    InterlockOutput,
-    InterlockOutputSpec,
-    InterlockProgram,
-    InterlockSetup,
     SlidingTemperatureGroup,
     TemperatureLimitGroup,
 )
@@ -73,6 +65,16 @@ from .history_export import (
     HistoryExportError,
     HistoryRecord,
     parse_history_export,
+)
+from .interlock import (
+    InterlockAction,
+    InterlockActionSpec,
+    InterlockCondition,
+    InterlockConditionSpec,
+    InterlockOutput,
+    InterlockOutputSpec,
+    InterlockProgram,
+    InterlockSetup,
 )
 from .layout import Layout, LayoutItem
 from .menu import (
