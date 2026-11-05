@@ -107,15 +107,14 @@ MN_GRAPH, MN_LEGEND, MN_UNIT = 1, 2, 10
 MN_STATE, MN_PERIOD, MN_TARGET, MN_PREDICTED, MN_SYNC = 5, 7, 9, 12, 15
 MN_REMAIN_MIN, MN_REMAIN_SEC, MN_CURRENT, MN_ADJUST = 17, 19, 22, 25
 MN_TARGET_BUTTON, MN_SETUP, MN_GRAPHS, MN_CANCEL = 27, 28, 29, 30
-# Setup (3301): the control list, its radios, Modify, Status (-> 3310), forced level.
+# Setup (3301); Status opens 3310.
 SETUP = 3301
 SU_LIST, SU_ENABLE, SU_DISABLE, SU_MODIFY, SU_STATUS = 1, 3, 4, 5, 6
 SU_FORCED, SU_CANCEL = 7, 8
-# Legend (3302): target, current, predicted and consumption labels; Cancel.
+# Legend (3302).
 LEGEND = 3302
 LG_LABELS, LG_CANCEL = (1, 2, 3, 5), 4
-# Graphs (3303): tabs, Cancel, and per tab (daily, monthly, yearly): graph, the
-# date combos, update, detail data button and the screen it opens.
+# Graphs (3303): per tab (daily, monthly, yearly).
 GRAPHS = 3303
 GR_TABS, GR_CANCEL = 1, 11
 GR_TAB_PARTS = (
@@ -126,12 +125,12 @@ GR_TAB_PARTS = (
 # Daily / monthly / yearly data (3304-3306): the date shown, the list, Cancel.
 DATA_DATE, DATA_LIST = 2, 3
 DATA_CANCEL = {3304: 5, 3305: 4, 3306: 4}
-# Level setups: temperature (3307), capacity (3308), on/off (3309); the group list
-# and group button are the same on all three.
+# Level setups: temperature (3307), capacity (3308), on/off (3309); the group
+# list and group button are the same on all three.
 TEMPERATURE, CAPACITY, ON_OFF = 3307, 3308, 3309
 LS_GROUPS, LS_GROUP_BUTTON = 2, 3
 TS_UPPER_COOL, TS_UPPER_BUTTON, TS_LOWER_HEAT, TS_LOWER_BUTTON = 5, 7, 9, 11
-# Control status (3310): tabs, Cancel, and per tab status, control level, groups.
+# Control status (3310).
 STATUS = 3310
 CS_TABS, CS_CANCEL = 1, 7
 CS_TAB_PARTS = ((3, 5, 6), (9, 11, 12), (14, 16, 17))

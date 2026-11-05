@@ -101,7 +101,7 @@ EVT_OK, EVT_TIME_BUTTON, EVT_TARGET_BUTTON, EVT_SETPOINT_BUTTON = 5, 44, 47, 23
 EVT_FAN_UP = 29
 # Picker (110): tab 0 is points, 1 zones.
 PK_TAB, PK_POINTS, PK_ZONES, PK_OK, PK_CANCEL = 1, 2, 5, 3, 4
-# Editor (104): special day rename, and the calendar rule controls.
+# Editor (104).
 SE_SPECIAL_RENAME = 103
 SE_CAL_LIST, SE_CAL_DELETE, SE_CAL_PATTERN = 26, 29, 32
 SE_CAL_DATE_RADIO, SE_CAL_DATE_MONTH, SE_CAL_DATE_DAY = 33, 37, 38
@@ -771,8 +771,7 @@ async def delete_calendar_rule(s: _Session, program: str, rule: CalendarRule) ->
 
 # -- copies and clearing ------------------------------------------------------------
 
-# Program list (100): Copy and Calendar copy. Editor (104): the weekly and special
-# day patterns' Copy and Delete (clear the day). Event list (107): Copy.
+# Copies: program list (100), editor (104, Delete clears a day), event list (107).
 SCH_COPY, SCH_CALENDAR_COPY = 9, 12
 SE_COPY_DAY, SE_CLEAR_DAY, SE_COPY_SPECIAL, SE_CLEAR_SPECIAL = 71, 72, 100, 101
 EV_COPY = 6

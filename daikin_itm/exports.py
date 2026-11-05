@@ -52,9 +52,7 @@ EXPORT_DIR = "/sdlfs/WebExport/"
 EXPORT_NAME = re.compile(r"[A-Za-z0-9_\-][A-Za-z0-9_.\- ]{0,127}")
 DOWNLOAD_SUCCEEDED, DOWNLOAD_CANCELLED, DOWNLOAD_FAILED = 0, 1, 2
 
-# PPD (2900): period / monthly radios, the date and day inputs, Execute, advanced,
-# close. Advanced (2901): per weekday a checkbox, a combo and a time text; the
-# exclusion list; OK and Cancel.
+# PPD (2900) and its advanced settings (2901).
 PPD_SCREEN, PPD_ADVANCED = 2900, 2901
 PD_PERIOD_RADIO, PD_MONTH_RADIO = 2, 10
 PD_START_BUTTON, PD_END_BUTTON, PD_DAY_BUTTON = 6, 9, 14
@@ -65,8 +63,7 @@ PA_EXCLUSIONS, PA_TAB, PA_OK, PA_CANCEL = 53, 1, 37, 38
 MB_HISTORY = 53
 HISTORY, HS_CSV, HS_CLOSE = 800, 13, 17
 HISTORY_OUTPUT, HO_START, HO_END, HO_OUTPUT, HO_CANCEL = 801, 3, 19, 6, 7
-# Energy navigator data output (3219): tab 0 energy data (period combo, save), tab 1
-# point list (from/to inputs, save); close.
+# Energy navigator data output (3219): tab 0 energy data, tab 1 point list.
 EX_TAB, EX_PERIOD, EX_SAVE_ENERGY = 1, 3, 4
 EX_FROM_BUTTON, EX_TO_BUTTON, EX_SAVE_POINTS, EX_CLOSE = 17, 20, 21, 5
 

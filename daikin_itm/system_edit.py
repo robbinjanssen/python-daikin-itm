@@ -59,8 +59,7 @@ if TYPE_CHECKING:
 
 _T = TypeVar("_T")
 
-# E-mail notification (1300) and its address (1301), test mail (1302) and server
-# (1303) screens.
+# E-mail notification (1300), address (1301), test mail (1302), server (1303).
 EMAIL_LIST, EMAIL_ON, EMAIL_OFF = 1, 3, 4
 EMAIL_ADD, EMAIL_DELETE, EMAIL_EDIT, EMAIL_SERVER, EMAIL_CLOSE = 6, 7, 8, 10, 12
 ADDRESS_SCREEN, TRIAL_SCREEN, SERVER_SCREEN = 1301, 1302, 1303
@@ -99,7 +98,7 @@ OWN_POINT, OWN_COMMA, OWN_COLOUR_1, OWN_COLOUR_2, OWN_OK, OWN_CANCEL = (
     19,
     20,
 )
-# A normal web user's allowed screens (1201), from the user setup (1204) button 16.
+# A normal web user's allowed screens (1201), from the user setup's (1204) button 16.
 USER_SCREENS, US_SCREENS_BUTTON = 1201, 16
 UA_ALLOWED, UA_ADD, UA_REMOVE, UA_AVAILABLE, UA_OK, UA_CANCEL = 2, 4, 5, 8, 9, 10
 
@@ -537,15 +536,11 @@ async def set_remote_management(
         await s.close_screen(r)
 
 
-# Seen on a real iTM: the login screen (1203) has a second button next to "Login"
-# (part 5, "User Settings"); pressed without credentials it answers "Cannot log
-# in". Everything else here follows the web UI's script.js and is tested
-# against the simulated iTM only: ScMainLogin.onClick sends the same payload (name
-# length, name, SHA-256 of the password) for both its buttons, so part 5 logs in
-# straight into ScWebUserSetup (1205). Seen on a real iTM: 1205 opens on that login,
-# is read and left with Cancel, and its OK saves the icon colour and a new password
-# (entered in the same PASSWORD inputs as the user setup's, 1204). Assumed, not
-# seen: that its language button (7) opens the language screen (2501).
+# The login screen's (1203) second button (part 5, "User Settings") logs in
+# straight into 1205 with the same payload as Login. Seen on a real iTM: 1205 opens
+# on that login, is read and left with Cancel, and its OK saves the icon colour and a
+# new password (in the same PASSWORD inputs as 1204's). Assumed, not seen: that its
+# language button (7) opens the language screen (2501).
 
 
 async def open_own_settings(s: _Session, username: str, password: str) -> None:
@@ -740,11 +735,10 @@ async def set_own_settings(  # noqa: PLR0913  # pylint: disable=too-many-argumen
     return saved
 
 
-# From script.js (ScSysWebAccessRegistScreen) and the screen inventory; tested against
-# the simulated iTM only. Seen on a real iTM: the user setup's (1204) screens button
-# (16) and its zones button (12) are disabled for an administrator, so the screens
-# apply to normal users only. Assumed: the lists' last column holds the screen's name,
-# and 1201's OK only hands the list back to 1204, whose OK saves it.
+# Seen on a real iTM: the user setup's (1204) screens button (16) and zones button
+# (12) are disabled for an administrator, so the screens apply to normal users only;
+# 1201 reads for a normal user. Assumed: the lists' last column holds the screen's
+# name, and 1201's OK only hands the list back to 1204, whose OK saves it.
 
 
 def _screen_rows(state: UIState, part: int) -> list[str]:

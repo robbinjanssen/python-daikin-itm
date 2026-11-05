@@ -189,11 +189,9 @@ def energy_save_mode_from_screen(state: UIState) -> dict[str, Any]:
 # tab's "power limit control setup" button opens (by the energy save mode) and that
 # 1514 picks a port for them are assumptions.
 
-# Service tab buttons (screen 5): energy saving status (1508), power limit control
-# setup (1512 or 1513).
+# Energy saving status (1508), power limit control setup (1512 or 1513).
 MB_ENERGY_SAVING_STATUS, MB_DEMAND_SETUP = 79, 113
-# Energy saving status (1508): start time, remaining time, target, current, estimated
-# and excess power, control status (texts), "disable energy saving" (a write), Close.
+# Energy saving status (1508): "disable energy saving" is a write.
 ENERGY_SAVING_STATUS = 1508
 EST_TEXTS = (3, 5, 7, 9, 11, 13, 15)
 EST_DISABLE, EST_CANCEL = 16, 17

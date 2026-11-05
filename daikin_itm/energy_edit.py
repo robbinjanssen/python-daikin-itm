@@ -69,20 +69,17 @@ if TYPE_CHECKING:
 
 _T = TypeVar("_T")
 
-# Planned consumption (3202): OK, and per fiscal year tab the ratio's Change and
-# the month list's Change (for the selected month).
+# Planned consumption (3202).
 PL_OK = 14
 PL_TAB_INPUTS = ((8, 12), (22, 26))
-# Actual consumption (3203): OK, and per tab the month's and the CO2 factor's
-# Change.
+# Actual consumption (3203).
 AC_OK = 15
 AC_TAB_INPUTS = ((6, 10), (22, 26))
-# Equipment management (3210): the sampling period's Change buttons and texts;
-# sampling targets (3218): OK.
+# Equipment management (3210) and sampling targets (3218).
 EQ_FROM_BUTTON, EQ_TO_BUTTON = 3, 6
 EQ_FROM, EQ_TO, EQ_TARGET_TEXT = 2, 5, 8
 ST_OK = 3
-# The energy type list (3205) and group list (3207): (3204 button, list screen).
+# Energy type list (3205) and group list (3207): (3204 button, list screen).
 LISTS = {False: (en.DS_TYPES, en.TYPE_LIST), True: (en.DS_GROUPS, en.GROUP_LIST)}
 # Rule copy (False) and calendar copy (True).
 COPIES = {

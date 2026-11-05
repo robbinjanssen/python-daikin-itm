@@ -154,7 +154,7 @@ CO_MEMBERS_BUTTON, CO_SETTINGS_BUTTON = 9, 10
 CG_MEMBERS, CG_AVAILABLE, CG_ADD, CG_REMOVE, CG_OK = 2, 11, 7, 8, 12
 CS_NAME, CS_DIFFERENTIAL, CS_REFERENCE, CS_OK = 2, 5, (8, 9, 10), 11
 
-# Setback (3000): the four offset combos, the advanced button; advanced (3001).
+# Setback (3000) and its advanced settings (3001).
 SB_HIGH_UP, SB_HIGH_BACK, SB_LOW_UP, SB_LOW_BACK, SB_ADVANCED = 4, 8, 13, 17, 19
 SB_OK, SBA_COOL, SBA_HEAT, SBA_OK = 20, 4, 8, 10
 
@@ -164,13 +164,13 @@ OT_DURATION, OT_OK = 2, 3
 # Emergency stop (200): the program list.
 ES_LIST, ES_ENABLE, ES_DISABLE = 2, 4, 5
 
-# Schedules (100): the program panel, the day overview and editor buttons.
+# Schedules (100).
 SCH_PANEL, SCH_DAY_BUTTON, SCH_EDIT_BUTTON = 4, 8, 11
 SCH_ADD_BUTTON, SCH_DELETE_BUTTON = 1, 10
-# Day overview (102): previous/next day, the day label and the event list.
+# Day overview (102).
 SD_PREVIOUS, SD_DAY_LABEL, SD_NEXT, SD_LIST = 1, 2, 3, 4
 SD_SEPARATOR_ICON = 4016  # rows that only separate the times
-# Editor (104): the tabs, properties, weekday and special day patterns, calendar.
+# Editor (104).
 SE_TAB, SE_NAME, SE_ENABLED, SE_DISABLED, SE_PERIOD_CHECK = 1, 3, 7, 8, 10
 SE_OK = 20
 SE_RENAME = 4  # Change: asks the name in a text input dialog

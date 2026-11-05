@@ -66,9 +66,8 @@ INSTALLER, ROOM_TEMP, ANALOG_SELECT, COLLECT_START, CONVERSION = (
 # The service tab's energy navigator button (menu list, after a service login).
 MB_ENERGY_INSTALLER = 106
 
-# Budget overview (3200): display combo, display mode button (opens 3204), tabs,
-# close, the planning settings button (tab 1's; it opens 3201), and per tab its
-# labels, graph, the energy type and energy unit combos and the labels before them.
+# Budget overview (3200): the display mode button opens 3204, tab 1's planning
+# settings button 3201.
 BG_DISPLAY, BG_DISPLAY_MODE, BG_TABS, BG_CLOSE, BG_PLANNING = 2, 3, 4, 19, 18
 BG_TAB_LABELS = ((5, 9, 10, 11), (20, 24, 25, 26), (34, 35, 36))
 BG_TAB_GRAPH = (12, 27, 38)
@@ -76,10 +75,10 @@ BG_TAB_TYPE = (15, 30, 40)
 BG_TAB_TYPE_LABEL = (14, 29, 39)
 BG_TAB_UNIT = (17, 32, 42)
 BG_TAB_UNIT_LABEL = (16, 31, 41)
-# Display settings (3204): energy types Change -> 3205, energy groups -> 3207.
+# Display settings (3204): types -> 3205, groups -> 3207.
 DS_TYPES, DS_GROUPS, DS_CLOSE = 2, 4, 5
-# Energy type list (3205) and energy group list (3207) share their part IDs: the
-# list, Create, Copy, Delete, Rename, Edit (-> 3206 / 3208) and Close.
+# Energy type list (3205) and group list (3207) share their part IDs; Edit opens
+# 3206 / 3208.
 EL_LIST, EL_CREATE, EL_COPY, EL_DELETE = 2, 4, 5, 6
 EL_RENAME, EL_EDIT, EL_CLOSE = 7, 8, 9
 # Energy type settings (3206).
@@ -89,15 +88,14 @@ TS_CONVERSION, TS_CONVERSION_UNIT, TS_OK, TS_CANCEL = 10, 11, 13, 14
 GS_MEMBERS, GS_AVAILABLE, GS_TYPE, GS_OK, GS_CANCEL = 2, 8, 10, 11, 12
 # Equipment details (3211).
 DT_TABS, DT_DAY, DT_GRAPH, DT_LIST, DT_CLOSE = 1, 4, 7, 11, 9
-# Rule editor (3214): tabs, weekday pattern bars (Sunday first), the special days'
-# radio buttons (their labels are the names) and bars, the calendar list, Cancel.
+# Rule editor (3214); the bars and radios start on Sunday, the special days'
+# radio labels are their names.
 RE_TABS, RE_CANCEL = 1, 30
 RE_WEEKDAY_BARS = (14, 15, 16, 17, 18, 19, 20)
 RE_SPECIAL_RADIOS = (33, 34, 35, 36, 37)
 RE_SPECIAL_BARS = (43, 44, 45, 46, 47)
 RE_CALENDAR = 62
-# Rule editor (3214): the weekday radio buttons (Sunday first), each tab's Edit (->
-# 3217 for the selected day) and OK.
+# Rule editor (3214): Edit opens 3217 for the selected day.
 RE_WEEKDAY_RADIOS = (2, 3, 4, 5, 6, 7, 8)
 RE_EDIT_WEEKDAY, RE_EDIT_SPECIAL, RE_OK = 23, 50, 29
 WEEKDAYS = (
@@ -109,50 +107,39 @@ WEEKDAYS = (
     "friday",
     "saturday",
 )
-# Rule copy (3215) and calendar copy (3216): the source's text, the target list
-# (multiple rows may be selected), OK and Cancel.
+# Rule copy (3215) and calendar copy (3216); the target list takes several rows.
 CS_FROM, CS_LIST, CS_OK, CS_CANCEL = 2, 4, 5, 6
 CC_FROM, CC_LIST, CC_OK, CC_CANCEL = 2, 4, 14, 15
-# Rule settings (3217): the time range list, Delete; the edit group's start and end
-# (texts, Change), the setpoint, cool and heat checkboxes, the cool and heat
-# setpoints (texts, Change), Add, Modify (the selected row), OK, Cancel.
+# Rule settings (3217); Modify changes the selected row.
 RS_LIST, RS_DELETE = 2, 3
 RS_START, RS_START_BUTTON, RS_END, RS_END_BUTTON = 7, 8, 10, 11
 RS_SETPOINT, RS_COOL, RS_HEAT = 12, 13, 14
 RS_COOL_TEXT, RS_COOL_BUTTON, RS_HEAT_TEXT, RS_HEAT_BUTTON = 15, 16, 17, 18
 RS_ADD, RS_MODIFY, RS_OK, RS_CANCEL = 19, 20, 21, 22
-# Installer settings (3220): Change -> 3221, 3223, 3224, Close. Part 9 clears the
-# energy navigator's data: never clicked.
+# Installer settings (3220): Change -> 3221, 3223, 3224. Part 9 clears the energy
+# navigator's data: never clicked.
 IN_ROOM_TEMP, IN_COLLECT, IN_CONVERSION, IN_CLOSE, IN_DATA_CLEAR = 4, 5, 6, 7, 9
-# Room temperature (3221): the point list (name, setting), the radio buttons (the
-# unit's return air temperature, an analog input), the analog input's name and its
-# Change (-> 3222), Change applying the choice to the selected row, OK,
-# Cancel. 4-8 are disabled until a row is selected.
+# Room temperature (3221): the analog input's Change opens 3222; 4-8 are
+# disabled until a row is selected.
 RT_LIST, RT_OWN, RT_ANALOG, RT_ANALOG_TEXT = 2, 4, 5, 6
 RT_ANALOG_BUTTON, RT_APPLY, RT_OK, RT_CANCEL = 7, 8, 9, 10
 # Analog input selection (3222).
 AS_LIST, AS_OK, AS_CANCEL = 2, 3, 4
 # Data collection start month (3223).
 CM_MONTH, CM_OK, CM_CANCEL = 2, 3, 4
-# Energy conversion (3224): name, and the unit texts for 1, 1000 and 1000000, each
-# with its Change (text, button); OK (disabled while nothing changed), Cancel.
+# Energy conversion (3224): OK is disabled while nothing changed.
 CV_FIELDS = {"name": (2, 3), "one": (6, 7), "thousand": (9, 10), "million": (12, 13)}
 CV_OK, CV_CANCEL = 14, 15
-# Planning settings (3201): planned Change -> 3202, actual -> 3203, close.
+# Planning settings (3201): planned -> 3202, actual -> 3203.
 PS_PLANNED, PS_ACTUAL, PS_CLOSE = 2, 4, 5
-# Planned consumption (3202): energy type, tabs (fiscal years), Cancel (OK is 14);
-# per tab: yearly / monthly radio, ratio text and its unit, expected yearly text,
-# month list.
+# Planned consumption (3202), per tab a fiscal year; OK is 14.
 PL_TYPE, PL_TABS, PL_CANCEL = 2, 3, 15
 PL_TAB_PARTS = ((4, 11, 6, 7, 10, 13), (18, 25, 20, 21, 24, 27))
-# Actual consumption (3203): energy type, tabs, Cancel (OK is 15); per tab the month
-# list, the CO2 factor's text and its unit label.
+# Actual consumption (3203); OK is 15.
 AC_TYPE, AC_TABS, AC_CANCEL = 2, 3, 16
 AC_TAB_PARTS = ((5, 8, 9), (21, 24, 25))
-# Equipment management (3210): sampling target Change -> 3218, rule settings ->
-# 3213, close, and per tab (on/off, setpoint) its Details button (-> 3211, enabled
-# only with data). Rules (3213): the list, Edit (-> 3214), close. Sampling targets
-# (3218): list, Cancel.
+# Equipment management (3210): sampling target -> 3218, rules -> 3213, Details
+# -> 3211 (enabled only with data). Rules (3213): Edit -> 3214.
 EQ_TARGET, EQ_RULES, EQ_CLOSE = 9, 10, 20
 EQ_DETAILS = (16, 34)
 RL_LIST, RL_EDIT, RL_CLOSE = 2, 8, 10
