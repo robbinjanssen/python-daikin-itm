@@ -1092,7 +1092,7 @@ async def set_password(
 class ServiceEditMixin:
     """ItmClient's leakage check, layout setup, R32 port and password methods."""
 
-    if TYPE_CHECKING:  # what ItmClient provides
+    if TYPE_CHECKING:
         # pylint: disable=unused-argument
         dry_run: bool
         read_only: bool

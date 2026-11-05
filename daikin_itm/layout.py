@@ -209,7 +209,7 @@ async def read_layout(s: _Session, *, names: bool = False) -> Layout:
 class LayoutMixin:  # pylint: disable=too-few-public-methods
     """ItmClient's layout view reader."""
 
-    if TYPE_CHECKING:  # what ItmClient provides
+    if TYPE_CHECKING:
         # pylint: disable=unused-argument
         async def _in_session(
             self, call: Callable[[_Session], Awaitable[_T]]

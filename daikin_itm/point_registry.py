@@ -249,7 +249,7 @@ async def read_registrations(
 class PointRegistryMixin:  # pylint: disable=too-few-public-methods
     """ItmClient's management point registration reader."""
 
-    if TYPE_CHECKING:  # what ItmClient provides
+    if TYPE_CHECKING:
         # pylint: disable=unused-argument
         async def _in_session(
             self, call: Callable[[_Session], Awaitable[_T]]

@@ -1439,7 +1439,7 @@ class DemandMixin:
     ReadOnlyError before anything is sent. Tested against the simulated iTM only.
     """
 
-    if TYPE_CHECKING:  # what ItmClient provides
+    if TYPE_CHECKING:
         # pylint: disable=unused-argument
         dry_run: bool
         read_only: bool
