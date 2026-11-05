@@ -17,6 +17,7 @@ import pytest
 
 from daikin_itm import Capabilities, ItmClient, ItmError
 from daikin_itm import cli as itm_cli
+from daikin_itm.cli_common import _safe
 
 from .export_archive import history_archive
 from .fake_exports import FakeExportsITM
@@ -452,7 +453,7 @@ def test_session_file(host: str, name: str) -> None:
 )
 def test_safe(text: str, expected: str) -> None:
     """Control and format characters are replaced."""
-    assert itm_cli._safe(text) == expected
+    assert _safe(text) == expected
 
 
 def test_print_change_without_unit(capsys: pytest.CaptureFixture[str]) -> None:

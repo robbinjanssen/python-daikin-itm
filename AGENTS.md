@@ -25,7 +25,8 @@ The Home Assistant integration
 ```text
 daikin_itm/
   __init__.py         public API (re-exports)
-  client.py           ItmClient, the session stores, _Session (one logged-in session)
+  client.py           ItmClient (with the feature modules' *Mixin classes), the session
+                      stores, _Session (one logged-in session)
   exceptions.py       ItmError and subclasses
   models.py           Unit, UnitSettings, Capabilities, part IDs, screen readers
   lang.py             the labels the iTM only sends as text, per display language
@@ -52,7 +53,11 @@ daikin_itm/
   trace.py            the CLI's --trace (request numbers, replies without token)
   protocol.py         encoding and decoding of /cmd/ requests and replies
   state.py            UIState: the merged view of the screens built from delta replies
-  cli.py              the itm command
+  cli.py              the itm command: parsing, sessions, the unit commands
+  cli_common.py       output and argument helpers shared by the CLI modules
+  schedule_cli.py     schedules; energy_cli.py energy navigator, PPD, exports;
+  system_cli.py       system, users, zones, region and clock; service_cli.py the
+                      installer's service commands, demand, emergency stop
   py.typed
 tests/
   fake_itm.py                  simulated iTM used by the behaviour tests

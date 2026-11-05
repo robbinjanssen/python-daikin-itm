@@ -8,9 +8,9 @@ default, change with an action. Kept apart from ``cli.py``, which adds them with
 from __future__ import annotations
 
 import sys
-import unicodedata
 from typing import TYPE_CHECKING, Any
 
+from .cli_common import _out, _print_plan
 from .dealer_functions import (
     InterlockActionSpec,
     InterlockConditionSpec,
@@ -50,24 +50,6 @@ ACTION_KEYS = (
     "lock-mode",
     "lock-setpoint",
 )
-
-
-def _out(text: str = "") -> None:
-    """Print text from the iTM with control and format characters replaced."""
-    safe = "".join(
-        "?" if unicodedata.category(ch).startswith("C") else ch for ch in text
-    )
-    print(safe)  # noqa: T201 - a command line tool prints
-
-
-def _planned(client: ItmClient) -> bool:
-    """Print a dry run's plan; tell whether this was a dry run."""
-    if not client.dry_run:
-        return False
-    _out("dry run, would send:")
-    for line in client.planned:
-        _out(f"  {line}")
-    return True
 
 
 def _num(value: float | None) -> str:
@@ -141,7 +123,7 @@ async def _templimit(client: ItmClient, args: argparse.Namespace) -> None:
         await client.delete_temperature_limit(name)
         if not client.dry_run:
             _out(f"{name}: deleted")
-    if not _planned(client) and result is not None:
+    if not _print_plan(client) and result is not None:
         _print_limits([result])
 
 
@@ -182,7 +164,7 @@ async def _slidetemp(client: ItmClient, args: argparse.Namespace) -> None:
         await client.delete_sliding_temperature(name)
         if not client.dry_run:
             _out(f"{name}: deleted")
-    if not _planned(client) and result is not None:
+    if not _print_plan(client) and result is not None:
         _print_slides([result])
 
 
@@ -194,7 +176,7 @@ async def _heatopt(client: ItmClient, args: argparse.Namespace) -> None:
         result = await client.set_heating_optimisation(
             args.units or None, enabled=args.action == "on"
         )
-        if _planned(client) or result is None:
+        if _print_plan(client) or result is None:
             return
         units = result
     for u in units:
@@ -375,7 +357,7 @@ async def _interlock(client: ItmClient, args: argparse.Namespace) -> None:
             outputs=_output_specs(args),
             conditions=_condition_specs(args),
         )
-        if not _planned(client) and setup is not None:
+        if not _print_plan(client) and setup is not None:
             _print_setup(setup)
         return
     calls: dict[str, Callable[[], Awaitable[Any]]] = {
@@ -387,7 +369,7 @@ async def _interlock(client: ItmClient, args: argparse.Namespace) -> None:
         "delete": lambda: client.delete_interlock(name),
     }
     await calls[action]()
-    if not _planned(client):
+    if not _print_plan(client):
         _out(f"{name}: {action} done")
 
 

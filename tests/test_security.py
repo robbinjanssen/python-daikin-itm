@@ -12,7 +12,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from daikin_itm import FileSessionStore, ItmClient, ProtocolError
-from daikin_itm.cli import _safe
+from daikin_itm.cli_common import _safe
 from daikin_itm.protocol import parse_reply
 
 if TYPE_CHECKING:

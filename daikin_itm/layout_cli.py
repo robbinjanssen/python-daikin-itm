@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import os
 import sys
-import unicodedata
 from typing import TYPE_CHECKING, Any
+
+from .cli_common import _out
 
 if TYPE_CHECKING:
     import argparse
@@ -17,14 +18,6 @@ if TYPE_CHECKING:
 
     from .client import ItmClient
     from .layout import Layout, LayoutItem
-
-
-def _out(text: str = "") -> None:
-    """Print text from the iTM with control and format characters replaced."""
-    safe = "".join(
-        "?" if unicodedata.category(ch).startswith("C") else ch for ch in text
-    )
-    print(safe)  # noqa: T201 - a command line tool prints
 
 
 def _item_line(item: LayoutItem) -> str:
