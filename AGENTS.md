@@ -30,6 +30,7 @@ daikin_itm/
   session.py          _Session: one logged-in session, the screen work behind ItmClient
   settings_dialog.py  the unit settings dialog (screen 7), a _Session mixin
   exceptions.py       ItmError and subclasses
+  _util.py            helpers shared by the modules (T, ignore)
   models.py           Unit, UnitSettings, Capabilities, part IDs, screen readers
   lang.py             the labels the iTM only sends as text, per display language
   menu.py             the main menu's screens: IDs, models and readers

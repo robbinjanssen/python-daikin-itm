@@ -41,9 +41,11 @@ import html
 import math
 import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING
 
 from . import energy_navigator as en
+from ._util import T as _T
+from ._util import ignore as _ignore
 from .exceptions import ItmCommandError
 from .menu import MenuScreen
 from .protocol import DataType, EventType
@@ -67,7 +69,6 @@ if TYPE_CHECKING:
     from .session import _Session
     from .state import UIState
 
-_T = TypeVar("_T")
 
 # Planned consumption (3202).
 PL_OK = 14
@@ -1063,10 +1064,6 @@ async def read_installer(s: _Session, password: str) -> en.EnergyInstallerSettin
         msg = "the energy navigator's installer settings did not open"
         raise ItmCommandError(msg)
     return settings
-
-
-async def _ignore(call: Awaitable[Any]) -> None:
-    await call
 
 
 class EnergyMixin:

@@ -34,8 +34,10 @@ from __future__ import annotations
 
 import html
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING
 
+from ._util import T as _T
+from ._util import ignore as _ignore
 from .exceptions import ItmCommandError
 from .menu import (
     MB_EMERGENCY_STOP,
@@ -53,7 +55,6 @@ if TYPE_CHECKING:
     from .session import _Session
     from .state import UIState
 
-_T = TypeVar("_T")
 
 # The program list (200, ScEmgStopMain).
 MAIN = MenuScreen.EMERGENCY_STOP
@@ -578,10 +579,6 @@ async def release(s: _Session, name: str) -> bool:
         return True
     finally:
         await _leave(s, RELEASE, RL_CANCEL)
-
-
-async def _ignore(call: Awaitable[Any]) -> None:
-    await call
 
 
 class EmergencyMixin:

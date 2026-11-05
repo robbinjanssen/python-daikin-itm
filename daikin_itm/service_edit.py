@@ -49,7 +49,7 @@ import html
 import io
 import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any
 
 from . import exports
 from .exceptions import ItmCommandError, ReadOnlyError
@@ -61,12 +61,12 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from datetime import date
 
+    from ._util import T as _T
     from .exports import Download
     from .protocol import Reply
     from .session import _Session
     from .state import UIState
 
-_T = TypeVar("_T")
 
 MENULIST = MenuScreen.MENULIST
 # Menu list buttons: layout setup and leakage check (service tab), password setting

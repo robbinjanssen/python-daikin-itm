@@ -12,8 +12,10 @@ from __future__ import annotations
 import hashlib
 import html
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any
 
+from ._util import T as _T
+from ._util import ignore as _ignore
 from .exceptions import ItmCommandError, LoginRejected, SessionEnded
 from .menu import CLOSE_PART, DATE_FORMATS, MenuScreen
 from .protocol import NO_TOKEN, DataType, EventType, ScreenID
@@ -36,7 +38,7 @@ from .system import (
     row_index,
     web_users_from_screen,
 )
-from .system_edit import _close, _ignore, _open, _radio
+from .system_edit import _close, _open, _radio
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable
@@ -48,7 +50,6 @@ if TYPE_CHECKING:
     from .state import UIState
     from .system import SystemSettings, WebUser
 
-_T = TypeVar("_T")
 
 # The logged-in user's own settings (1205), reached from the login screen.
 OWN_SCREEN, LOGIN_SETTINGS_BUTTON = 1205, 5

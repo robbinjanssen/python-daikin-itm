@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import html
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any
 
 from .exceptions import ItmCommandError
 from .models import P_NAME, PointKind, point_kind
@@ -35,10 +35,10 @@ from .protocol import DataType, EventType, ScreenID
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from ._util import T as _T
     from .session import _Session
     from .state import UIState
 
-_T = TypeVar("_T")
 
 MAINMENU, LAYOUT_VIEW = ScreenID.MAINMENU, ScreenID.STDLAYOUT
 # Main menu bar (screen 0): the standard view and layout view toggle buttons.

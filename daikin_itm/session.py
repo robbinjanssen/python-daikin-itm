@@ -9,7 +9,7 @@ import logging
 import re
 from dataclasses import replace
 from datetime import date, datetime
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any
 
 import aiohttp
 
@@ -174,6 +174,7 @@ from .users_edit import UsersSessionMixin
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from ._util import T as _T
     from .client import ItmClient, Point, SessionStore
     from .protocol import Reply
 
@@ -183,9 +184,6 @@ _LOGGER = logging.getLogger(__name__)
 ICON_BTN_TOP, ICON_BTN_DOWN, ICON_BTN_UP, ICON_BTN_LIST, ICON_PANEL = 1, 2, 3, 4, 6
 ICON_ID_ZONE = 1000
 LOGIN_BUTTON = 4
-
-
-_T = TypeVar("_T")
 
 
 class _Session(

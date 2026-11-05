@@ -29,8 +29,10 @@ import asyncio
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING
 
+from ._util import T as _T
+from ._util import ignore as _ignore
 from .exceptions import ItmCommandError
 from .menu import MenuScreen
 from .protocol import DataType, EventType
@@ -43,7 +45,6 @@ if TYPE_CHECKING:
     from .session import _Session
     from .state import UIState
 
-_T = TypeVar("_T")
 
 # GETs a path on the iTM (e.g. "/sdlfs/WebExport/x.csv") and returns its body.
 Fetch = Callable[[str], Awaitable[bytes]]
@@ -491,10 +492,6 @@ async def backup(s: _Session, fetch: Fetch) -> Download | None:
         raise
     finally:
         await s.close_menu()
-
-
-async def _ignore(call: Awaitable[Any]) -> None:
-    await call
 
 
 class ExportsMixin:

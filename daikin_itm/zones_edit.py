@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import contextlib
 import html
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any
 
+from ._util import T as _T
+from ._util import ignore as _ignore
 from .exceptions import ItmCommandError
 from .menu import CLOSE_PART, MenuScreen
 from .models import point_kind
@@ -33,7 +35,6 @@ if TYPE_CHECKING:
         ZoneInfo,
     )
 
-_T = TypeVar("_T")
 
 # Menu list buttons (screen 5).
 MB_ZONES, MB_POINTS = 21, 23
@@ -529,10 +530,6 @@ async def set_point_icon(s: _Session, point: str, icon: int) -> bool:
 def _shown(value: Any, key: str) -> Any:
     """Return a read-back value for comparing: no description reads as ""."""
     return "" if key == "info" and value is None else value
-
-
-async def _ignore(call: Awaitable[Any]) -> None:
-    await call
 
 
 class ZonesMixin:

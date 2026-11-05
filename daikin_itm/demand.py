@@ -48,8 +48,10 @@ from __future__ import annotations
 import html
 import math
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any
 
+from ._util import T as _T
+from ._util import ignore as _ignore
 from .energy_navigator import ShownValue, parse_shown
 from .exceptions import ItmCommandError, ReadOnlyError
 from .menu import MenuScreen
@@ -95,7 +97,6 @@ if TYPE_CHECKING:
     from .session import _Session
     from .state import UIState
 
-_T = TypeVar("_T")
 
 # The menu list's power limit button and the main menu bar's energy saving button.
 MB_DEMAND = 109
@@ -1424,10 +1425,6 @@ def check_interlock_ports(
 
 
 # -- the client's methods ------------------------------------------------------------
-
-
-async def _ignore(call: Awaitable[Any]) -> None:
-    await call
 
 
 class DemandMixin:

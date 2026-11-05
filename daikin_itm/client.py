@@ -81,7 +81,7 @@ from .point_registry import PointRegistryMixin
 from .protocol import MAX_REPLY_CHARS, NO_TOKEN, WEB_VERSION, ScreenID
 from .schedule_edit import ScheduleMixin
 from .service_edit import ServiceEditMixin
-from .session import _T, ICON_ID_ZONE, _Session, _zone_name
+from .session import ICON_ID_ZONE, _Session, _zone_name
 from .settings_dialog import _run_to_completion
 from .system import (
     NW_TEXT_FIELDS,
@@ -99,6 +99,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
     from datetime import date
 
+    from ._util import T as _T
     from .service import ServiceSettings
 
 
@@ -215,11 +216,6 @@ class FileSessionStore:
         except BaseException:
             Path(tmp).unlink(missing_ok=True)
             raise
-
-
-async def _ignore(call: Awaitable[Any]) -> None:
-    """Await a session write and drop its "sent" flag (dry runs plan instead)."""
-    await call
 
 
 def _power_is(unit: Unit, *, on: bool) -> bool:

@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import html
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any
 
 from .exceptions import ItmCommandError
 from .menu import MenuScreen
@@ -37,11 +37,11 @@ from .menu import MenuScreen
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from ._util import T as _T
     from .protocol import Reply
     from .session import _Session
     from .state import UIState
 
-_T = TypeVar("_T")
 
 MENULIST = MenuScreen.MENULIST
 MB_POINT_REGISTRY = 63  # service tab: Mgmt. Point Data Register

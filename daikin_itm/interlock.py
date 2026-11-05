@@ -34,7 +34,7 @@ disabled (ENABLED 0), never because it is hidden.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING
 
 from .dealer_functions import (
     _activation,
@@ -82,10 +82,10 @@ from .schedule_edit import EVT_SETPOINT_BUTTON, LOCK_ORDER, POWER_RADIOS
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable
 
+    from ._util import T as _T
     from .session import _Session
     from .state import UIState
 
-_T = TypeVar("_T")
 
 # Interlock (900): the program list.
 I_LIST, I_ENABLE, I_DISABLE, I_CREATE, I_COPY = 1, 3, 4, 6, 7

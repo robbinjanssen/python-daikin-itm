@@ -15,9 +15,11 @@ import html
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from . import zones_edit
+from ._util import T as _T
+from ._util import ignore as _ignore
 from .exceptions import ItmCommandError, SessionEnded
 from .menu import (
     CLOSE_PART,
@@ -110,7 +112,6 @@ if TYPE_CHECKING:
         ZoneAttributes,
     )
 
-_T = TypeVar("_T")
 
 # E-mail notification (1300), address (1301), test mail (1302), server (1303).
 EMAIL_LIST, EMAIL_ON, EMAIL_OFF = 1, 3, 4
@@ -553,10 +554,6 @@ async def set_remote_management(
         return True
     finally:
         await s.close_screen(r)
-
-
-async def _ignore(call: Awaitable[Any]) -> None:
-    await call
 
 
 class SystemMixin:  # pylint: disable=too-many-public-methods

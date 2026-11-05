@@ -24,7 +24,7 @@ from __future__ import annotations
 import dataclasses
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING
 
 from .exceptions import ItmCommandError
 from .lang import mode_from_label
@@ -81,12 +81,12 @@ from .protocol import DataType, EventType
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable
 
+    from ._util import T as _T
     from .menu import ScheduleDay, ScheduleProgram, ScheduleSummary
     from .protocol import Reply
     from .session import _Session
     from .state import UIState
 
-_T = TypeVar("_T")
 
 KEPT_EVENT_SETTINGS = (
     "power",
@@ -994,10 +994,6 @@ async def copy_calendar(s: _Session, program: str, targets: tuple[str, ...]) -> 
             await s.send(CALENDAR_COPY, CC_CANCEL)
             s.state.screens.pop(CALENDAR_COPY, None)
         await s.close_screen(MenuScreen.SCHEDULE)
-
-
-async def _ignore(call: Awaitable[Any]) -> None:
-    await call
 
 
 class ScheduleMixin:

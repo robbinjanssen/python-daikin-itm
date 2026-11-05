@@ -39,7 +39,7 @@ from __future__ import annotations
 import html
 import re
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any
 
 from .exceptions import ItmCommandError
 from .menu import (
@@ -53,11 +53,11 @@ from .protocol import DataType, EventType
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable
 
+    from ._util import T as _T
     from .protocol import Reply
     from .session import _Session
     from .state import UIState
 
-_T = TypeVar("_T")
 
 # Temperature limit (400) and sliding temperature (500): the group list.
 G_CLOSE, G_LIST, G_ENABLE, G_DISABLE = 1, 3, 5, 6

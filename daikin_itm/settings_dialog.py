@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any
 
 from .exceptions import ItmCommandError
 from .models import (
@@ -63,12 +63,11 @@ from .protocol import DataType, EventType, ScreenID
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
 
+    from ._util import T as _T
     from .client import ItmClient
     from .models import Capabilities, DialogSetting
     from .protocol import Reply
     from .state import UIState
-
-_T = TypeVar("_T")
 
 
 async def _run_to_completion(coro: Coroutine[Any, Any, _T]) -> _T:
