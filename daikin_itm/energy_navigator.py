@@ -107,8 +107,7 @@ WEEKDAYS = (
     "friday",
     "saturday",
 )
-# Rule copy (3215) and calendar copy (3216); the target list takes several rows.
-CS_FROM, CS_LIST, CS_OK, CS_CANCEL = 2, 4, 5, 6
+# Calendar copy (3216); the target list takes several rows.
 CC_FROM, CC_LIST, CC_OK, CC_CANCEL = 2, 4, 14, 15
 # Rule settings (3217); Modify changes the selected row.
 RS_LIST, RS_DELETE = 2, 3
