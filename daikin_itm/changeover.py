@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
+from ._bases import ClientCore, SessionCore
 from .exceptions import ItmCommandError
 from .menu import (
     CG_ADD,
@@ -30,56 +29,9 @@ from .menu import (
 )
 from .protocol import DataType, EventType
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
-    from contextlib import AbstractAsyncContextManager
 
-    from .protocol import Reply
-    from .session import _Session
-    from .state import UIState
-
-
-class ChangeoverSessionMixin:
+class ChangeoverSessionMixin(SessionCore):
     """_Session's changeover screen writes."""
-
-    if TYPE_CHECKING:
-        # pylint: disable=unused-argument
-        state: UIState
-
-        async def send(  # noqa: PLR0913, PLR0917  # pylint: disable=too-many-arguments
-            self,
-            screen: int = -1,
-            part: int = -1,
-            event: int = EventType.CLICK,
-            data_type: int = DataType.NONE,
-            number: int = -1,
-            string: str = "",
-            array: tuple[int, ...] = (),
-        ) -> Reply:
-            """Send a GUI event and merge the reply into the UI state."""
-
-        async def write(  # noqa: PLR0913, PLR0917  # pylint: disable=too-many-arguments
-            self,
-            label: str,
-            screen: int,
-            part: int,
-            event: int = EventType.CLICK,
-            data_type: int = DataType.NONE,
-            number: int = -1,
-            string: str = "",
-        ) -> Reply | None:
-            """Send the request that makes a change, unless this is a dry run."""
-
-        async def press_ok(self, label: str, screen: int, ok: int, cancel: int) -> bool:
-            """Press a screen's OK, or cancel in a dry run."""
-
-        async def _answer_confirm(self, screen: int, reply: Reply) -> None: ...
-
-        async def open_menu_screen(self, button: int, screen: MenuScreen) -> bool:
-            """Press a menu list button and tell whether its screen opened."""
-
-        async def close_screen(self, screen: MenuScreen) -> None:
-            """Close (or cancel) a menu screen, if it is open. Never OK."""
 
     async def _select_changeover_group(self, name: str) -> ChangeoverGroup:
         await self.open_menu_screen(MB_CHANGEOVER, MenuScreen.CHANGEOVER)
@@ -256,21 +208,8 @@ class ChangeoverSessionMixin:
             await self.close_screen(MenuScreen.CHANGEOVER)
 
 
-class ChangeoverMixin:
+class ChangeoverMixin(ClientCore):
     """ItmClient's auto changeover methods."""
-
-    if TYPE_CHECKING:
-        # pylint: disable=unused-argument
-        dry_run: bool
-
-        _session: Callable[[], AbstractAsyncContextManager[_Session]]
-
-        def _writable(self) -> None: ...
-
-        async def fetch_changeover_groups(
-            self, *, details: bool = False
-        ) -> list[ChangeoverGroup]:
-            """Read the auto changeover groups."""
 
     async def _changeover_result(self, name: str) -> ChangeoverGroup | None:
         """Return the group as read in a fresh session, or None in a dry run."""

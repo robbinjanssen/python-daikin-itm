@@ -15,7 +15,7 @@ import contextlib
 import html
 from typing import TYPE_CHECKING, Any
 
-from ._util import T as _T
+from ._bases import ClientCore
 from ._util import ignore as _ignore
 from .exceptions import ItmCommandError
 from .menu import CLOSE_PART, MenuScreen
@@ -23,14 +23,13 @@ from .models import point_kind
 from .protocol import DataType, EventType
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
+    from collections.abc import AsyncIterator, Iterable
 
     from .protocol import Reply
     from .session import _Session
     from .state import UIState
     from .system import (
         ManagementPoint,
-        SystemSettings,
         ZoneAttributes,
         ZoneInfo,
     )
@@ -532,27 +531,8 @@ def _shown(value: Any, key: str) -> Any:
     return "" if key == "info" and value is None else value
 
 
-class ZonesMixin:
+class ZonesMixin(ClientCore):
     """ItmClient's zone structure, icon and point attribute writes."""
-
-    if TYPE_CHECKING:
-        # pylint: disable=unused-argument
-        dry_run: bool
-
-        async def _in_session(
-            self, call: Callable[[_Session], Awaitable[_T]]
-        ) -> _T: ...
-
-        async def _system_write(
-            self, call: Callable[[_Session], Awaitable[None]]
-        ) -> None: ...
-
-        def _experimental(self, what: str) -> None: ...
-
-        async def fetch_system(
-            self, only: Iterable[str] | None = None
-        ) -> SystemSettings:
-            """Read the system settings."""
 
     async def _zone_list(self) -> tuple[ZoneInfo, ...]:
         return (await self.fetch_system(["zones"])).zones or ()

@@ -14,7 +14,7 @@ import html
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from ._util import T as _T
+from ._bases import ClientCore, SessionCore
 from ._util import ignore as _ignore
 from .exceptions import ItmCommandError, LoginRejected, SessionEnded
 from .menu import CLOSE_PART, DATE_FORMATS, MenuScreen
@@ -41,14 +41,12 @@ from .system import (
 from .system_edit import _close, _open, _radio
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Iterable
-    from contextlib import AbstractAsyncContextManager
+    from collections.abc import Iterable
 
-    from .client import ItmClient
     from .protocol import Reply
     from .session import _Session
     from .state import UIState
-    from .system import SystemSettings, WebUser
+    from .system import WebUser
 
 
 # The logged-in user's own settings (1205), reached from the login screen.
@@ -408,37 +406,8 @@ async def set_web_user_screens(
         await _leave_user_screens(s)
 
 
-class UsersMixin:
+class UsersMixin(ClientCore):
     """ItmClient's web user and own settings methods."""
-
-    if TYPE_CHECKING:
-        # pylint: disable=unused-argument
-        dry_run: bool
-
-        async def _in_session(
-            self, call: Callable[[_Session], Awaitable[_T]]
-        ) -> _T: ...
-
-        async def _system_write(
-            self, call: Callable[[_Session], Awaitable[None]]
-        ) -> None: ...
-
-        def _writable(self) -> None: ...
-
-        def _experimental(self, what: str) -> None: ...
-
-        _username: str
-        _password: str
-
-        _own_session: Callable[[], AbstractAsyncContextManager[_Session]]
-
-        async def fetch_system(
-            self, only: Iterable[str] | None = None
-        ) -> SystemSettings:
-            """Read the system settings."""
-
-        async def fetch_language(self) -> str | None:
-            """Read the display language as a code."""
 
     def _not_own_account(self, name: str) -> None:
         if name == self._username:
@@ -709,61 +678,8 @@ class UsersMixin:
         return True
 
 
-class UsersSessionMixin:
+class UsersSessionMixin(SessionCore):
     """_Session's web user screen writes."""
-
-    if TYPE_CHECKING:
-        # pylint: disable=unused-argument
-        state: UIState
-        _client: ItmClient
-
-        async def send(  # noqa: PLR0913, PLR0917  # pylint: disable=too-many-arguments
-            self,
-            screen: int = -1,
-            part: int = -1,
-            event: int = EventType.CLICK,
-            data_type: int = DataType.NONE,
-            number: int = -1,
-            string: str = "",
-            array: tuple[int, ...] = (),
-        ) -> Reply:
-            """Send a GUI event and merge the reply into the UI state."""
-
-        async def write(  # noqa: PLR0913, PLR0917  # pylint: disable=too-many-arguments
-            self,
-            label: str,
-            screen: int,
-            part: int,
-            event: int = EventType.CLICK,
-            data_type: int = DataType.NONE,
-            number: int = -1,
-            string: str = "",
-        ) -> Reply | None:
-            """Send the request that makes a change, unless this is a dry run."""
-
-        async def press_ok(self, label: str, screen: int, ok: int, cancel: int) -> bool:
-            """Press a screen's OK, or cancel in a dry run."""
-
-        async def _answer_confirm(self, screen: int, reply: Reply) -> None: ...
-
-        async def close_screen(self, screen: MenuScreen) -> None:
-            """Close (or cancel) a menu screen, if it is open. Never OK."""
-
-        async def _select_listed(
-            self, screen: int, part: int, column: int, name: str, what: str
-        ) -> None: ...
-
-        async def click(self, screen: int, part: int, what: str) -> Reply:
-            """Click a button, naming it when the iTM has it disabled."""
-
-        async def answer_text(
-            self, screen: int, button: int, text: str, what: str
-        ) -> None:
-            """Press a "change" button and enter text in the input dialog it opens."""
-
-        async def _open_system_screen(
-            self, button: int, screen: MenuScreen
-        ) -> None: ...
 
     async def _answer_password(
         self, reply: Reply, password: str, what: str = "password"

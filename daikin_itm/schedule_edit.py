@@ -26,6 +26,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from ._bases import ClientCore, SessionCore
 from .exceptions import ItmCommandError
 from .lang import mode_from_label
 from .menu import (
@@ -81,7 +82,6 @@ from .protocol import DataType, EventType
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable
 
-    from ._util import T as _T
     from .menu import ScheduleDay, ScheduleProgram, ScheduleSummary
     from .protocol import Reply
     from .session import _Session
@@ -996,26 +996,8 @@ async def copy_calendar(s: _Session, program: str, targets: tuple[str, ...]) -> 
         await s.close_screen(MenuScreen.SCHEDULE)
 
 
-class ScheduleMixin:
+class ScheduleMixin(ClientCore):
     """ItmClient's schedule program and event writes."""
-
-    if TYPE_CHECKING:
-        # pylint: disable=unused-argument
-        dry_run: bool
-
-        async def _in_session(
-            self, call: Callable[[_Session], Awaitable[_T]]
-        ) -> _T: ...
-
-        def _writable(self) -> None: ...
-
-        async def fetch_schedule(
-            self, name: str, *, events: bool = True, details: bool = False
-        ) -> ScheduleProgram:
-            """Read a schedule program in full."""
-
-        async def fetch_schedules(self) -> list[ScheduleSummary]:
-            """Read the schedule programs."""
 
     async def _schedule_write(
         self, call: Callable[[_Session], Awaitable[bool]]
@@ -1387,44 +1369,8 @@ class ScheduleMixin:
         return result
 
 
-class ScheduleSessionMixin:
+class ScheduleSessionMixin(SessionCore):
     """_Session's schedule screen reads and writes."""
-
-    if TYPE_CHECKING:
-        # pylint: disable=unused-argument
-        state: UIState
-
-        async def send(  # noqa: PLR0913, PLR0917  # pylint: disable=too-many-arguments
-            self,
-            screen: int = -1,
-            part: int = -1,
-            event: int = EventType.CLICK,
-            data_type: int = DataType.NONE,
-            number: int = -1,
-            string: str = "",
-            array: tuple[int, ...] = (),
-        ) -> Reply:
-            """Send a GUI event and merge the reply into the UI state."""
-
-        async def write(  # noqa: PLR0913, PLR0917  # pylint: disable=too-many-arguments
-            self,
-            label: str,
-            screen: int,
-            part: int,
-            event: int = EventType.CLICK,
-            data_type: int = DataType.NONE,
-            number: int = -1,
-            string: str = "",
-        ) -> Reply | None:
-            """Send the request that makes a change, unless this is a dry run."""
-
-        async def _answer_confirm(self, screen: int, reply: Reply) -> None: ...
-
-        async def open_menu_screen(self, button: int, screen: MenuScreen) -> bool:
-            """Press a menu list button and tell whether its screen opened."""
-
-        async def close_screen(self, screen: MenuScreen) -> None:
-            """Close (or cancel) a menu screen, if it is open. Never OK."""
 
     async def _select_program(self, name: str) -> None:
         await self.open_menu_screen(MB_SCHEDULE, MenuScreen.SCHEDULE)

@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, cast
 
 from . import zones_edit
-from ._util import T as _T
+from ._bases import ClientCore, SessionCore
 from ._util import ignore as _ignore
 from .exceptions import ItmCommandError, SessionEnded
 from .menu import (
@@ -35,7 +35,7 @@ from .menu import (
     R_FAHRENHEIT,
     MenuScreen,
 )
-from .protocol import DataType, EventType, ScreenID
+from .protocol import DataType, EventType
 from .system import (
     BUZZER_DURATIONS,
     EU_DST_END,
@@ -97,9 +97,8 @@ from .system import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Iterable
+    from collections.abc import Iterable
 
-    from .client import ItmClient
     from .menu import ItmInfo
     from .protocol import Reply
     from .session import _Session
@@ -108,7 +107,6 @@ if TYPE_CHECKING:
         DstRule,
         DstSettings,
         EmailSettings,
-        SystemSettings,
         ZoneAttributes,
     )
 
@@ -556,32 +554,8 @@ async def set_remote_management(
         await s.close_screen(r)
 
 
-class SystemMixin:  # pylint: disable=too-many-public-methods
+class SystemMixin(ClientCore):  # pylint: disable=too-many-public-methods
     """ItmClient's e-mail, confirm dialog, web server and remote management writes."""
-
-    if TYPE_CHECKING:
-        # pylint: disable=unused-argument
-        dry_run: bool
-
-        async def _in_session(
-            self, call: Callable[[_Session], Awaitable[_T]]
-        ) -> _T: ...
-
-        async def _system_write(
-            self, call: Callable[[_Session], Awaitable[None]]
-        ) -> None: ...
-
-        def _writable(self) -> None: ...
-
-        def _experimental(self, what: str) -> None: ...
-
-        async def fetch_info(self) -> ItmInfo:
-            """Read the version, region and time screens."""
-
-        async def fetch_system(
-            self, only: Iterable[str] | None = None
-        ) -> SystemSettings:
-            """Read the system settings."""
 
     async def _email(self) -> EmailSettings:
         email = (await self.fetch_system(["email"])).email
@@ -990,65 +964,8 @@ class SystemMixin:  # pylint: disable=too-many-public-methods
         return info
 
 
-class SystemSessionMixin:  # pylint: disable=too-many-public-methods
+class SystemSessionMixin(SessionCore):  # pylint: disable=too-many-public-methods
     """_Session's system screen reads and writes."""
-
-    if TYPE_CHECKING:
-        # pylint: disable=unused-argument
-        state: UIState
-        _client: ItmClient
-
-        async def send(  # noqa: PLR0913, PLR0917  # pylint: disable=too-many-arguments
-            self,
-            screen: int = -1,
-            part: int = -1,
-            event: int = EventType.CLICK,
-            data_type: int = DataType.NONE,
-            number: int = -1,
-            string: str = "",
-            array: tuple[int, ...] = (),
-        ) -> Reply:
-            """Send a GUI event and merge the reply into the UI state."""
-
-        async def write(  # noqa: PLR0913, PLR0917  # pylint: disable=too-many-arguments
-            self,
-            label: str,
-            screen: int,
-            part: int,
-            event: int = EventType.CLICK,
-            data_type: int = DataType.NONE,
-            number: int = -1,
-            string: str = "",
-        ) -> Reply | None:
-            """Send the request that makes a change, unless this is a dry run."""
-
-        async def press_ok(self, label: str, screen: int, ok: int, cancel: int) -> bool:
-            """Press a screen's OK, or cancel in a dry run."""
-
-        async def _answer_confirm(self, screen: int, reply: Reply) -> None: ...
-
-        async def open_menu_screen(self, button: int, screen: MenuScreen) -> bool:
-            """Press a menu list button and tell whether its screen opened."""
-
-        async def close_screen(self, screen: MenuScreen) -> None:
-            """Close (or cancel) a menu screen, if it is open. Never OK."""
-
-        async def _select_listed(
-            self, screen: int, part: int, column: int, name: str, what: str
-        ) -> None: ...
-
-        async def click(self, screen: int, part: int, what: str) -> Reply:
-            """Click a button, naming it when the iTM has it disabled."""
-
-        async def answer_number(
-            self, button: int, value: float, what: str, screen: int = ScreenID.SETTINGS
-        ) -> None:
-            """Press a "change" button and enter a number in the dialog it opens."""
-
-        async def answer_text(
-            self, screen: int, button: int, text: str, what: str
-        ) -> None:
-            """Press a "change" button and enter text in the input dialog it opens."""
 
     async def _pick_option(
         self, screen: int, part: int, index: int | None, what: str

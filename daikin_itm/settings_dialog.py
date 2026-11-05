@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 from typing import TYPE_CHECKING, Any
 
+from ._bases import SessionCore
 from .exceptions import ItmCommandError
 from .models import (
     AIRFLOW_DIRECTIONS,
@@ -64,9 +65,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
 
     from ._util import T as _T
-    from .client import ItmClient
     from .models import Capabilities, DialogSetting
-    from .protocol import Reply
     from .state import UIState
 
 
@@ -109,32 +108,8 @@ async def _run_to_completion(coro: Coroutine[Any, Any, _T]) -> _T:
         return result
 
 
-class SettingsDialogMixin:
+class SettingsDialogMixin(SessionCore):
     """_Session's settings dialog and Details screen."""
-
-    if TYPE_CHECKING:
-        # pylint: disable=unused-argument
-        state: UIState
-        logged_in: bool
-        _client: ItmClient
-
-        async def send(  # noqa: PLR0913, PLR0917  # pylint: disable=too-many-arguments
-            self,
-            screen: int = -1,
-            part: int = -1,
-            event: int = EventType.CLICK,
-            data_type: int = DataType.NONE,
-            number: int = -1,
-            string: str = "",
-            array: tuple[int, ...] = (),
-        ) -> Reply:
-            """Send a GUI event and merge the reply into the UI state."""
-
-        def _writable(self) -> None: ...
-
-        @property
-        def settings_open(self) -> bool:
-            """Whether the settings dialog is open."""
 
     async def open_settings(self) -> None:
         """Open the selected unit's settings dialog."""

@@ -31,6 +31,7 @@ daikin_itm/
   settings_dialog.py  the unit settings dialog (screen 7), a _Session mixin
   exceptions.py       ItmError and subclasses
   _util.py            helpers shared by the modules (T, ignore)
+  _bases.py           ClientCore, SessionCore: the internals the mixins use (typing only)
   models.py           Unit, UnitSettings, Capabilities, part IDs, screen readers
   lang.py             the labels the iTM only sends as text, per display language
   menu.py             the main menu's screens: IDs, models and readers

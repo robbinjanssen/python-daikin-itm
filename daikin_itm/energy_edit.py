@@ -44,7 +44,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from . import energy_navigator as en
-from ._util import T as _T
+from ._bases import ClientCore
 from ._util import ignore as _ignore
 from .exceptions import ItmCommandError
 from .menu import MenuScreen
@@ -1066,24 +1066,8 @@ async def read_installer(s: _Session, password: str) -> en.EnergyInstallerSettin
     return settings
 
 
-class EnergyMixin:
+class EnergyMixin(ClientCore):
     """ItmClient's energy navigator methods."""
-
-    if TYPE_CHECKING:
-        # pylint: disable=unused-argument
-        dry_run: bool
-
-        async def _in_session(
-            self, call: Callable[[_Session], Awaitable[_T]]
-        ) -> _T: ...
-
-        async def _system_write(
-            self, call: Callable[[_Session], Awaitable[None]]
-        ) -> None: ...
-
-        def _writable(self) -> None: ...
-
-        def _experimental(self, what: str) -> None: ...
 
     async def fetch_energy_navigator(
         self, only: Iterable[str] | None = None, *, service_password: str | None = None

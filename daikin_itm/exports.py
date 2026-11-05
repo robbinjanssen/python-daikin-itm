@@ -31,7 +31,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from ._util import T as _T
+from ._bases import ClientCore
 from ._util import ignore as _ignore
 from .exceptions import ItmCommandError
 from .menu import MenuScreen
@@ -494,27 +494,8 @@ async def backup(s: _Session, fetch: Fetch) -> Download | None:
         await s.close_menu()
 
 
-class ExportsMixin:
+class ExportsMixin(ClientCore):
     """ItmClient's PPD and export methods."""
-
-    if TYPE_CHECKING:
-        # pylint: disable=unused-argument
-        dry_run: bool
-        planned: list[str]
-
-        async def _in_session(
-            self, call: Callable[[_Session], Awaitable[_T]]
-        ) -> _T: ...
-
-        async def _system_write(
-            self, call: Callable[[_Session], Awaitable[None]]
-        ) -> None: ...
-
-        async def _get_bytes(self, path: str) -> bytes: ...
-
-        def _writable(self) -> None: ...
-
-        def _experimental(self, what: str) -> None: ...
 
     async def fetch_ppd(
         self,

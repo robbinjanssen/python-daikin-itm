@@ -41,6 +41,7 @@ import re
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
+from ._bases import ClientCore
 from .exceptions import ItmCommandError
 from .menu import (
     MB_HEATING_OPTIMISATION,
@@ -51,9 +52,8 @@ from .menu import (
 from .protocol import DataType, EventType
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Iterable
+    from collections.abc import Awaitable, Iterable
 
-    from ._util import T as _T
     from .protocol import Reply
     from .session import _Session
     from .state import UIState
@@ -840,27 +840,13 @@ async def _discard(call: Awaitable[Any]) -> None:
     await call
 
 
-class DealerFunctionsMixin:  # pylint: disable=too-many-public-methods
+class DealerFunctionsMixin(ClientCore):  # pylint: disable=too-many-public-methods
     """``ItmClient`` methods for the dealer-option functions (mixed in).
 
     Every write runs in its own session and is confirmed by a read in a fresh
     one; with ``dry_run`` it returns None and only plans, with ``read_only`` it
     raises ReadOnlyError before anything is sent.
     """
-
-    if TYPE_CHECKING:
-        dry_run: bool
-
-        async def _in_session(self, call: Callable[[_Session], Awaitable[_T]]) -> _T:
-            """Run one session call (ItmClient)."""
-
-        async def _system_write(
-            self, call: Callable[[_Session], Awaitable[None]]
-        ) -> None:
-            """Run one write session call (ItmClient)."""
-
-        def _experimental(self, what: str) -> None:
-            """Refuse a write not validated on a real iTM yet (ItmClient)."""
 
     # -- temperature limit -------------------------------------------------------------
     async def fetch_temperature_limits(

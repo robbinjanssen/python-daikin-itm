@@ -36,7 +36,7 @@ import html
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from ._util import T as _T
+from ._bases import ClientCore
 from ._util import ignore as _ignore
 from .exceptions import ItmCommandError
 from .menu import (
@@ -49,7 +49,7 @@ from .menu import (
 from .protocol import DataType, EventType, ScreenID
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Iterable
+    from collections.abc import Iterable
 
     from .protocol import Reply
     from .session import _Session
@@ -581,25 +581,8 @@ async def release(s: _Session, name: str) -> bool:
         await _leave(s, RELEASE, RL_CANCEL)
 
 
-class EmergencyMixin:
+class EmergencyMixin(ClientCore):
     """ItmClient's emergency stop methods."""
-
-    if TYPE_CHECKING:
-        # pylint: disable=unused-argument
-        dry_run: bool
-
-        async def _in_session(
-            self, call: Callable[[_Session], Awaitable[_T]]
-        ) -> _T: ...
-
-        async def _system_write(
-            self, call: Callable[[_Session], Awaitable[None]]
-        ) -> None: ...
-
-        def _experimental(self, what: str) -> None: ...
-
-        async def fetch_emergency_stop(self) -> list[EmergencyStopProgram]:
-            """Read the emergency stop programs."""
 
     async def _emergency_program(self, name: str) -> EmergencyStopProgram | None:
         """Return a program as read in a fresh session (armed as its radios show)."""

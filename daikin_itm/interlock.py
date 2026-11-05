@@ -36,6 +36,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
+from ._bases import ClientCore
 from .dealer_functions import (
     _activation,
     _answer_name,
@@ -80,9 +81,8 @@ from .protocol import DataType, EventType
 from .schedule_edit import EVT_SETPOINT_BUTTON, LOCK_ORDER, POWER_RADIOS
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Iterable
+    from collections.abc import Iterable
 
-    from ._util import T as _T
     from .session import _Session
     from .state import UIState
 
@@ -1016,27 +1016,13 @@ async def set_interlock_setup(
         await _leave_interlock(s)
 
 
-class InterlockMixin:
+class InterlockMixin(ClientCore):
     """``ItmClient`` methods for the interlock programs (mixed in).
 
     Every write runs in its own session and is confirmed by a read in a fresh
     one; with ``dry_run`` it returns None and only plans, with ``read_only`` it
     raises ReadOnlyError before anything is sent.
     """
-
-    if TYPE_CHECKING:
-        dry_run: bool
-
-        async def _in_session(self, call: Callable[[_Session], Awaitable[_T]]) -> _T:
-            """Run one session call (ItmClient)."""
-
-        async def _system_write(
-            self, call: Callable[[_Session], Awaitable[None]]
-        ) -> None:
-            """Run one write session call (ItmClient)."""
-
-        def _experimental(self, what: str) -> None:
-            """Refuse a write not validated on a real iTM yet (ItmClient)."""
 
     async def fetch_interlocks(self) -> list[InterlockProgram]:
         """Read the interlock programs and whether they are enabled.

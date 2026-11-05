@@ -52,13 +52,14 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from . import exports
+from ._bases import ClientCore
 from .exceptions import ItmCommandError, ReadOnlyError
 from .menu import CLOSE_PART, MenuScreen
 from .protocol import DataType, EventType
 from .service import MB_R32
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Callable
     from datetime import date
 
     from ._util import T as _T
@@ -1089,22 +1090,8 @@ async def set_password(
 # -- the client's methods -------------------------------------------------------------
 
 
-class ServiceEditMixin:
+class ServiceEditMixin(ClientCore):
     """ItmClient's leakage check, layout setup, R32 port and password methods."""
-
-    if TYPE_CHECKING:
-        # pylint: disable=unused-argument
-        dry_run: bool
-        read_only: bool
-        planned: list[str]
-
-        async def _in_session(
-            self, call: Callable[[_Session], Awaitable[_T]]
-        ) -> _T: ...
-
-        async def _get_bytes(self, path: str) -> bytes: ...
-
-        def _experimental(self, what: str) -> None: ...
 
     def _service_write_allowed(self, *, allowed: bool, flag: str, why: str) -> None:
         """Refuse a write on a read-only client, or without its explicit allowance."""

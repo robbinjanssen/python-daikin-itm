@@ -50,6 +50,7 @@ import math
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
+from ._bases import ClientCore
 from ._util import T as _T
 from ._util import ignore as _ignore
 from .energy_navigator import ShownValue, parse_shown
@@ -1427,24 +1428,13 @@ def check_interlock_ports(
 # -- the client's methods ------------------------------------------------------------
 
 
-class DemandMixin:
+class DemandMixin(ClientCore):
     """ItmClient's demand (power limit) control and energy saving methods.
 
     Every write runs in its own session and is confirmed by a read in a fresh one;
     with ``dry_run`` it returns None and only plans, with ``read_only`` it raises
     ReadOnlyError before anything is sent. Tested against the simulated iTM only.
     """
-
-    if TYPE_CHECKING:
-        # pylint: disable=unused-argument
-        dry_run: bool
-        read_only: bool
-
-        async def _in_session(
-            self, call: Callable[[_Session], Awaitable[_T]]
-        ) -> _T: ...
-
-        def _experimental(self, what: str) -> None: ...
 
     def _demand_writable(self) -> None:
         if self.read_only:

@@ -28,14 +28,12 @@ import html
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
+from ._bases import ClientCore
 from .exceptions import ItmCommandError
 from .models import P_NAME, PointKind, point_kind
 from .protocol import DataType, EventType, ScreenID
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
-
-    from ._util import T as _T
     from .session import _Session
     from .state import UIState
 
@@ -206,14 +204,8 @@ async def read_layout(s: _Session, *, names: bool = False) -> Layout:
         await leave_layout(s)
 
 
-class LayoutMixin:  # pylint: disable=too-few-public-methods
+class LayoutMixin(ClientCore):  # pylint: disable=too-few-public-methods
     """ItmClient's layout view reader."""
-
-    if TYPE_CHECKING:
-        # pylint: disable=unused-argument
-        async def _in_session(
-            self, call: Callable[[_Session], Awaitable[_T]]
-        ) -> _T: ...
 
     async def fetch_layout(self, *, names: bool = False) -> Layout:
         """Read the graphical layout view (screen 3) in one session. Read only.

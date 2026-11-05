@@ -31,13 +31,11 @@ import html
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
+from ._bases import ClientCore
 from .exceptions import ItmCommandError
 from .menu import MenuScreen
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
-
-    from ._util import T as _T
     from .protocol import Reply
     from .session import _Session
     from .state import UIState
@@ -246,14 +244,8 @@ async def read_registrations(
             await _cancel(s, REGISTRY, RG_CANCEL, "leave the point registration")
 
 
-class PointRegistryMixin:  # pylint: disable=too-few-public-methods
+class PointRegistryMixin(ClientCore):  # pylint: disable=too-few-public-methods
     """ItmClient's management point registration reader."""
-
-    if TYPE_CHECKING:
-        # pylint: disable=unused-argument
-        async def _in_session(
-            self, call: Callable[[_Session], Awaitable[_T]]
-        ) -> _T: ...
 
     async def fetch_point_registrations(
         self, password: str, *, details: bool = False
