@@ -348,14 +348,12 @@ from .system import (
     DstSettings,
     EnergyNavigatorInfo,
     HardwareSettings,
-    ManagementPoint,
     NetworkSettings,
     ScreensaverMode,
     ScreensaverSettings,
     SystemSettings,
     WebUser,
     ZoneAttributes,
-    ZoneInfo,
     confirm_dialogs_from_screen,
     dst_from_screen,
     email_from_screen,
@@ -375,6 +373,7 @@ from .system import (
     zones_from_screen,
 )
 from .system_edit import SystemMixin
+from .zones_edit import ZonesMixin
 
 if TYPE_CHECKING:
     from collections.abc import (
@@ -2668,11 +2667,6 @@ async def _ignore(call: Awaitable[Any]) -> None:
     await call
 
 
-def _shown(value: Any, key: str) -> Any:
-    """Return a read-back value for comparing: no description reads as ""."""
-    return "" if key == "info" and value is None else value
-
-
 def _hour(option: str) -> int | None:
     m = re.match(r"\s*(\d+)", str(option))
     return int(m.group(1)) if m else None
@@ -2781,6 +2775,7 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
     SystemMixin,
     ScheduleMixin,
     EnergyMixin,
+    ZonesMixin,
     DemandMixin,
     LayoutMixin,
     PointRegistryMixin,
@@ -4043,329 +4038,6 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
             return await s.read_service()
 
         return await self._in_session(read)
-
-    # -- zone structure and icons -----------------------------------------------------
-    async def _zone_list(self) -> tuple[ZoneInfo, ...]:
-        return (await self.fetch_system(["zones"])).zones or ()
-
-    async def create_zone(
-        self, name: str, *, parent: str | None = None
-    ) -> ZoneInfo | None:
-        """Add a zone (empty), at the top level or below a parent zone.
-
-        Args:
-        ----
-            name: The new zone's name (1-12 characters).
-            parent: The zone to add it below; None for the top level.
-
-        Returns:
-        -------
-            The zone as the zone list shows it, or None in a dry run.
-
-        """
-        await self._system_write(
-            lambda s: _ignore(zones_edit.add_zone(s, name, parent=parent))
-        )
-        if self.dry_run:
-            return None
-        zone = next((z for z in await self._zone_list() if z.name == name), None)
-        if zone is None:
-            msg = f"{name}: the iTM did not add the zone"
-            raise ItmCommandError(msg)
-        return zone
-
-    async def delete_zone(self, name: str) -> None:
-        """Delete an empty zone (one without zones or points in it).
-
-        Args:
-        ----
-            name: The zone.
-
-        """
-        await self._system_write(lambda s: _ignore(zones_edit.delete_zone(s, name)))
-        if not self.dry_run and any(z.name == name for z in await self._zone_list()):
-            msg = f"{name}: the iTM did not delete the zone"
-            raise ItmCommandError(msg)
-
-    async def move_zone(self, name: str, parent: str) -> ZoneInfo | None:
-        """Move a zone below another zone (or to the top). Its zone paths change.
-
-        Args:
-        ----
-            name: The zone to move.
-            parent: Where to: a zone, or the root's name for the top level.
-
-        Returns:
-        -------
-            The zone as the zone list shows it, or None in a dry run.
-
-        """
-        await self._system_write(
-            lambda s: _ignore(zones_edit.move_zone(s, name, parent))
-        )
-        if self.dry_run:
-            return None
-        zones = await self._zone_list()
-        zone = next((z for z in zones if z.name == name), None)
-        target = next((z for z in zones if z.name == parent), None)
-        want = None if target is None else (target.level or 0) + 1
-        if zone is None or (want is not None and zone.level != want):
-            msg = f"{name}: the iTM did not move the zone below {parent}"
-            raise ItmCommandError(msg)
-        return zone
-
-    async def fetch_zone_members(self, zone: str) -> tuple[str, ...]:
-        """Read the management points in a zone, from its member screen.
-
-        Args:
-        ----
-            zone: The zone.
-
-        Returns:
-        -------
-            The points' names.
-
-        """
-        return await self._in_session(lambda s: zones_edit.read_zone_members(s, zone))
-
-    async def set_zone_members(
-        self, zone: str, members: Iterable[str]
-    ) -> tuple[str, ...] | None:
-        """Make a zone's management points exactly these.
-
-        Args:
-        ----
-            zone: The zone.
-            members: The points' names; the others are taken out of the zone.
-
-        Returns:
-        -------
-            The members as read back, or None in a dry run.
-
-        """
-        wanted = tuple(m.strip() for m in members)
-        await self._system_write(
-            lambda s: _ignore(zones_edit.set_zone_members(s, zone, wanted))
-        )
-        if self.dry_run:
-            return None
-        result = await self.fetch_zone_members(zone)
-        if set(result) != set(wanted):
-            msg = f"{zone}: the members are {result}, not {wanted}"
-            raise ItmCommandError(msg)
-        return result
-
-    async def set_zone_member_order(
-        self, zone: str, order: Iterable[str], *, use_jump: bool = False
-    ) -> tuple[str, ...] | None:
-        """Put a zone's members in this order (the order the iTM lists them in).
-
-        Args:
-        ----
-            zone: The zone.
-            order: Member names, first to last; members not named follow them, in
-                their current order.
-            use_jump: Move each member to its row with the list's Jump (one
-                step, 1602) instead of the up button (tested against the
-                simulated iTM only).
-
-        Returns:
-        -------
-            The members as read back, or None in a dry run.
-
-        """
-        if use_jump:
-            self._experimental("reorder zone members with Jump")
-        wanted = tuple(m.strip() for m in order)
-        await self._system_write(
-            lambda s: _ignore(
-                zones_edit.set_zone_member_order(s, zone, wanted, use_jump=use_jump)
-            )
-        )
-        if self.dry_run:
-            return None
-        result = await self.fetch_zone_members(zone)
-        if result[: len(wanted)] != wanted:
-            msg = f"{zone}: the members are in the order {result}, not {wanted}"
-            raise ItmCommandError(msg)
-        return result
-
-    async def set_zone_icon(self, zone: str, icon: int) -> ZoneAttributes | None:
-        """Give a zone another icon (1000-1009).
-
-        Args:
-        ----
-            zone: The zone.
-            icon: The icon ID.
-
-        Returns:
-        -------
-            The zone's attributes as read back, or None in a dry run.
-
-        """
-        await self._system_write(
-            lambda s: _ignore(zones_edit.set_zone_icon(s, zone, icon))
-        )
-        if self.dry_run:
-            return None
-        result = await self.fetch_zone_attributes(zone)
-        if result.icon != icon:
-            msg = f"{zone}: the icon is {result.icon}, not {icon}"
-            raise ItmCommandError(msg)
-        return result
-
-    async def set_point_icon(self, point: str, icon: int) -> ManagementPoint | None:
-        """Give a management point another icon of its own kind.
-
-        Args:
-        ----
-            point: The point's name.
-            icon: The icon ID (one of the same family, e.g. 21xx for indoor units).
-
-        Returns:
-        -------
-            The point as read back, or None in a dry run.
-
-        """
-        await self._system_write(
-            lambda s: _ignore(zones_edit.set_point_icon(s, point, icon))
-        )
-        if self.dry_run:
-            return None
-        points = (await self.fetch_system(["points"])).points or ()
-        result = next((p for p in points if p.name == point), None)
-        if result is None or result.icon != icon:
-            msg = f"{point}: the icon did not become {icon}: {result}"
-            raise ItmCommandError(msg)
-        return result
-
-    async def set_maintenance(self, point: str, *, on: bool) -> bool | None:
-        """Mark a management point as in maintenance, or end it.
-
-        Args:
-        ----
-            point: The point's name, e.g. "1:1-09".
-            on: Put it in maintenance (True) or take it out.
-
-        Returns:
-        -------
-            Whether it is in maintenance as read back, or None in a dry run.
-
-        """
-        await self._system_write(lambda s: s.set_maintenance(point, on=on))
-        if self.dry_run:
-            return None
-        points = (await self.fetch_system(["maintenance"])).maintenance or ()
-        state = next((p.in_maintenance for p in points if p.name == point), None)
-        if state is not on:
-            msg = f"{point}: the iTM did not take maintenance {on}"
-            raise ItmCommandError(msg)
-        return state
-
-    async def set_point_attributes(
-        self, point: str, *, name: str | None = None, info: str | None = None
-    ) -> ManagementPoint | None:
-        """Change a management point's description (or name).
-
-        Renaming a point changes how the library and Home Assistant find it.
-
-        Args:
-        ----
-            point: The point's current name.
-            name: Its new name (1-12 characters).
-            info: Its new description (0-50 characters), what the CLI shows as name.
-
-        Returns:
-        -------
-            The point as read back, or None in a dry run.
-
-        """
-        if name is None and info is None:
-            msg = "nothing to change"
-            raise ItmCommandError(msg)
-        await self._system_write(
-            lambda s: s.set_point_attributes(point, name=name, info=info)
-        )
-        if self.dry_run:
-            return None
-        wanted = name or point
-        points = (await self.fetch_system(["points"])).points or ()
-        result = next((p for p in points if p.name == wanted), None)
-        if result is None or (info is not None and (result.info or "") != info):
-            msg = f"{point}: the iTM did not take the change: {result}"
-            raise ItmCommandError(msg)
-        return result
-
-    async def fetch_zone_attributes(self, zone: str) -> ZoneAttributes:
-        """Read a zone's name, description and intervals from its settings screen.
-
-        Args:
-        ----
-            zone: The zone's name as the zone list shows it.
-
-        Returns:
-        -------
-            The attributes.
-
-        """
-        return await self._in_session(lambda s: s.read_zone_attributes(zone))
-
-    async def set_zone_attributes(
-        self,
-        zone: str,
-        *,
-        name: str | None = None,
-        info: str | None = None,
-        start_interval: int | None = None,
-        stop_interval: int | None = None,
-    ) -> ZoneAttributes | None:
-        """Change a zone's description, intervals (or name).
-
-        Renaming a zone changes every zone path that names it.
-
-        Args:
-        ----
-            zone: The zone's current name.
-            name: Its new name (1-12 characters).
-            info: Its new description (0-50 characters).
-            start_interval: 0-180, as the iTM's input allows.
-            stop_interval: 0-180.
-
-        Returns:
-        -------
-            The zone's attributes as read back, or None in a dry run.
-
-        """
-        changes = {
-            "name": name,
-            "info": info,
-            "start_interval": start_interval,
-            "stop_interval": stop_interval,
-        }
-        if all(v is None for v in changes.values()):
-            msg = "nothing to change"
-            raise ItmCommandError(msg)
-        await self._system_write(
-            lambda s: s.set_zone_attributes(
-                zone,
-                name=name,
-                info=info,
-                start_interval=start_interval,
-                stop_interval=stop_interval,
-            )
-        )
-        if self.dry_run:
-            return None
-        result = await self.fetch_zone_attributes(name or zone)
-        wrong = {
-            k: v
-            for k, v in changes.items()
-            if v is not None and _shown(getattr(result, k), k) != v
-        }
-        if wrong:
-            msg = f"{zone}: the iTM did not take {wrong}: {result}"
-            raise ItmCommandError(msg)
-        return result
 
     def _not_own_account(self, name: str) -> None:
         if name == self._username:
