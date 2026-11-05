@@ -19,8 +19,8 @@ The Home Assistant integration
 - `ItmClient`: its constructor signature, public attributes and methods, and
   `_post`, which tests patch to fake the iTM.
 - `daikin_itm.protocol`: `PART_UPDATE_CODE`, `SCREEN_UPDATE_CODE`, `Reader`
-  and `Writer`. `tests/fake_itm.py` uses them, and the integration copies that
-  file into its own tests.
+  and `Writer`. `tests/fake_itm.py` and its `tests/fake_itm_*.py` modules use
+  them, and the integration copies those files into its own tests.
 
 ```text
 daikin_itm/
@@ -70,7 +70,13 @@ daikin_itm/
                       installer's service commands, demand, emergency stop
   py.typed
 tests/
-  fake_itm.py                  simulated iTM used by the behaviour tests
+  fake_itm.py                  simulated iTM used by the behaviour tests: request
+                               handling, replies, FakeITM's assembly
+  fake_itm_base.py             its shared data, dataclasses and state
+  fake_itm_panel.py            icon/list views, operation panel, settings dialog
+  fake_itm_menu.py             main menu bar, menu, changeover, setback, history
+  fake_itm_system.py           system settings and service screens, SystemWrites
+  fake_itm_schedule.py         schedule screens and event editor
   fake_*.py                    the simulator's extra screens, one file per area
   export_archive.py            a made-up history archive
   test_*.py                    behaviour, decoding, CLI and security tests
