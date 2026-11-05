@@ -1,6 +1,6 @@
 # ruff: noqa: SLF001
 # pylint: disable=protected-access
-"""The energy navigator's settings: writes. Tested against the simulated iTM only.
+"""The energy navigator's settings: writes.
 
 Session-level flows on the energy navigator's setting screens, each saving through
 the session's ``write`` / ``press_ok`` (a dry run plans the one request that saves
@@ -15,8 +15,9 @@ it opened with its Close or Cancel:
   and sampling target (3218, OK);
 - creating, renaming and deleting energy types (3205) and groups (3207), behind the
   budget overview's display settings (3200 -> 3204);
-- creating, renaming, deleting and copying management rules (3213; a copy through
-  3215, a calendar copy through 3216) and a rule day's time ranges (3214 -> 3217:
+- creating, renaming, deleting and copying management rules (3213; Copy asks the
+  new rule's name, a calendar copy goes through 3216) and a rule day's time ranges
+  (3214 -> 3217:
   the day's rows are deleted and the wanted ranges added, 3217's OK hands them to
   the editor, whose OK saves the rule);
 - behind the service login, the installer's settings (3220): a point's room
@@ -29,15 +30,15 @@ as text only), so it is not written. A button the iTM shows disabled (``ENABLED 
 is never clicked: the flow raises instead. Every write is confirmed by the client
 with a read in a fresh session (``confirm_*``).
 
-None of this has been run against a real iTM (one without the energy navigator
-licence shows empty screens): the screen flows come from the web UI's script and
-the part IDs it lists, the dialogs (NUMBER, DATE, CHARINPUT, CONFIRM) from how the
-iTM's other setting screens behave.
+Validated on a real iTM: the energy types, groups and rules (create, rename,
+delete, copy) and a rule day's ranges with their setpoints. The rest follows the web
+UI's script and the part IDs it lists (FEATURES.md has the status per screen).
 """
 
 from __future__ import annotations
 
 import html
+import itertools
 import math
 import re
 from dataclasses import dataclass, field
@@ -82,15 +83,6 @@ EQ_FROM, EQ_TO, EQ_TARGET_TEXT = 2, 5, 8
 ST_OK = 3
 # Energy type list (3205) and group list (3207): (3204 button, list screen).
 LISTS = {False: (en.DS_TYPES, en.TYPE_LIST), True: (en.DS_GROUPS, en.GROUP_LIST)}
-# Rule copy (False) and calendar copy (True).
-CALENDAR_COPY_PARTS = (
-    en.RL_CALENDAR_COPY,
-    en.CALENDAR_COPY,
-    en.CC_FROM,
-    en.CC_LIST,
-    en.CC_OK,
-    en.CC_CANCEL,
-)
 
 
 @dataclass(frozen=True)
@@ -618,9 +610,10 @@ async def read_names(s: _Session, *, group: bool = False) -> tuple[str, ...]:
         await en.leave_display_list(s, screen)
 
 
-# -- management rules (3213 -> 3214 -> 3215 / 3216 / 3217) -----------------------------
+# -- management rules (3213 -> 3214 -> 3216 / 3217) -----------------------------------
 
-_HHMM = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*$")
+_HHMM = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*$", re.ASCII)
+DAY_END, RANGE_GAP = 24 * 60, 15
 
 
 async def _rule_list(s: _Session) -> list[str]:
@@ -721,9 +714,7 @@ async def copy_rule(s: _Session, name: str, new_name: str) -> bool:
         await en.leave_rules(s)
 
 
-async def copy_rule_calendar(  # pylint: disable=too-many-locals
-    s: _Session, name: str, targets: tuple[str, ...]
-) -> bool:
+async def copy_rule_calendar(s: _Session, name: str, targets: tuple[str, ...]) -> bool:
     """Copy a rule's calendar to other rules (3216).
 
     The source is selected in the rule list, Calendar copy opens the copy screen,
@@ -741,7 +732,7 @@ async def copy_rule_calendar(  # pylint: disable=too-many-locals
 
     """
     s._writable()
-    button, screen, source, part, ok, cancel = CALENDAR_COPY_PARTS
+    screen = en.CALENDAR_COPY
     label = f"copy calendar of rule {name} to {', '.join(targets)}"
     wanted = [t.strip() for t in targets]
     if not wanted or name.strip() in wanted:
@@ -749,26 +740,42 @@ async def copy_rule_calendar(  # pylint: disable=too-many-locals
         raise ItmCommandError(msg)
     try:
         await _select_rule(s, await _rule_list(s), name)
-        reply = await en.click(s, en.RULES, button, label)
+        reply = await en.click(s, en.RULES, en.RL_CALENDAR_COPY, label)
+        prompts = [
+            u
+            for u in reply.screens
+            if u.update == "DLG_OPEN" and u.data[1] == "CHARINPUT"
+        ]
+        if prompts:
+            await s.send(prompts[0].screen, prompts[0].data[0], EventType.CLICK2)
+            msg = f"{label}: the iTM asks for a name instead of opening {screen}"
+            raise ItmCommandError(msg)
         await s.wait_for_progress(reply)
         if screen not in s.state.screens:
             msg = f"{label}: screen {screen} did not open: {reply.dialogs()}"
             raise ItmCommandError(msg)
-        shown = html.unescape(str(s.state.get(screen, source, "TEXT") or "")).strip()
+        shown = html.unescape(
+            str(s.state.get(screen, en.CC_FROM, "TEXT") or "")
+        ).strip()
         if shown and shown != name.strip():
             msg = f"{label}: the copy screen copies from {shown!r}"
             raise ItmCommandError(msg)
-        rows = [r[0] if r else "" for r in en._cells(s.state, screen, part)]
+        rows = [r[0] if r else "" for r in en._cells(s.state, screen, en.CC_LIST)]
         if any(rows.count(t) != 1 for t in wanted):
             msg = f"{label}: not every target is listed once; listed: {rows}"
             raise ItmCommandError(msg)
         picks = tuple(rows.index(t) for t in wanted)
         await s.send(
-            screen, part, EventType.CLICK, DataType.INTARRAY, len(picks), array=picks
+            screen,
+            en.CC_LIST,
+            EventType.CLICK,
+            DataType.INTARRAY,
+            len(picks),
+            array=picks,
         )
-        return await _press_ok(s, label, screen, ok, cancel)
+        return await _press_ok(s, label, screen, en.CC_OK, en.CC_CANCEL)
     finally:
-        await en.close(s, screen, cancel)
+        await en.close(s, screen, en.CC_CANCEL)
         await en.leave_rules(s)
 
 
@@ -814,29 +821,59 @@ async def _check(s: _Session, screen: int, part: int, *, on: bool, what: str) ->
     if (s.state.get(screen, part, "CHECK_STATE") == 1) != on:
         s.refuse_disabled(screen, part, what)
         await s.send(screen, part, EventType.CLICK, DataType.INT, int(on))
-        s.state.screens.setdefault(screen, {})[part, "CHECK_STATE"] = int(on)
 
 
-def _minutes(text: str) -> int | None:
-    hour, _, minute = text.strip().partition(":")
-    if not (hour.isdigit() and minute.isdigit()):
+def _minute_of_day(text: str, *, end: bool = False) -> int | None:
+    m = _HHMM.match(text)
+    if m is None:
         return None
-    return int(hour) * 60 + int(minute)
+    minute = int(m.group(1)) * 60 + int(m.group(2))
+    return DAY_END if end and minute == 0 else minute
+
+
+def _refuse_overlaps(ranges: tuple[en.RuleRange, ...]) -> None:
+    spans = sorted(
+        (_minute_of_day(r.start), _minute_of_day(r.end, end=True), r) for r in ranges
+    )
+    for (_, end, first), (start, _, second) in itertools.pairwise(spans):
+        if start is not None and end is not None and start < end:
+            msg = (
+                f"time ranges {first.start}-{first.end} and {second.start}-"
+                f"{second.end} overlap"
+            )
+            raise ItmCommandError(msg)
+
+
+def _time_order(state: UIState, r: en.RuleRange) -> list[tuple[int, str, str]]:
+    """Return the start and end inputs in an order the iTM accepts."""
+    rs = en.RULE_SETTING
+    shown_start = _minute_of_day(str(state.get(rs, en.RS_START, "TEXT") or ""))
+    shown_end = _minute_of_day(str(state.get(rs, en.RS_END, "TEXT") or ""), end=True)
+    start, end = _minute_of_day(r.start), _minute_of_day(r.end, end=True)
+    start_time = (en.RS_START_BUTTON, r.start, "start")
+    end_time = (en.RS_END_BUTTON, r.end, "end")
+    if (
+        shown_start is None
+        or shown_end is None
+        or start is None
+        or end is None
+        or start <= shown_end - RANGE_GAP
+    ):
+        return [start_time, end_time]
+    if end >= shown_start + RANGE_GAP:
+        return [end_time, start_time]
+    return [(en.RS_END_BUTTON, "24:00", "end"), start_time, end_time]
 
 
 async def _enter_range(s: _Session, r: en.RuleRange) -> None:
     """Fill 3217's edit group with a time range.
 
-    The iTM keeps the start before the end shown: when the new start isn't before
-    it, the end goes first.
+    The iTM keeps the start at least 15 minutes before the end shown, so the times
+    go in an order it accepts; when neither order fits, the end is first moved to
+    the end of the day.
     """
     rs = en.RULE_SETTING
-    shown_end = _minutes(str(s.state.get(rs, en.RS_END, "TEXT") or ""))
-    times = [(en.RS_START_BUTTON, r.start, "start"), (en.RS_END_BUTTON, r.end, "end")]
-    start = _minutes(r.start)
-    if shown_end is not None and start is not None and start >= shown_end:
-        times.reverse()
-    for button, time, label in times:
+    for button, time, label in _time_order(s.state, r):
         await _enter_time(s, button, time, label)
     managed = r.cool is not None or r.heat is not None
     await _check(s, rs, en.RS_SETPOINT, on=managed, what="setpoint")
@@ -1278,12 +1315,18 @@ class EnergyMixin(ClientCore):
             raise ItmCommandError(msg)
 
     async def copy_energy_rule(self, name: str, new_name: str) -> None:
-        """Copy a management rule under a new name, confirmed by the rule list."""
+        """Copy a management rule under a new name, confirmed by the rule editor."""
         await self._system_write(lambda s: _ignore(copy_rule(s, name, new_name)))
         if self.dry_run:
             return
-        names = await self._rule_names()
-        if new_name.strip() not in names or name.strip() not in names:
+        rules = {r.name: r for r in await self._in_session(en.read_rule_editor) or ()}
+        source, copied = rules.get(name.strip()), rules.get(new_name.strip())
+        if (
+            source is None
+            or copied is None
+            or (copied.weekdays, copied.special_days)
+            != (source.weekdays, source.special_days)
+        ):
             msg = f"rule {name}: the iTM did not copy it to {new_name}"
             raise ItmCommandError(msg)
 
@@ -1330,8 +1373,14 @@ class EnergyMixin(ClientCore):
         -------
             The day as read back in a fresh session; None in a dry run.
 
+        Raises:
+        ------
+            ItmCommandError: Ranges overlap (the iTM refuses those), or the iTM
+                doesn't show the ranges afterwards.
+
         """
         wanted = tuple(ranges)
+        _refuse_overlaps(wanted)
         await self._system_write(lambda s: _ignore(set_rule_day(s, rule, day, wanted)))
         if self.dry_run:
             return None

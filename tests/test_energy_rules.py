@@ -310,6 +310,39 @@ async def test_copy_rule_under_a_new_name(itm: FakeEnergyMoreITM) -> None:
     assert_closed(itm)
 
 
+async def test_copy_rule_checked_by_contents(itm: FakeEnergyMoreITM) -> None:
+    """A copy without the source's patterns is not taken for a copy."""
+    original = itm._named
+
+    def empty_copy(screen: int, what: list[Any], name: str) -> Any:
+        updates = original(screen, what, name)
+        if what[0] == "copy":
+            itm.rule_days[name] = {}
+        return updates
+
+    itm._named = empty_copy  # type: ignore[method-assign]
+    with pytest.raises(ItmCommandError, match="did not copy it"):
+        await client(itm).copy_energy_rule("Rule A", "Rule C")
+
+
+async def test_calendar_copy_asking_a_name(itm: FakeEnergyMoreITM) -> None:
+    """A name prompt instead of 3216 is cancelled and reported."""
+    original = itm._rule_list_event
+
+    def prompt(ev: dict[str, Any]) -> Any:
+        if ev["part"] == 9 and ev["event"] == 1:
+            return itm._name_dialog(3213, "calendar")
+        if ev["part"] == 44 and ev["event"] == 2:
+            itm.edit_dialog = None
+            return [("DLG_CLOSE", 3213, [44, 4], [])]
+        return original(ev)
+
+    itm._rule_list_event = prompt  # type: ignore[method-assign]
+    with pytest.raises(ItmCommandError, match="asks for a name"):
+        await client(itm).copy_energy_rule_calendar("Rule A", ["Rule B"])
+    assert itm.edit_dialog is None
+
+
 async def test_copy_calendar(itm: FakeEnergyMoreITM) -> None:
     """3216 copies the calendar, read back in the editor."""
     c = client(itm)
@@ -335,8 +368,8 @@ async def test_copy_refusals(itm: FakeEnergyMoreITM) -> None:
     with pytest.raises(ItmCommandError, match="not every target is listed once"):
         await c.copy_energy_rule_calendar("Rule A", ["Rule Z"])
     original = itm._copy_parts
-    itm._copy_parts = lambda target: [  # type: ignore[method-assign]
-        *original(target),
+    itm._copy_parts = lambda: [  # type: ignore[method-assign]
+        *original(),
         (2, "TEXT", "Rule Z"),
     ]
     with pytest.raises(ItmCommandError, match="copies from 'Rule Z'"):
@@ -424,6 +457,37 @@ def test_cli_rules(
         with pytest.raises(SystemExit, match=error):
             main("energy-edit", *args)
     assert not fake.violations
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        (RuleRange("20:00", "24:00"), RuleRange("08:00", "10:00")),
+        (RuleRange("08:00", "17:00"), RuleRange("16:50", "18:00")),
+        (RuleRange("08:00", "09:00"), RuleRange("10:00", "11:00")),
+        (RuleRange("20:00", "21:00"), RuleRange("21:30", "22:00")),
+    ],
+)
+async def test_ranges_entered_in_an_accepted_order(
+    itm: FakeEnergyMoreITM, before: RuleRange, after: RuleRange
+) -> None:
+    """A rewritten day's start and end go in an order the iTM accepts."""
+    c = client(itm)
+    assert await c.set_energy_rule_day("Rule A", "monday", [before]) is not None
+    day = await c.set_energy_rule_day("Rule A", "monday", [after])
+    assert day is not None
+    assert [(x.start, x.end) for x in day.ranges] == [(after.start, after.end)]
+
+
+async def test_overlapping_ranges_refused(itm: FakeEnergyMoreITM) -> None:
+    """Overlapping ranges are refused before anything is sent."""
+    with pytest.raises(ItmCommandError, match="overlap"):
+        await client(itm).set_energy_rule_day(
+            "Rule A",
+            "monday",
+            [RuleRange("16:30", "18:00"), RuleRange("08:00", "17:00")],
+        )
+    assert itm.requests == []
 
 
 async def test_time_input_refusals(itm: FakeEnergyMoreITM) -> None:

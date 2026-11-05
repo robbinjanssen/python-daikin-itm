@@ -653,7 +653,7 @@ def test_state_merges_and_closes() -> None:
 
 
 def test_select_locally() -> None:
-    """Only an existing selection of an open screen is changed locally."""
+    """A selection, or else a checkbox state, of an open screen is mirrored."""
     state = UIState()
     state.apply([ScreenUpdate(4, "OPEN", [-1], [Part(11, "SINGLE_SELIDX", 0)])])
     state.select_locally(4, 11, 3)
@@ -661,6 +661,7 @@ def test_select_locally() -> None:
     state.select_locally(5, 11, 3)
     assert state.get(4, 11, "SINGLE_SELIDX") == 3
     assert (12, "SINGLE_SELIDX") not in state.screens[4]
+    assert state.get(4, 12, "CHECK_STATE") == 3
     assert 5 not in state.screens
 
 

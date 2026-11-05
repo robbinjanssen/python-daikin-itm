@@ -2,7 +2,8 @@
 """A simulated iTM with the energy navigator's rule and installer screens.
 
 On top of FakeEnergyEditITM: the management rule list (3213) creates, renames and
-deletes rules and opens the rule copy (3215) and calendar copy (3216) screens; the
+deletes rules, copies one under a name it asks for, and opens the calendar copy
+(3216); the
 rule editor (3214) takes a day's radio button, whose Edit (disabled until one is
 picked) opens that day's time ranges (3217). 3217 takes HOURMIN and NUMBER inputs,
 checkboxes, Add, Modify and Delete; its OK hands the ranges to the editor, whose OK
@@ -50,7 +51,7 @@ MONTHS = [
 WEEKDAY_RADIOS = (2, 3, 4, 5, 6, 7, 8)
 SPECIAL_RADIOS = (33, 34, 35, 36, 37)
 # Screens this fake adds, with their Close or Cancel part.
-MORE_CLOSE = {3215: 6, 3216: 15, 3217: 22, 3220: 7, 3221: 10, 3222: 4, 3223: 4}
+MORE_CLOSE = {3216: 15, 3217: 22, 3220: 7, 3221: 10, 3222: 4, 3223: 4}
 MORE_CLOSE |= {3224: 15}
 OWN = "Suction Temp."
 ANALOG = ["AI 1", "AI 2"]
@@ -154,7 +155,6 @@ class FakeEnergyMoreITM(FakeEnergyEditITM):  # pylint: disable=too-many-instance
         handler = {
             3213: self._rule_list_event,
             3214: self._editor_event,
-            3215: self._copy_event,
             3216: self._copy_event,
             3217: self._ranges_event,
             3220: self._installer_event,
@@ -199,13 +199,13 @@ class FakeEnergyMoreITM(FakeEnergyEditITM):  # pylint: disable=too-many-instance
         if target == 3217:
             self.rs_rows = copy.deepcopy(self.rule_pending.get(self.day or "", []))
             self.rs_selected = None
-            self.rs_fields = {"start": "00:00", "end": "00:00", "setpoint": False}
+            self.rs_fields = {"start": "00:00", "end": "24:00", "setpoint": False}
             self.rs_fields |= {"cool_on": False, "heat_on": False}
             self.rs_fields |= {"cool": 26.0, "heat": 20.0}
             self.locked |= {(3217, 3), (3217, 20)}
-        if target in {3215, 3216}:
+        if target == 3216:
             self.copy_picks = []
-            self.locked.add((target, 5 if target == 3215 else 14))
+            self.locked.add((3216, 14))
         if target == 3221:
             self.rt_pending = dict(self.room_temp)
             self.rt_row = None
@@ -226,8 +226,7 @@ class FakeEnergyMoreITM(FakeEnergyEditITM):  # pylint: disable=too-many-instance
     def _parts(self, target: int) -> list[tuple[int, str, Any]]:
         parts: Callable[[], list[tuple[int, str, Any]]] | None = {
             3214: self._rule_parts,
-            3215: lambda: self._copy_parts(3215),
-            3216: lambda: self._copy_parts(3216),
+            3216: self._copy_parts,
             3217: self._ranges_parts,
             3220: self._installer_parts,
             3221: self._room_parts,
@@ -320,25 +319,23 @@ class FakeEnergyMoreITM(FakeEnergyEditITM):  # pylint: disable=too-many-instance
         self.saved.append(f"rule {rule}")
         return self._close(3214)
 
-    # -- copies (3215, 3216) --------------------------------------------------------
+    # -- calendar copy (3216) -------------------------------------------------------
     def _copy_targets(self) -> list[list[str]]:
         source = self.rules[self.row_selected[3213]][0]
         return [r for r in self.rules if r[0] != source]
 
-    def _copy_parts(self, target: int) -> list[tuple[int, str, Any]]:
+    def _copy_parts(self) -> list[tuple[int, str, Any]]:
         source = self.rules[self.row_selected[3213]][0]
-        parts: list[tuple[int, str, Any]] = [
+        return [
             (2, "TEXT", source),
             (4, "LIST_COLUMN", _columns("Name")),
             (4, "LIST_ROW", _rows(self._copy_targets())),
+            *[(9 + i, "LABEL", f"Holiday {i + 1}") for i in range(5)],
         ]
-        if target == 3216:
-            parts += [(9 + i, "LABEL", f"Holiday {i + 1}") for i in range(5)]
-        return parts
 
     def _copy_event(self, ev: dict[str, Any]) -> list[Update] | None:
         screen, part = ev["screen"], ev["part"]
-        ok = 5 if screen == 3215 else 14
+        ok = 14
         if part == 4 and ev["event"] == 1 and ev["array"]:
             self.copy_picks = list(ev["array"])
             self.locked.discard((screen, ok))
@@ -350,10 +347,7 @@ class FakeEnergyMoreITM(FakeEnergyEditITM):  # pylint: disable=too-many-instance
                 targets = self._copy_targets()
                 for row in self.copy_picks:
                     name = targets[row][0]
-                    if screen == 3215:
-                        self.rule_days[name] = copy.deepcopy(self.rule_days[source])
-                    else:
-                        self.calendars[name] = copy.deepcopy(self.calendars[source])
+                    self.calendars[name] = copy.deepcopy(self.calendars[source])
                 self.saved.append(f"copy {screen}")
                 return self._close(screen)
 
@@ -411,14 +405,13 @@ class FakeEnergyMoreITM(FakeEnergyEditITM):  # pylint: disable=too-many-instance
 
     def _time_limits(self, part: int) -> tuple[tuple[int, int], tuple[int, int]]:
         """Return the range the real iTM gives the start (8) or end (11) input."""
-        f = self.rs_fields
+        hour, minute = map(
+            int, self.rs_fields["start" if part == 11 else "end"].split(":")
+        )
+        value = hour * 60 + minute
         if part == 11:
-            hour, minute = map(int, f["start"].split(":"))
-            return divmod(hour * 60 + minute + 15, 60), (24, 0)
-        if f["end"] == "00:00":
-            return (0, 0), (23, 45)
-        hour, minute = map(int, f["end"].split(":"))
-        return (0, 0), divmod(hour * 60 + minute - 15, 60)
+            return divmod(value + 15, 60), (24, 0)
+        return (0, 0), divmod((value or 24 * 60) - 15, 60)
 
     def _ranges_event(  # noqa: PLR0911  # pylint: disable=too-many-return-statements
         self, ev: dict[str, Any]

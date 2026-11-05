@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 from typing import TYPE_CHECKING, Any
 
 from ._bases import SessionCore
+from ._util import run_to_completion as _run_to_completion
 from .exceptions import ItmCommandError
 from .models import (
     AIRFLOW_DIRECTIONS,
@@ -62,50 +62,10 @@ from .models import (
 from .protocol import DataType, EventType, ScreenID
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Coroutine
+    from collections.abc import Callable
 
-    from ._util import T as _T
     from .models import Capabilities, DialogSetting
     from .state import UIState
-
-
-async def _run_to_completion(coro: Coroutine[Any, Any, _T]) -> _T:
-    """Run cleanup to the end even if the caller is cancelled meanwhile.
-
-    Each request is bounded by the HTTP timeout, so this ends. The cancellation is
-    passed on once the cleanup is done. A plain asyncio.shield would return at once
-    on cancellation and leave the cleanup running unsupervised.
-
-    Args:
-    ----
-        coro: The cleanup to run.
-
-    Returns:
-    -------
-        What the cleanup returned.
-
-    Raises:
-    ------
-        asyncio.CancelledError: The caller was cancelled while the cleanup ran.
-
-    """
-    task = asyncio.ensure_future(coro)
-    cancelled = False
-    while True:
-        try:
-            result = await asyncio.shield(task)
-        except asyncio.CancelledError:
-            if task.cancelled():  # the cleanup itself was cancelled, not just us
-                raise
-            cancelled = True
-            continue
-        except BaseException as e:
-            if cancelled:
-                raise asyncio.CancelledError from e
-            raise
-        if cancelled:
-            raise asyncio.CancelledError
-        return result
 
 
 class SettingsDialogMixin(SessionCore):

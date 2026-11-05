@@ -229,7 +229,8 @@ async def _energy_rule_edit(client: ItmClient, args: argparse.Namespace) -> Any:
     """Change a management rule (simulated iTM only)."""
     action, name = args.action, args.name
     if not name or (action in {"rule-rename", "rule-copy"} and not args.new_name):
-        sys.exit(f"energy-edit {action} needs a rule name")
+        names = "a rule name and the new name" if args.name else "a rule name"
+        sys.exit(f"energy-edit {action} needs {names}")
     if action == "rule-create":
         await client.create_energy_rule(name)
     elif action == "rule-rename":
@@ -362,8 +363,12 @@ def add_energy_commands(sub: Any) -> None:
         action="store_true",
         help="room-temp/collection-start/conversion: really change it",
     )
-    ee.add_argument("name", nargs="?", help="create/rename/delete: the energy type")
-    ee.add_argument("new_name", nargs="?", help="rename: the new name")
+    ee.add_argument(
+        "name", nargs="?", help="the energy type or group, or the rule (rule-*)"
+    )
+    ee.add_argument(
+        "new_name", nargs="?", help="rename, rule-rename, rule-copy: the new name"
+    )
     ee.add_argument("--group", action="store_true", help="an energy group instead")
     ee.add_argument("--year", help="planned/actual: the fiscal year's tab, as shown")
     ee.add_argument("--type", help="planned/actual: the energy type")

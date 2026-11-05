@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any, TypeVar
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable
+    from collections.abc import Awaitable, Coroutine
 
 T = TypeVar("T")
 
@@ -13,3 +14,42 @@ T = TypeVar("T")
 async def ignore(call: Awaitable[Any]) -> None:
     """Await a call and drop its result."""
     await call
+
+
+async def run_to_completion(coro: Coroutine[Any, Any, T]) -> T:
+    """Run cleanup to the end even if the caller is cancelled meanwhile.
+
+    Each request is bounded by the HTTP timeout, so this ends. The cancellation is
+    passed on once the cleanup is done. A plain asyncio.shield would return at once
+    on cancellation and leave the cleanup running unsupervised.
+
+    Args:
+    ----
+        coro: The cleanup to run.
+
+    Returns:
+    -------
+        What the cleanup returned.
+
+    Raises:
+    ------
+        asyncio.CancelledError: The caller was cancelled while the cleanup ran.
+
+    """
+    task = asyncio.ensure_future(coro)
+    cancelled = False
+    while True:
+        try:
+            result = await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.cancelled():  # the cleanup itself was cancelled, not just us
+                raise
+            cancelled = True
+            continue
+        except BaseException as e:
+            if cancelled:
+                raise asyncio.CancelledError from e
+            raise
+        if cancelled:
+            raise asyncio.CancelledError
+        return result

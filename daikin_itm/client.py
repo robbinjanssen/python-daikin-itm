@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Protocol, Self
 import aiohttp
 
 from . import users_edit
+from ._util import run_to_completion as _run_to_completion
 from .changeover import ChangeoverMixin
 from .dealer_functions import DealerFunctionsMixin
 from .demand import DemandMixin
@@ -82,7 +83,6 @@ from .protocol import MAX_REPLY_CHARS, NO_TOKEN, WEB_VERSION, ScreenID
 from .schedule_edit import ScheduleMixin
 from .service_edit import ServiceEditMixin
 from .session import ICON_ID_ZONE, _Session, _zone_name
-from .settings_dialog import _run_to_completion
 from .system import (
     NW_TEXT_FIELDS,
     HardwareSettings,
