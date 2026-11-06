@@ -10,7 +10,8 @@ from __future__ import annotations
 import sys
 from typing import TYPE_CHECKING, Any
 
-from .cli_common import _out, _print_plan
+from .cli_common import echo as _out
+from .cli_common import print_plan as _print_plan
 from .interlock import (
     InterlockActionSpec,
     InterlockConditionSpec,

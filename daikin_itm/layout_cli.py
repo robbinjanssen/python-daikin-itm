@@ -10,7 +10,7 @@ import os
 import sys
 from typing import TYPE_CHECKING, Any
 
-from .cli_common import _out
+from .cli_common import echo as _out
 
 if TYPE_CHECKING:
     import argparse

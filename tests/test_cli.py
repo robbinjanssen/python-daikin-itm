@@ -17,7 +17,7 @@ import pytest
 
 from daikin_itm import Capabilities, ItmClient, ItmError
 from daikin_itm import cli as itm_cli
-from daikin_itm.cli_common import _safe
+from daikin_itm.cli_common import safe as _safe
 
 from .export_archive import history_archive
 from .fake_exports import FakeExportsITM

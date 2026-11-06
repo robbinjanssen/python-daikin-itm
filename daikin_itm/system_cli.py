@@ -7,7 +7,10 @@ import os
 import sys
 from typing import TYPE_CHECKING, Any
 
-from .cli_common import _onoff, _out, _print_plan, _print_system
+from .cli_common import echo as _out
+from .cli_common import onoff as _onoff
+from .cli_common import print_plan as _print_plan
+from .cli_common import print_system as _print_system
 from .system import LANGUAGE_RADIOS, ScreensaverMode
 
 if TYPE_CHECKING:

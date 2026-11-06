@@ -24,11 +24,12 @@ its panel as PNTLAYOUT on opening, and selecting an icon fills the operation pan
 
 from __future__ import annotations
 
-import html
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from ._bases import ClientCore
+from ._screens import clean as _clean
+from ._screens import click as _click
 from .exceptions import ItmCommandError
 from .models import P_NAME, PointKind, point_kind
 from .protocol import DataType, EventType, ScreenID
@@ -81,10 +82,6 @@ class Layout:
     def empty(self) -> bool:
         """Tell whether the layout shows nothing (no layout configured)."""
         return not self.items
-
-
-def _clean(value: Any) -> str:
-    return html.unescape(str(value)).strip()
 
 
 def _item(index: int, raw: list[Any]) -> LayoutItem:
@@ -143,11 +140,6 @@ def layout_from_screen(state: UIState) -> Layout:
         screens=tuple(name for name in screens if name),
         back_enabled=None if back is None else back != 0,
     )
-
-
-async def _click(s: _Session, screen: int, part: int, what: str) -> None:
-    """Click a part, never one the iTM reports disabled (that hangs it)."""
-    await s.click(screen, part, what)
 
 
 async def leave_layout(s: _Session) -> None:

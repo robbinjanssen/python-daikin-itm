@@ -16,16 +16,19 @@ import html
 from typing import TYPE_CHECKING, Any
 
 from ._bases import ClientCore
+from ._screens import answer_name as _answer_name
+from ._screens import click as _click
+from ._screens import raw_rows as _rows
+from ._screens import row_cells as _cells
+from ._screens import select as _select
 from ._util import ignore as _ignore
 from .exceptions import ItmCommandError
 from .menu import CLOSE_PART, MenuScreen
 from .models import point_kind
-from .protocol import DataType, EventType
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterable
 
-    from .protocol import Reply
     from .session import _Session
     from .state import UIState
     from .system import (
@@ -102,14 +105,6 @@ async def _zone_errors(s: _Session) -> AsyncIterator[None]:
 zone_errors = _zone_errors
 
 
-def _rows(state: UIState, screen: int, part: int) -> list[dict[str, Any]]:
-    return list((state.get(screen, part, "LIST_ROW") or {}).get("rows", []))
-
-
-def _cells(row: dict[str, Any]) -> list[str]:
-    return [html.unescape(str(t)) for t in row.get("text", [])]
-
-
 def _find_row(state: UIState, screen: int, part: int, column: int, name: str) -> int:
     """Return the row whose column shows name; raise when not there exactly once."""
     found = [
@@ -121,15 +116,6 @@ def _find_row(state: UIState, screen: int, part: int, column: int, name: str) ->
         msg = f"{name!r} not found once (found {len(found)})"
         raise ItmCommandError(msg)
     return found[0]
-
-
-async def _select(s: _Session, screen: int, part: int, row: int) -> None:
-    await s.send(screen, part, EventType.CLICK, DataType.INTARRAY, 1, array=(row,))
-
-
-async def _click(s: _Session, screen: int, part: int, what: str) -> Reply:
-    """Click a button, never one the iTM reports disabled (that hangs it)."""
-    return await s.click(screen, part, what)
 
 
 async def _leave(s: _Session, screen: int, cancel: int) -> None:
@@ -186,29 +172,7 @@ async def add_zone(s: _Session, name: str, *, parent: str | None = None) -> bool
             if parent is not None:
                 await _select_zone(s, parent)
             reply = await _click(s, ZONES, ZN_ADD, "add zone")
-            dialogs = [u for u in reply.screens if u.update == "DLG_OPEN"]
-            if not dialogs or dialogs[0].data[1] != "CHARINPUT":
-                msg = f"add zone: no name input opened: {reply.dialogs()}"
-                raise ItmCommandError(msg)
-            d = dialogs[0]
-            low, high = d.data[4], d.data[5]
-            if not low <= len(name) <= high:
-                await s.send(d.screen, d.data[0], EventType.CLICK2)
-                msg = f"a zone name is {low}-{high} characters: {name!r}"
-                raise ItmCommandError(msg)
-            sent = await s.write(
-                f"add zone {name}",
-                d.screen,
-                d.data[0],
-                EventType.CLICK,
-                DataType.STRING,
-                string=name,
-            )
-            if sent is None:  # dry run: cancel the name input
-                await s.send(d.screen, d.data[0], EventType.CLICK2)
-                return False
-            await s._answer_confirm(ZONES, sent)  # noqa: SLF001  # pylint: disable=protected-access
-            return True
+            return await _answer_name(s, ZONES, reply, name, f"add zone {name}")
     finally:
         await s.close_screen(ZONES)
 

@@ -82,7 +82,8 @@ from .point_registry import PointRegistryMixin
 from .protocol import MAX_REPLY_CHARS, NO_TOKEN, WEB_VERSION, ScreenID
 from .schedule_edit import ScheduleMixin
 from .service_edit import ServiceEditMixin
-from .session import ICON_ID_ZONE, _Session, _zone_name
+from .session import ICON_ID_ZONE, _Session
+from .session import zone_name as _zone_name
 from .system import (
     NW_TEXT_FIELDS,
     HardwareSettings,

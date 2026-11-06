@@ -16,8 +16,11 @@ import html
 import re
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
+from ._screens import radio as _radio
+from ._screens import raw_rows as _rows
+from ._screens import row_cells as _cells
 from .lang import on_off, user_is_admin
 from .menu import MenuScreen
 
@@ -289,14 +292,6 @@ def _text(state: UIState, screen: int, part: int) -> str | None:
     return html.unescape(html.unescape(value)).strip() or None
 
 
-def _rows(state: UIState, screen: int, part: int) -> list[dict[str, Any]]:
-    return list((state.get(screen, part, "LIST_ROW") or {}).get("rows", []))
-
-
-def _cells(row: dict[str, Any]) -> list[str]:
-    return [html.unescape(str(t)) for t in row.get("text", [])]
-
-
 def _int(text: str | None) -> int | None:
     m = re.search(r"-?\d+", text or "")
     return int(m.group()) if m else None
@@ -316,14 +311,6 @@ def _option(state: UIState, screen: int, part: int) -> tuple[int, str] | None:
     if idx is None or not 0 <= idx < len(options):
         return None
     return idx, str(options[idx])
-
-
-def _radio(state: UIState, screen: int, on: int, off: int) -> bool | None:
-    if state.get(screen, on, "CHECK_STATE") == 1:
-        return True
-    if state.get(screen, off, "CHECK_STATE") == 1:
-        return False
-    return None
 
 
 def zones_from_screen(state: UIState) -> tuple[str | None, tuple[ZoneInfo, ...]]:

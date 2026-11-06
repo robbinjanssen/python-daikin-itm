@@ -38,6 +38,16 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from ._screens import (
+    click,
+    close,
+    open_below,
+)
+from ._screens import graph as _graph
+from ._screens import part_text as _string
+from ._screens import radio as _checked
+from ._screens import select as select_row
+from ._screens import ticked as _checked_on
 from .exceptions import ItmCommandError
 from .menu import MB_ENERGY_NAVIGATOR, MenuScreen
 from .protocol import DataType, EventType
@@ -46,7 +56,6 @@ from .system import MB_ENERGY_EQUIPMENT
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable
 
-    from .protocol import Reply
     from .session import _Session
     from .state import UIState
 
@@ -388,11 +397,10 @@ def parse_shown(text: str) -> ShownValue:
     )
 
 
-def _string(state: UIState, screen: int, part: int, ptype: str) -> str | None:
-    value = state.get(screen, part, ptype)
-    if not isinstance(value, str):
-        return None
-    return html.unescape(value).strip() or None
+def shown_value(state: UIState, screen: int, part: int) -> ShownValue | None:
+    """Return a part's text as a shown value; None when it is blank."""
+    value = state.get(screen, part, "TEXT")
+    return parse_shown(value) if isinstance(value, str) and value.strip() else None
 
 
 def _shown(state: UIState, screen: int, part: int, ptype: str) -> ShownValue | None:
@@ -437,14 +445,6 @@ def _months(state: UIState, screen: int, part: int) -> tuple[MonthValue, ...]:
             [*row, "", ""] for row in list_rows(state, screen, part)[0] if row
         )
     )
-
-
-def _checked(state: UIState, screen: int, on: int, off: int) -> bool | None:
-    if state.get(screen, on, "CHECK_STATE") == 1:
-        return True
-    if state.get(screen, off, "CHECK_STATE") == 1:
-        return False
-    return None
 
 
 def budget_from_screen(state: UIState) -> EnergyBudget:
@@ -528,7 +528,8 @@ def sampling_targets_from_screen(state: UIState) -> tuple[SamplingTarget, ...]:
     return tuple(targets)
 
 
-def _cells(state: UIState, screen: int, part: int) -> tuple[tuple[str, ...], ...]:
+def list_cells(state: UIState, screen: int, part: int) -> tuple[tuple[str, ...], ...]:
+    """Return a list's rows as tuples of stripped cells."""
     return tuple(
         tuple(c.strip() for c in row) for row in list_rows(state, screen, part)[0]
     )
@@ -536,7 +537,7 @@ def _cells(state: UIState, screen: int, part: int) -> tuple[tuple[str, ...], ...
 
 def list_names(state: UIState, screen: int) -> tuple[str, ...]:
     """Read the names (first column) of an energy type or group list (3205/3207)."""
-    return tuple(row[0] for row in _cells(state, screen, EL_LIST) if row)
+    return tuple(row[0] for row in list_cells(state, screen, EL_LIST) if row)
 
 
 def energy_type_from_screen(state: UIState, name: str) -> EnergyType:
@@ -559,16 +560,9 @@ def energy_group_from_screen(state: UIState, name: str) -> EnergyGroup:
     return EnergyGroup(
         name=name,
         energy_type=option(state, s, GS_TYPE),
-        members=_cells(state, s, GS_MEMBERS),
-        available=_cells(state, s, GS_AVAILABLE),
+        members=list_cells(state, s, GS_MEMBERS),
+        available=list_cells(state, s, GS_AVAILABLE),
     )
-
-
-def _graph(state: UIState, screen: int, part: int) -> tuple[Any, ...]:
-    for ptype in ("BARLINE_GRAPH", "POINT_GRAPH"):
-        if (value := state.get(screen, part, ptype)) is not None:
-            return tuple(value)
-    return ()
 
 
 def details_from_screen(state: UIState) -> EquipmentDetails:
@@ -576,7 +570,7 @@ def details_from_screen(state: UIState) -> EquipmentDetails:
     return EquipmentDetails(
         day=_string(state, DETAILS, DT_DAY, "LABEL"),
         graph=_graph(state, DETAILS, DT_GRAPH),
-        occurrences=_cells(state, DETAILS, DT_LIST),
+        occurrences=list_cells(state, DETAILS, DT_LIST),
     )
 
 
@@ -600,27 +594,11 @@ def rule_editor_from_screen(state: UIState, name: str) -> RuleEditor:
         name=name,
         weekdays=tuple(_bar(state, part) for part in RE_WEEKDAY_BARS),
         special_days=special,
-        calendar=_cells(state, RULE_EDITOR, RE_CALENDAR),
+        calendar=list_cells(state, RULE_EDITOR, RE_CALENDAR),
     )
 
 
 # -- flows ----------------------------------------------------------------------------
-
-
-async def click(s: _Session, screen: int, part: int, what: str) -> Reply:
-    """Click a button, refusing one the iTM shows disabled (that hangs it).
-
-    A hidden button works: the planning settings button of the budget screen is
-    hidden on a real iTM and opens its screen all the same.
-    """
-    return await s.click(screen, part, what)
-
-
-async def close(s: _Session, screen: int, part: int) -> None:
-    """Leave a screen with its Close or Cancel part, if it is open. Never OK."""
-    if screen in s.state.screens:
-        await s.send(screen, part)
-        s.state.screens.pop(screen, None)
 
 
 async def open_from_menu(s: _Session, button: int, screen: MenuScreen) -> bool:
@@ -629,15 +607,6 @@ async def open_from_menu(s: _Session, button: int, screen: MenuScreen) -> bool:
     reply = await s.send(MenuScreen.MENULIST, button)
     await s.wait_for_progress(reply)
     return screen in s.state.screens
-
-
-async def open_below(s: _Session, screen: int, button: int, target: int) -> None:
-    """Open a screen from a button of another one (behind PROGRESS, if any)."""
-    reply = await click(s, screen, button, f"screen {target}")
-    await s.wait_for_progress(reply)
-    if target not in s.state.screens:
-        msg = f"screen {target} did not open: {reply.dialogs()}"
-        raise ItmCommandError(msg)
 
 
 async def _visit_tabs(s: _Session, screen: int, part: int) -> None:
@@ -761,11 +730,6 @@ async def read_sampling_targets(s: _Session) -> tuple[SamplingTarget, ...] | Non
     finally:
         await close(s, SAMPLING_TARGETS, ST_CANCEL)
         await close(s, MenuScreen.ENERGY_EQUIPMENT, EQ_CLOSE)
-
-
-async def select_row(s: _Session, screen: int, part: int, row: int) -> None:
-    """Select a list row, as the browser does on a tap (a display choice)."""
-    await s.send(screen, part, EventType.CLICK, DataType.INTARRAY, 1, array=(row,))
 
 
 async def open_display_list(s: _Session, button: int, screen: int) -> bool:
@@ -914,10 +878,6 @@ async def read_rule_editor(s: _Session) -> tuple[RuleEditor, ...] | None:
 # -- rule settings (3217) -------------------------------------------------------------
 
 
-def _checked_on(state: UIState, screen: int, part: int) -> bool:
-    return bool(state.get(screen, part, "CHECK_STATE") == 1)
-
-
 def rule_range_from_screen(state: UIState) -> RuleRange:
     """Read the rule settings' edit group (3217): the selected row's values."""
     s = RULE_SETTING
@@ -1043,7 +1003,7 @@ async def read_rule_day(s: _Session, rule: str, day: str) -> RuleDay:
         if not await open_rule_day(s, day):
             msg = f"rule {rule}: the iTM does not offer editing {day}"
             raise ItmCommandError(msg)
-        rows = _cells(s.state, RULE_SETTING, RS_LIST)
+        rows = list_cells(s.state, RULE_SETTING, RS_LIST)
         return RuleDay(rule, day, rows, await read_rule_ranges(s))
     finally:
         await leave_rules(s)
@@ -1071,7 +1031,7 @@ async def read_rule_settings(s: _Session) -> tuple[RuleDay, ...] | None:
             for day in (*WEEKDAYS, *special_days(s.state)):
                 if not await open_rule_day(s, day):
                     continue
-                rows = _cells(s.state, RULE_SETTING, RS_LIST)
+                rows = list_cells(s.state, RULE_SETTING, RS_LIST)
                 days.append(RuleDay(name, day, rows, await read_rule_ranges(s)))
                 await close(s, RULE_SETTING, RS_CANCEL)
             await leave_rule_editor(s)
@@ -1168,7 +1128,7 @@ async def read_installer(s: _Session) -> EnergyInstallerSettings | None:
         analog = None
         if points and s.state.get(ROOM_TEMP, RT_ANALOG_BUTTON, "ENABLED") != 0:
             await open_below(s, ROOM_TEMP, RT_ANALOG_BUTTON, ANALOG_SELECT)
-            analog = _cells(s.state, ANALOG_SELECT, AS_LIST)
+            analog = list_cells(s.state, ANALOG_SELECT, AS_LIST)
             await close(s, ANALOG_SELECT, AS_CANCEL)
         await close(s, ROOM_TEMP, RT_CANCEL)
         await open_below(s, INSTALLER, IN_COLLECT, COLLECT_START)

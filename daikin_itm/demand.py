@@ -51,9 +51,20 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from ._bases import ClientCore
+from ._screens import click as _click
+from ._screens import close as _close
+from ._screens import ensure_enabled as _ensure_enabled
+from ._screens import enter_number as _number
+from ._screens import graph as _graph
+from ._screens import open_below as _open_below
+from ._screens import press_ok as _ok
+from ._screens import radio as _radio
+from ._screens import row_named as _row
+from ._screens import select as _select
 from ._util import T as _T
 from ._util import ignore as _ignore
-from .energy_navigator import ShownValue, parse_shown
+from .energy_navigator import ShownValue
+from .energy_navigator import shown_value as _shown
 from .exceptions import ItmCommandError, ReadOnlyError
 from .menu import MenuScreen
 from .protocol import DataType, EventType, ScreenID
@@ -354,11 +365,6 @@ def _string(state: UIState, screen: int, part: int) -> str | None:
     return None
 
 
-def _shown(state: UIState, screen: int, part: int) -> ShownValue | None:
-    value = state.get(screen, part, "TEXT")
-    return parse_shown(value) if isinstance(value, str) and value.strip() else None
-
-
 def _options(state: UIState, screen: int, part: int) -> tuple[str, ...]:
     return tuple(
         html.unescape(str(o)).strip()
@@ -385,57 +391,6 @@ def _names(state: UIState, screen: int, part: int, *, last: bool = True) -> list
         (row[-1] if last else row[0]) if row else ""
         for row in _rows(state, screen, part)
     ]
-
-
-def _graph(state: UIState, screen: int, part: int) -> tuple[Any, ...]:
-    for ptype in ("BARLINE_GRAPH", "POINT_GRAPH"):
-        if (value := state.get(screen, part, ptype)) is not None:
-            return tuple(value)
-    return ()
-
-
-def _radio(state: UIState, screen: int, on: int, off: int) -> bool | None:
-    if state.get(screen, on, "CHECK_STATE") == 1:
-        return True
-    if state.get(screen, off, "CHECK_STATE") == 1:
-        return False
-    return None
-
-
-def _row(names: list[str], name: str, what: str) -> int:
-    found = [i for i, n in enumerate(names) if n == name.strip()]
-    if len(found) != 1:
-        msg = f"{what} {name!r} not found once (found {len(found)}); listed: {names}"
-        raise ItmCommandError(msg)
-    return found[0]
-
-
-def _ensure_enabled(s: _Session, screen: int, part: int, what: str) -> None:
-    s.refuse_disabled(screen, part, what)
-
-
-async def _click(s: _Session, screen: int, part: int, what: str) -> Reply:
-    return await s.click(screen, part, what)
-
-
-async def _select(s: _Session, screen: int, part: int, row: int) -> None:
-    """Select a list row (a display choice, like a tap in the browser)."""
-    await s.select_row(screen, part, row)
-
-
-async def _close(s: _Session, screen: int, part: int) -> None:
-    """Leave a screen with its Close or Cancel part, if it is open. Never OK."""
-    if screen in s.state.screens:
-        await s.send(screen, part)
-        s.state.screens.pop(screen, None)
-
-
-async def _open_below(s: _Session, screen: int, button: int, target: int) -> None:
-    reply = await _click(s, screen, button, f"screen {target}")
-    await s.wait_for_progress(reply)
-    if target not in s.state.screens:
-        msg = f"screen {target} did not open: {reply.dialogs()}"
-        raise ItmCommandError(msg)
 
 
 async def _dismiss(s: _Session, screen: int, reply: Reply) -> None:
@@ -476,19 +431,6 @@ async def _pick(s: _Session, screen: int, part: int, value: str, what: str) -> N
         return
     _ensure_enabled(s, screen, part, what)
     await s._pick_option(screen, part, index, what)
-
-
-async def _number(
-    s: _Session, screen: int, button: int, value: float, what: str
-) -> None:
-    """Enter a number through its Change button (never one shown disabled)."""
-    _ensure_enabled(s, screen, button, what)
-    await s.answer_number(button, value, what, screen=screen)
-
-
-async def _ok(s: _Session, label: str, screen: int, ok: int, cancel: int) -> bool:
-    _ensure_enabled(s, screen, ok, label)
-    return await s.press_ok(label, screen, ok, cancel)
 
 
 def _close_to(shown: ShownValue | None, wanted: float) -> bool:

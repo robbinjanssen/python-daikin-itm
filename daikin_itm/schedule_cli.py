@@ -5,7 +5,8 @@ from __future__ import annotations
 import sys
 from typing import TYPE_CHECKING, Any
 
-from .cli_common import _out, _print_plan
+from .cli_common import echo as _out
+from .cli_common import print_plan as _print_plan
 from .menu import CalendarRule
 from .models import PowerState, RemoteLock
 from .schedule_edit import CalendarRuleSpec, EventSpec
@@ -18,7 +19,8 @@ if TYPE_CHECKING:
     from .menu import ScheduleEvent, ScheduleSummary
 
 
-def _print_schedules(programs: list[ScheduleSummary]) -> None:
+def print_schedules(programs: list[ScheduleSummary]) -> None:
+    """Print the schedule programs, one per line."""
     for p in programs:
         period = f"{p.period[0]}-{p.period[1]}" if p.period else "all year"
         _out(f"{p.name:24} {'enabled' if p.enabled else 'disabled':9} {period}")
@@ -26,7 +28,7 @@ def _print_schedules(programs: list[ScheduleSummary]) -> None:
 
 async def _schedules(client: ItmClient, _args: argparse.Namespace) -> None:
     """Show the schedule programs."""
-    _print_schedules(await client.fetch_schedules())
+    print_schedules(await client.fetch_schedules())
 
 
 def _print_event(e: ScheduleEvent) -> None:
@@ -63,7 +65,7 @@ async def _schedule(client: ItmClient, args: argparse.Namespace) -> None:
     if args.create:
         created = await client.create_schedule(args.name)
         if not _print_plan(client) and created is not None:
-            _print_schedules([created])
+            print_schedules([created])
         return
     if args.delete:
         await client.delete_schedule(args.name)
@@ -73,7 +75,7 @@ async def _schedule(client: ItmClient, args: argparse.Namespace) -> None:
     if args.enable or args.disable:
         summary = await client.set_schedule_enabled(args.name, enabled=args.enable)
         if not _print_plan(client) and summary is not None:
-            _print_schedules([summary])
+            print_schedules([summary])
         return
     p = await client.fetch_schedule(
         args.name, events=not args.no_events, details=args.details

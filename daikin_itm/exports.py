@@ -32,6 +32,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ._bases import ClientCore
+from ._screens import click as _click
+from ._screens import close as _close
 from ._util import ignore as _ignore
 from .exceptions import ItmCommandError
 from .menu import MenuScreen
@@ -41,7 +43,6 @@ from .system import MB_ENERGY_EXPORT, MB_PPD, PpdSettings, ppd_from_screen
 if TYPE_CHECKING:
     from datetime import date
 
-    from .protocol import Reply
     from .session import _Session
     from .state import UIState
 
@@ -171,17 +172,6 @@ async def answer_date(
         msg = f"{what}: {value} outside the iTM's range"
         raise ItmCommandError(msg)
     await s.send(d.screen, d.data[0], EventType.CLICK, DataType.DATE, 3, array=wanted)
-
-
-async def _click(s: _Session, screen: int, part: int, what: str) -> Reply:
-    """Click a part; a hidden one works (the menu hides buttons without blocking)."""
-    return await s.click(screen, part, what)
-
-
-async def _close(s: _Session, screen: int, part: int) -> None:
-    if screen in s.state.screens:
-        await s.send(screen, part)
-        s.state.screens.pop(screen, None)
 
 
 # -- downloads ------------------------------------------------------------------------

@@ -36,12 +36,26 @@ OK of 402 and 502 saves; an enabled group is disabled before it is deleted.
 
 from __future__ import annotations
 
-import html
 import re
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from ._bases import ClientCore
+from ._screens import activation as _activation
+from ._screens import answer_name as _answer_name
+from ._screens import cells as _cells
+from ._screens import ensure_enabled as _enabled
+from ._screens import leave as _leave
+from ._screens import open_screen as _open
+from ._screens import part_text as _text
+from ._screens import press as _press
+from ._screens import radio as _radio
+from ._screens import return_choice as _return_choice
+from ._screens import row_holding as _row_holding
+from ._screens import row_named as _row
+from ._screens import select as _select
+from ._util import check_wrong as _check_wrong
+from ._util import ignore as _discard
 from .exceptions import ItmCommandError
 from .menu import (
     MB_HEATING_OPTIMISATION,
@@ -49,12 +63,10 @@ from .menu import (
     MB_TEMP_LIMIT,
     MenuScreen,
 )
-from .protocol import DataType, EventType
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Iterable
+    from collections.abc import Iterable
 
-    from .protocol import Reply
     from .session import _Session
     from .state import UIState
 
@@ -151,34 +163,10 @@ SLIDING = _Groups(
 # -- readers --------------------------------------------------------------------------
 
 
-def _clean(value: Any) -> str:
-    return html.unescape(str(value)).strip()
-
-
-def _cells(state: UIState, screen: int, part: int) -> list[tuple[str, ...]]:
-    rows = (state.get(screen, part, "LIST_ROW") or {}).get("rows", [])
-    return [tuple(_clean(t) for t in r.get("text", [])) for r in rows]
-
-
-def _text(state: UIState, screen: int, part: int) -> str | None:
-    value = state.get(screen, part, "TEXT")
-    return (_clean(value) or None) if isinstance(value, str) else None
-
-
 def temperature(text: str | None) -> float | None:
     """Return the number in a shown temperature ("18.5", "18,5 °C"), or None."""
     m = _NUMBER.search(text or "")
     return float(m.group().replace(",", ".")) if m else None
-
-
-def _activation(state: UIState, screen: int, disable: int, text: str) -> bool:
-    """Tell whether a row's activation text means on.
-
-    The text is the enable radio's label when on and empty (or the disable radio's
-    label) when off, in any display language.
-    """
-    off = _clean(state.get(screen, disable, "LABEL") or "")
-    return bool(text) and not (off and text == off)
 
 
 def _cell(row: tuple[str, ...], index: int) -> str:
@@ -264,121 +252,6 @@ def sliding_settings_from_screen(state: UIState) -> dict[str, Any]:
 
 
 # -- helpers --------------------------------------------------------------------------
-
-
-def _row(rows: list[str], name: str, what: str) -> int:
-    """Return the row showing name; raise when it isn't there exactly once."""
-    found = [i for i, n in enumerate(rows) if n == name.strip()]
-    if len(found) != 1:
-        msg = f"{what} {name!r} not found once (found {len(found)}); listed: {rows}"
-        raise ItmCommandError(msg)
-    return found[0]
-
-
-def _row_holding(rows: list[tuple[str, ...]], name: str, what: str) -> int:
-    """Return the row with a cell showing name (the column layout is unknown)."""
-    found = [i for i, r in enumerate(rows) if name.strip() in r]
-    if len(found) != 1:
-        listed = [" ".join(r) for r in rows]
-        msg = f"{what} {name!r} not found once (found {len(found)}); listed: {listed}"
-        raise ItmCommandError(msg)
-    return found[0]
-
-
-async def _select(s: _Session, screen: int, part: int, row: int) -> None:
-    """Select a list row."""
-    await s.select_row(screen, part, row)
-
-
-async def _select_multi(s: _Session, screen: int, part: int, row: int) -> None:
-    """Select one row of a multi-select list (CLICK + INTARRAY, as the browser)."""
-    await s.send(screen, part, EventType.CLICK, DataType.INTARRAY, 1, array=(row,))
-
-
-def _enabled(s: _Session, screen: int, part: int, what: str) -> None:
-    """Raise when the iTM reports a part disabled (clicking it hangs the iTM)."""
-    s.refuse_disabled(screen, part, what)
-
-
-def _radio(state: UIState, screen: int, enable: int, disable: int) -> bool | None:
-    """Return the selected row's activation as its radios show it."""
-    if state.get(screen, enable, "CHECK_STATE") == 1:
-        return True
-    if state.get(screen, disable, "CHECK_STATE") == 1:
-        return False
-    return None
-
-
-async def _open(s: _Session, button: int, screen: MenuScreen, what: str) -> None:
-    if not await s.open_menu_screen(button, screen):
-        msg = f"the {what} screen did not open"
-        raise ItmCommandError(msg)
-
-
-async def _leave(s: _Session, screen: int, cancel: int) -> None:
-    """Leave a sub-screen with its Cancel, if open; a "discard?" question gets Yes."""
-    if screen not in s.state.screens:
-        return
-    reply = await s.send(screen, cancel)
-    for dialog in reply.dialogs():
-        if dialog[1] == "CONFIRM":
-            await s.send(screen, dialog[0])
-    s.state.screens.pop(screen, None)
-
-
-async def _answer_name(
-    s: _Session, screen: int, reply: Reply, name: str, label: str
-) -> bool:
-    """Answer the CHARINPUT dialog a button opened, through ``s.write``.
-
-    Returns
-    -------
-        True when sent, False in a dry run (the dialog is cancelled).
-
-    """
-    dialogs = [u for u in reply.screens if u.update == "DLG_OPEN"]
-    if not dialogs or dialogs[0].data[1] != "CHARINPUT":
-        msg = f"{label}: no name input opened: {reply.dialogs()}"
-        raise ItmCommandError(msg)
-    d = dialogs[0]
-    low, high = d.data[4], d.data[5]
-    if not low <= len(name) <= high:
-        await s.send(d.screen, d.data[0], EventType.CLICK2)
-        msg = f"{label}: a name is {low}-{high} characters: {name!r}"
-        raise ItmCommandError(msg)
-    sent = await s.write(
-        label, d.screen, d.data[0], EventType.CLICK, DataType.STRING, string=name
-    )
-    if sent is None:
-        await s.send(d.screen, d.data[0], EventType.CLICK2)
-        return False
-    await s._answer_confirm(screen, sent)
-    return True
-
-
-async def _press(s: _Session, label: str, screen: int, part: int) -> bool:
-    """Press an immediate button (radio, delete) through ``s.write``; answer Yes.
-
-    Returns
-    -------
-        True when sent, False in a dry run.
-
-    """
-    _enabled(s, screen, part, label)
-    reply = await s.write(label, screen, part)
-    if reply is None:
-        return False
-    await s._answer_confirm(screen, reply)
-    return True
-
-
-async def _return_choice(s: _Session, screen: int, ok: int, what: str) -> None:
-    """Press a sub-screen's OK that only returns its choice (assumed)."""
-    reply = await s.send(screen, ok)
-    await s._answer_confirm(screen, reply)
-    if screen in s.state.screens:
-        msg = f"{what}: the screen did not close"
-        raise ItmCommandError(msg)
 
 
 # -- groups: temperature limit (400-402) and sliding temperature (500-503) ------------
@@ -578,9 +451,7 @@ async def set_group_members(
         for member in members_from_screen(s.state, g.members):
             if member not in wanted:
                 current = list(members_from_screen(s.state, g.members))
-                await _select_multi(
-                    s, g.members, M_MEMBERS, _row(current, member, "member")
-                )
+                await _select(s, g.members, M_MEMBERS, _row(current, member, "member"))
                 _enabled(s, g.members, M_REMOVE, f"remove from {g.what}")
                 await s.send(g.members, M_REMOVE)
         for member in wanted:
@@ -592,7 +463,7 @@ async def set_group_members(
             except ItmCommandError as err:
                 msg = f"{name}: {member!r} is not offered: {err}"
                 raise ItmCommandError(msg) from err
-            await _select_multi(s, g.members, M_AVAILABLE, row)
+            await _select(s, g.members, M_AVAILABLE, row)
             _enabled(s, g.members, M_ADD, f"add to {g.what}")
             await s.send(g.members, M_ADD)
         got = list(members_from_screen(s.state, g.members))
@@ -825,19 +696,9 @@ async def set_heating_optimisation_all(s: _Session, *, enabled: bool) -> bool:
 # -- the client's public methods ------------------------------------------------------
 
 
-def _close(a: float | None, b: float | None) -> bool:
+def same_temperature(a: float | None, b: float | None) -> bool:
+    """Tell whether two temperatures are equal within the tolerance."""
     return a is not None and b is not None and abs(a - b) <= TOLERANCE
-
-
-def _check_wrong(name: str, wrong: list[str], result: object) -> None:
-    if wrong:
-        msg = f"{name}: the iTM did not take the {', '.join(wrong)}: {result}"
-        raise ItmCommandError(msg)
-
-
-async def _discard(call: Awaitable[Any]) -> None:
-    """Await a session write and drop its "sent" flag (dry runs plan instead)."""
-    await call
 
 
 class DealerFunctionsMixin(ClientCore):  # pylint: disable=too-many-public-methods
@@ -950,7 +811,7 @@ class DealerFunctionsMixin(ClientCore):  # pylint: disable=too-many-public-metho
                 ("lower", lower, result.lower),
                 ("upper", upper, result.upper),
             )
-            if want is not None and not _close(want, have)
+            if want is not None and not same_temperature(want, have)
         ]
         _check_wrong(name, wrong, result)
         return result
@@ -1110,7 +971,7 @@ class DealerFunctionsMixin(ClientCore):  # pylint: disable=too-many-public-metho
             msg = f"{name}: the sliding temperature group is gone after the change"
             raise ItmCommandError(msg)
         wrong = []
-        if outdoor_point is not None and not _same_point(
+        if outdoor_point is not None and not same_point(
             result.outdoor_point, outdoor_point
         ):
             wrong.append("outdoor point")
@@ -1119,7 +980,7 @@ class DealerFunctionsMixin(ClientCore):  # pylint: disable=too-many-public-metho
             ("setpoint range", setpoint_range, result.setpoint_range),
         ):
             if want is not None and not (
-                have is not None and all(map(_close, want, have))
+                have is not None and all(map(same_temperature, want, have))
             ):
                 wrong.append(what)
         _check_wrong(name, wrong, result)
@@ -1230,7 +1091,7 @@ class DealerFunctionsMixin(ClientCore):  # pylint: disable=too-many-public-metho
         return result
 
 
-def _same_point(shown: str | None, wanted: str) -> bool:
+def same_point(shown: str | None, wanted: str) -> bool:
     """Tell whether the shown outdoor point is the picked one (as listed in 503)."""
     if not shown:
         return False

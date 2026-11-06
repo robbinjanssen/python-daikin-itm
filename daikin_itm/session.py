@@ -371,7 +371,7 @@ class _Session(
         # Every session starts at the top level of the icon view, so the path is
         # absolute.
         for zone in path:
-            await self.select_by_name(_zone_name(zone, self.icons()))
+            await self.select_by_name(zone_name(zone, self.icons()))
             await self.send(ScreenID.STDICON, ICON_BTN_DOWN)
 
     async def read_units(self) -> dict[str, Unit]:
@@ -1107,7 +1107,7 @@ class _Session(
         return ScreenID.SETTINGS in self.state.screens
 
 
-def _zone_name(step: str, icons: list[tuple[str, int, int]]) -> str:
+def zone_name(step: str, icons: list[tuple[str, int, int]]) -> str:
     """Resolve a zone path step (a name, the "All" zone in any language, or #n)."""
     names = [i[0] for i in icons]
     zones = [i[0] for i in icons if i[1] == ICON_ID_ZONE]

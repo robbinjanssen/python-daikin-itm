@@ -18,7 +18,11 @@ import html
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from .energy_navigator import ShownValue, parse_shown
+from ._screens import part_text_or_blank as _text
+from ._screens import radio as _radio
+from ._screens import raw_rows as _rows
+from .energy_navigator import ShownValue
+from .energy_navigator import shown_value as _shown_value
 from .menu import MenuScreen
 
 if TYPE_CHECKING:
@@ -74,25 +78,8 @@ class ServiceSettings:  # pylint: disable=too-many-instance-attributes
     energy_save_mode: str | None = None  # "power_limit_lock" or "energy_saving"
 
 
-def _text(state: UIState, screen: int, part: int) -> str:
-    value = state.get(screen, part, "TEXT")
-    return html.unescape(value).strip() if isinstance(value, str) else ""
-
-
-def _rows(state: UIState, screen: int, part: int) -> list[dict[str, Any]]:
-    return list((state.get(screen, part, "LIST_ROW") or {}).get("rows", []))
-
-
 def _cells(row: dict[str, Any]) -> list[str]:
     return [html.unescape(str(t)).strip() for t in row.get("text", [])]
-
-
-def _radio(state: UIState, screen: int, on: int, off: int) -> bool | None:
-    if state.get(screen, on, "CHECK_STATE") == 1:
-        return True
-    if state.get(screen, off, "CHECK_STATE") == 1:
-        return False
-    return None
 
 
 def logged_in(state: UIState) -> bool:
@@ -249,11 +236,6 @@ def _shown_text(state: UIState, screen: int, part: int) -> str | None:
     if not isinstance(value, str):
         return None
     return html.unescape(value).strip() or None
-
-
-def _shown_value(state: UIState, screen: int, part: int) -> ShownValue | None:
-    value = state.get(screen, part, "TEXT")
-    return parse_shown(value) if isinstance(value, str) and value.strip() else None
 
 
 def energy_saving_status_from_screen(state: UIState) -> EnergySavingStatus:

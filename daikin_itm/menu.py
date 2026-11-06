@@ -14,6 +14,8 @@ from datetime import date, datetime
 from enum import IntEnum, StrEnum
 from typing import TYPE_CHECKING, Any
 
+from ._screens import checked_index as _checked
+from ._screens import part_text as _text
 from .exceptions import ProtocolError
 from .lang import (
     event_lock_key,
@@ -434,11 +436,6 @@ class ItmConfig:
     system: SystemSettings | None = None  # with fetch_config(system=True)
 
 
-def _text(state: UIState, screen: int, part: int, ptype: str = "TEXT") -> str | None:
-    value = state.get(screen, part, ptype)
-    return html.unescape(value).strip() or None if isinstance(value, str) else None
-
-
 def _rows(state: UIState, screen: int, part: int) -> list[list[str]]:
     rows = (state.get(screen, part, "LIST_ROW") or {}).get("rows", [])
     return [[html.unescape(str(t)) for t in r["text"]] for r in rows]
@@ -448,13 +445,6 @@ def _combo_value(state: UIState, screen: int, part: int) -> int | None:
     nums = state.get(screen, part, "COMBO_NUMS") or []
     idx = state.get(screen, part, "SINGLE_SELIDX")
     return nums[idx] if idx is not None and 0 <= idx < len(nums) else None
-
-
-def _checked(state: UIState, screen: int, parts: tuple[int, ...]) -> int | None:
-    for i, part in enumerate(parts):
-        if state.get(screen, part, "CHECK_STATE") == 1:
-            return i
-    return None
 
 
 def indicators_from_screen(state: UIState) -> ItmIndicators:

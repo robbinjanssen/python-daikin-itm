@@ -8,7 +8,12 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .cli_common import _date_arg, _onoff, _out, _print_plan, _save, _shown
+from .cli_common import date_arg as _date_arg
+from .cli_common import echo as _out
+from .cli_common import onoff as _onoff
+from .cli_common import print_plan as _print_plan
+from .cli_common import save as _save
+from .cli_common import shown as _shown
 
 if TYPE_CHECKING:
     import argparse

@@ -53,6 +53,13 @@ from typing import TYPE_CHECKING, Any
 
 from . import exports
 from ._bases import ClientCore
+from ._screens import cell_lists as _rows
+from ._screens import click as _click
+from ._screens import close as _leave
+from ._screens import part_text_or_blank as _text
+from ._screens import radio as _radio
+from ._screens import select as _select
+from ._screens import select_rows as _select_rows
 from .exceptions import ItmCommandError, ReadOnlyError
 from .menu import CLOSE_PART, MenuScreen
 from .protocol import DataType, EventType
@@ -206,16 +213,6 @@ class PasswordSettings:
 # -- helpers --------------------------------------------------------------------------
 
 
-def _rows(state: UIState, screen: int, part: int) -> list[list[str]]:
-    rows = (state.get(screen, part, "LIST_ROW") or {}).get("rows", [])
-    return [[html.unescape(str(t)).strip() for t in r.get("text", [])] for r in rows]
-
-
-def _text(state: UIState, screen: int, part: int) -> str:
-    value = state.get(screen, part, "TEXT")
-    return html.unescape(value).strip() if isinstance(value, str) else ""
-
-
 def _name(row: list[str]) -> str:
     """Return a unit's name in a 3101/3103 row (second column, assumed)."""
     if len(row) > 1:
@@ -237,24 +234,11 @@ def _one(rows: list[list[str]], value: str, what: str) -> int:
     return found[0]
 
 
-def _radio(state: UIState, screen: int, on: int, off: int) -> bool | None:
-    if state.get(screen, on, "CHECK_STATE") == 1:
-        return True
-    if state.get(screen, off, "CHECK_STATE") == 1:
-        return False
-    return None
-
-
 def _refuse_dialogs(reply: Reply, what: str) -> None:
     for dialog in reply.dialogs():
         if dialog[1] in {"ERROR", "INFO"}:
             msg = f"{what}: the iTM refused: {dialog[2]!r}"
             raise ItmCommandError(msg)
-
-
-async def _click(s: _Session, screen: int, part: int, what: str) -> Reply:
-    """Click a part, never one the iTM reports disabled (that hangs it)."""
-    return await s.click(screen, part, what)
 
 
 async def _write_enabled(
@@ -265,13 +249,6 @@ async def _write_enabled(
         msg = f"{label}: the iTM has this button disabled"
         raise ItmCommandError(msg)
     return await s.write(label, screen, part)
-
-
-async def _leave(s: _Session, screen: int, cancel: int) -> None:
-    """Leave a screen with its Close/Cancel, if it is still open."""
-    if screen in s.state.screens:
-        await s.send(screen, cancel)
-        s.state.screens.pop(screen, None)
 
 
 async def _open_menu_button(s: _Session, button: int, screen: int, what: str) -> None:
@@ -290,16 +267,6 @@ async def _open_sub(s: _Session, screen: int, button: int, sub: int, what: str) 
     if sub not in s.state.screens:
         msg = f"{what}: the screen did not open: {reply.dialogs()}"
         raise ItmCommandError(msg)
-
-
-async def _select(s: _Session, screen: int, part: int, row: int) -> None:
-    await s.select_row(screen, part, row)
-
-
-async def _select_rows(s: _Session, screen: int, part: int, rows: list[int]) -> None:
-    await s.send(
-        screen, part, EventType.CLICK, DataType.INTARRAY, len(rows), array=tuple(rows)
-    )
 
 
 # -- leakage check: the outdoor units (3100) -----------------------------------------

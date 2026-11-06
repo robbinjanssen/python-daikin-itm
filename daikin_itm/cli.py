@@ -21,7 +21,10 @@ from typing import TYPE_CHECKING, Any
 
 import aiohttp
 
-from .cli_common import _out, _print_plan, _print_system, _safe
+from .cli_common import echo as _out
+from .cli_common import print_plan as _print_plan
+from .cli_common import print_system as _print_system
+from .cli_common import safe as _safe
 from .client import DEFAULT_ZONE_PATH, UNIT_VIEWS, FileSessionStore, ItmClient
 from .dealer_cli import DEALER_COMMANDS, add_dealer_commands
 from .energy_cli import ENERGY_COMMANDS, add_energy_commands
@@ -39,7 +42,8 @@ from .models import (
     RemoteLock,
     TempLimit,
 )
-from .schedule_cli import SCHEDULE_COMMANDS, _print_schedules, add_schedule_commands
+from .schedule_cli import SCHEDULE_COMMANDS, add_schedule_commands
+from .schedule_cli import print_schedules as _print_schedules
 from .service_cli import SERVICE_COMMANDS, add_service_commands
 from .system_cli import SYSTEM_COMMANDS, add_system_commands
 from .trace import TraceFile

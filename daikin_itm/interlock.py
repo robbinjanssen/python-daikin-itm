@@ -37,28 +37,26 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from ._bases import ClientCore
-from .dealer_functions import (
-    _activation,
-    _answer_name,
-    _cells,
-    _check_wrong,
-    _clean,
-    _close,
-    _discard,
-    _enabled,
-    _leave,
-    _open,
-    _press,
-    _radio,
-    _return_choice,
-    _row,
-    _row_holding,
-    _same_point,
-    _select,
-    _select_multi,
-    _text,
-    temperature,
-)
+from ._screens import activation as _activation
+from ._screens import answer_name as _answer_name
+from ._screens import cells as _cells
+from ._screens import checked_index as _checked_part
+from ._screens import clean as _clean
+from ._screens import click as _click
+from ._screens import ensure_enabled as _enabled
+from ._screens import leave as _leave
+from ._screens import open_screen as _open
+from ._screens import part_text as _text
+from ._screens import press as _press
+from ._screens import radio as _radio
+from ._screens import return_choice as _return_choice
+from ._screens import row_holding as _row_holding
+from ._screens import row_named as _row
+from ._screens import select as _select
+from ._screens import ticked as _ticked
+from ._util import check_wrong as _check_wrong
+from ._util import ignore as _discard
+from .dealer_functions import same_point, same_temperature, temperature
 from .exceptions import ItmCommandError
 from .lang import mode_from_label
 from .menu import (
@@ -318,18 +316,6 @@ def _label(state: UIState, screen: int, part: int) -> str:
     return _clean(state.get(screen, part, "LABEL") or "")
 
 
-def _checked_part(state: UIState, screen: int, parts: tuple[int, ...]) -> int | None:
-    """Return the index of the checked radio among parts, or None."""
-    for i, part in enumerate(parts):
-        if state.get(screen, part, "CHECK_STATE") == 1:
-            return i
-    return None
-
-
-def _ticked(state: UIState, screen: int, part: int) -> bool:
-    return bool(state.get(screen, part, "CHECK_STATE") == 1)
-
-
 def _tabs_shown(state: UIState, screen: int, part: int) -> tuple[str, ...]:
     """Return the names of a tab control's tabs that aren't hidden."""
     names = [_clean(n) for n in state.get(screen, part, "TAB_NAME") or []]
@@ -420,7 +406,6 @@ async def _pick_rows(  # noqa: PLR0913  # pylint: disable=too-many-arguments,too
     wanted: tuple[str, ...],
     *,
     what: str,
-    multi: bool,
 ) -> None:
     """Make a picker's chosen list hold exactly the wanted names.
 
@@ -435,19 +420,17 @@ async def _pick_rows(  # noqa: PLR0913  # pylint: disable=too-many-arguments,too
         buttons: Its add and remove buttons.
         wanted: The names, exactly.
         what: For errors.
-        multi: Whether the lists are multi-select (INTARRAY).
 
     """
     chosen, available = lists
     add, remove = buttons
-    select = _select_multi if multi else _select
     names = list(dict.fromkeys(w.strip() for w in wanted))
     while True:
         rows = _cells(s.state, screen, chosen)
         extra = [i for i, r in enumerate(rows) if any(r) and not set(r) & set(names)]
         if not extra:
             break
-        await select(s, screen, chosen, extra[0])
+        await _select(s, screen, chosen, extra[0])
         _enabled(s, screen, remove, f"remove {what}")
         await s.send(screen, remove)
         if len(_cells(s.state, screen, chosen)) == len(rows):
@@ -462,7 +445,7 @@ async def _pick_rows(  # noqa: PLR0913  # pylint: disable=too-many-arguments,too
         except ItmCommandError as err:
             msg = f"{name!r} is not offered: {err}"
             raise ItmCommandError(msg) from err
-        await select(s, screen, available, row)
+        await _select(s, screen, available, row)
         _enabled(s, screen, add, f"add {what}")
         await s.send(screen, add)
     got = _cells(s.state, screen, chosen)
@@ -470,12 +453,6 @@ async def _pick_rows(  # noqa: PLR0913  # pylint: disable=too-many-arguments,too
     if missing or len([r for r in got if any(r)]) != len(names):
         msg = f"{what}: the list would be {[' '.join(r) for r in got]}, not {names}"
         raise ItmCommandError(msg)
-
-
-async def _click(s: _Session, screen: int, part: int, what: str) -> None:
-    """Click a button or radio, refusing one the iTM reports disabled."""
-    _enabled(s, screen, part, what)
-    await s.send(screen, part)
 
 
 async def _choose(s: _Session, screen: int, part: int, index: int, what: str) -> None:
@@ -826,7 +803,7 @@ async def _read_actions(s: _Session) -> tuple[InterlockAction, ...]:
     for row, cells in enumerate(_cells(s.state, INTERLOCK_OUTPUTS, O_EVENTS)):
         if not any(cells):
             continue
-        await _select_multi(s, INTERLOCK_OUTPUTS, O_EVENTS, row)
+        await _select(s, INTERLOCK_OUTPUTS, O_EVENTS, row)
         if not _usable_button(s, INTERLOCK_OUTPUTS, O_ACTION_BUTTON):
             continue
         await _open_below(
@@ -890,7 +867,7 @@ async def _set_action(s: _Session, spec: InterlockActionSpec) -> None:
     what = f"action of {spec.point}"
     rows = _cells(s.state, INTERLOCK_OUTPUTS, O_EVENTS)
     row = _row_holding(rows, spec.point, "interlock output")
-    await _select_multi(s, INTERLOCK_OUTPUTS, O_EVENTS, row)
+    await _select(s, INTERLOCK_OUTPUTS, O_EVENTS, row)
     a = INTERLOCK_ACTION
     await _open_below(s, INTERLOCK_OUTPUTS, O_ACTION_BUTTON, a, what)
     if spec.power is not None:
@@ -947,7 +924,6 @@ async def _set_output(s: _Session, tab: int, spec: InterlockOutputSpec) -> None:
                 (O_ADD, O_REMOVE),
                 spec.outputs,
                 what=what,
-                multi=True,
             )
         for action in spec.actions:
             await _set_action(s, action)
@@ -1001,7 +977,6 @@ async def set_interlock_setup(
                     (N_ADD, N_REMOVE),
                     inputs,
                     what=what,
-                    multi=False,
                 )
             for condition in conditions:
                 await _set_condition(s, condition)
@@ -1200,7 +1175,7 @@ class InterlockMixin(ClientCore):
                 (got.condition or "").casefold() != spec.condition.strip().casefold()
             ):
                 wrong.append(f"condition {tab + 1}")
-            if spec.interval is not None and not _close(
+            if spec.interval is not None and not same_temperature(
                 temperature(got.interval), spec.interval
             ):
                 wrong.append(f"interval {tab + 1}")
@@ -1232,7 +1207,7 @@ def _shown_as(shown: str | None, wanted: str | None, *, modes: bool = False) -> 
 
 
 def _number_is(shown: str | None, wanted: float | None) -> bool:
-    return wanted is None or _close(temperature(shown), wanted)
+    return wanted is None or same_temperature(temperature(shown), wanted)
 
 
 def _condition_is(got: InterlockCondition, spec: InterlockConditionSpec) -> bool:
@@ -1245,7 +1220,7 @@ def _condition_is(got: InterlockCondition, spec: InterlockConditionSpec) -> bool
         and _number_is(got.constant, spec.constant)
         and (
             spec.reference_point is None
-            or _same_point(got.reference_point, spec.reference_point)
+            or same_point(got.reference_point, spec.reference_point)
         )
         and _number_is(got.offset, spec.offset)
         and _number_is(got.hysteresis, spec.hysteresis)
@@ -1263,7 +1238,7 @@ def _action_is(got: InterlockAction, spec: InterlockActionSpec) -> bool:
     return (
         all(want is None or want == have for want, have in pairs)
         and _shown_as(got.mode, spec.mode, modes=True)
-        and (spec.setpoint is None or _close(got.setpoint, spec.setpoint))
+        and (spec.setpoint is None or same_temperature(got.setpoint, spec.setpoint))
     )
 
 

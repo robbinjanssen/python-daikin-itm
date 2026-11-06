@@ -46,6 +46,13 @@ from typing import TYPE_CHECKING
 
 from . import energy_navigator as en
 from ._bases import ClientCore
+from ._screens import click as _click
+from ._screens import close as _close
+from ._screens import ensure_enabled as _ensure_enabled
+from ._screens import enter_number as _number
+from ._screens import open_below as _open_below
+from ._screens import press_ok as _press_ok
+from ._screens import select as _select
 from ._util import ignore as _ignore
 from .exceptions import ItmCommandError
 from .menu import MenuScreen
@@ -109,23 +116,6 @@ class ActualChange:
 # -- helpers ---------------------------------------------------------------------------
 
 
-def _ensure_enabled(s: _Session, screen: int, part: int, what: str) -> None:
-    s.refuse_disabled(screen, part, what)
-
-
-async def _number(
-    s: _Session, screen: int, button: int, value: float, what: str
-) -> None:
-    """Enter a number through its Change button (never one shown disabled)."""
-    _ensure_enabled(s, screen, button, what)
-    await s.answer_number(button, value, what, screen=screen)
-
-
-async def _press_ok(s: _Session, label: str, screen: int, ok: int, cancel: int) -> bool:
-    _ensure_enabled(s, screen, ok, label)
-    return await s.press_ok(label, screen, ok, cancel)
-
-
 def _parts(screen: int) -> tuple[int, int]:
     """Return a plan screen's energy type combo and tab part."""
     if screen == en.PLANNED:
@@ -181,7 +171,7 @@ async def _months(
         if rows.count(month.strip()) != 1:
             msg = f"month {month!r} not listed once; the months are {rows}"
             raise ItmCommandError(msg)
-        await en.select_row(s, screen, list_part, rows.index(month.strip()))
+        await _select(s, screen, list_part, rows.index(month.strip()))
         await _number(s, screen, button, value, f"month {month}")
 
 
@@ -234,7 +224,7 @@ async def set_planned(s: _Session, change: PlannedChange) -> bool:
         ratio_button, month_button = PL_TAB_INPUTS[tab]
         if change.per_month is not None:
             radio = month_radio if change.per_month else year_radio
-            await en.click(s, en.PLANNED, radio, "yearly or monthly")
+            await _click(s, en.PLANNED, radio, "yearly or monthly")
         if change.ratio is not None:
             await _number(s, en.PLANNED, ratio_button, change.ratio, "ratio")
         await _months(s, en.PLANNED, (month_list, month_button), change.months)
@@ -410,12 +400,12 @@ async def set_sampling(
         if end is not None:
             sent |= await _enter_date(s, EQ_TO_BUTTON, end, "sampling to")
         if target is not None:
-            await en.open_below(s, eq, en.EQ_TARGET, en.SAMPLING_TARGETS)
+            await _open_below(s, eq, en.EQ_TARGET, en.SAMPLING_TARGETS)
             names = [t.name for t in en.sampling_targets_from_screen(s.state)]
             if names.count(target.strip()) != 1:
                 msg = f"sampling target {target!r} not listed once: {names}"
                 raise ItmCommandError(msg)
-            await en.select_row(
+            await _select(
                 s, en.SAMPLING_TARGETS, en.ST_LIST, names.index(target.strip())
             )
             sent |= await _press_ok(
@@ -423,8 +413,8 @@ async def set_sampling(
             )
         return sent
     finally:
-        await en.close(s, en.SAMPLING_TARGETS, en.ST_CANCEL)
-        await en.close(s, eq, en.EQ_CLOSE)
+        await _close(s, en.SAMPLING_TARGETS, en.ST_CANCEL)
+        await _close(s, eq, en.EQ_CLOSE)
 
 
 def _same_date(text: str | None, value: date) -> bool:
@@ -461,7 +451,7 @@ async def confirm_sampling(
             for part in (EQ_FROM, EQ_TO, EQ_TARGET_TEXT)
         )
     finally:
-        await en.close(s, eq, en.EQ_CLOSE)
+        await _close(s, eq, en.EQ_CLOSE)
     for value, text, what in ((start, shown[0], "from"), (end, shown[1], "to")):
         if value is not None and not _same_date(text, value):
             msg = f"sampling {what}: the iTM shows {text!r}, not {value}"
@@ -488,7 +478,7 @@ async def _select_entry(s: _Session, screen: int, name: str) -> None:
     if names.count(name.strip()) != 1:
         msg = f"{name!r} not listed once; listed: {names}"
         raise ItmCommandError(msg)
-    await en.select_row(s, screen, en.EL_LIST, names.index(name.strip()))
+    await _select(s, screen, en.EL_LIST, names.index(name.strip()))
 
 
 async def _answer_name(
@@ -544,13 +534,13 @@ async def create_entry(s: _Session, name: str, *, group: bool = False) -> bool:
         if name.strip() in en.list_names(s.state, screen):
             msg = f"{_kind(group=group)} {name!r} exists already"
             raise ItmCommandError(msg)
-        reply = await en.click(s, screen, en.EL_CREATE, label)
+        reply = await _click(s, screen, en.EL_CREATE, label)
         sent = await _answer_name(s, reply, screen, label, name)
         if sent and setting in s.state.screens:
             await _press_ok(s, f"{label}: settings", setting, ok, cancel)
         return sent
     finally:
-        await en.close(s, setting, cancel)
+        await _close(s, setting, cancel)
         await en.leave_display_list(s, screen)
 
 
@@ -572,7 +562,7 @@ async def rename_entry(
             msg = f"{_kind(group=group)} {new_name!r} exists already"
             raise ItmCommandError(msg)
         await _select_entry(s, screen, name)
-        reply = await en.click(s, screen, en.EL_RENAME, label)
+        reply = await _click(s, screen, en.EL_RENAME, label)
         return await _answer_name(s, reply, screen, label, new_name)
     finally:
         await en.leave_display_list(s, screen)
@@ -625,7 +615,7 @@ async def _select_rule(s: _Session, names: list[str], name: str) -> None:
     if names.count(name.strip()) != 1:
         msg = f"rule {name!r} not listed once; the rules are {names}"
         raise ItmCommandError(msg)
-    await en.select_row(s, en.RULES, en.RL_LIST, names.index(name.strip()))
+    await _select(s, en.RULES, en.RL_LIST, names.index(name.strip()))
 
 
 async def create_rule(s: _Session, name: str) -> bool:
@@ -642,7 +632,7 @@ async def create_rule(s: _Session, name: str) -> bool:
         if name.strip() in await _rule_list(s):
             msg = f"rule {name!r} exists already"
             raise ItmCommandError(msg)
-        reply = await en.click(s, en.RULES, en.RL_CREATE, label)
+        reply = await _click(s, en.RULES, en.RL_CREATE, label)
         return await _answer_name(s, reply, en.RULES, label, name)
     finally:
         await en.leave_rules(s)
@@ -664,7 +654,7 @@ async def rename_rule(s: _Session, name: str, new_name: str) -> bool:
             msg = f"rule {new_name!r} exists already"
             raise ItmCommandError(msg)
         await _select_rule(s, names, name)
-        reply = await en.click(s, en.RULES, en.RL_RENAME, label)
+        reply = await _click(s, en.RULES, en.RL_RENAME, label)
         return await _answer_name(s, reply, en.RULES, label, new_name)
     finally:
         await en.leave_rules(s)
@@ -708,7 +698,7 @@ async def copy_rule(s: _Session, name: str, new_name: str) -> bool:
             msg = f"rule {new_name!r} exists already"
             raise ItmCommandError(msg)
         await _select_rule(s, names, name)
-        reply = await en.click(s, en.RULES, en.RL_COPY, label)
+        reply = await _click(s, en.RULES, en.RL_COPY, label)
         return await _answer_name(s, reply, en.RULES, label, new_name)
     finally:
         await en.leave_rules(s)
@@ -740,7 +730,7 @@ async def copy_rule_calendar(s: _Session, name: str, targets: tuple[str, ...]) -
         raise ItmCommandError(msg)
     try:
         await _select_rule(s, await _rule_list(s), name)
-        reply = await en.click(s, en.RULES, en.RL_CALENDAR_COPY, label)
+        reply = await _click(s, en.RULES, en.RL_CALENDAR_COPY, label)
         prompts = [
             u
             for u in reply.screens
@@ -760,7 +750,7 @@ async def copy_rule_calendar(s: _Session, name: str, targets: tuple[str, ...]) -
         if shown and shown != name.strip():
             msg = f"{label}: the copy screen copies from {shown!r}"
             raise ItmCommandError(msg)
-        rows = [r[0] if r else "" for r in en._cells(s.state, screen, en.CC_LIST)]
+        rows = [r[0] if r else "" for r in en.list_cells(s.state, screen, en.CC_LIST)]
         if any(rows.count(t) != 1 for t in wanted):
             msg = f"{label}: not every target is listed once; listed: {rows}"
             raise ItmCommandError(msg)
@@ -775,7 +765,7 @@ async def copy_rule_calendar(s: _Session, name: str, targets: tuple[str, ...]) -
         )
         return await _press_ok(s, label, screen, en.CC_OK, en.CC_CANCEL)
     finally:
-        await en.close(s, screen, en.CC_CANCEL)
+        await _close(s, screen, en.CC_CANCEL)
         await en.leave_rules(s)
 
 
@@ -919,17 +909,17 @@ async def set_rule_day(
             msg = f"rule {rule}: the iTM does not offer editing {day}"
             raise ItmCommandError(msg)
         while rows := en.list_rows(s.state, rs, en.RS_LIST)[0]:
-            await en.select_row(s, rs, en.RS_LIST, 0)
-            reply = await en.click(s, rs, en.RS_DELETE, "delete time range")
+            await _select(s, rs, en.RS_LIST, 0)
+            reply = await _click(s, rs, en.RS_DELETE, "delete time range")
             await s._answer_confirm(rs, reply)
             if len(en.list_rows(s.state, rs, en.RS_LIST)[0]) >= len(rows):
                 msg = f"{label}: a time range was not deleted"
                 raise ItmCommandError(msg)
         for r in ranges:
             await _enter_range(s, r)
-            reply = await en.click(s, rs, en.RS_ADD, f"add {r.start}-{r.end}")
+            reply = await _click(s, rs, en.RS_ADD, f"add {r.start}-{r.end}")
             await s._answer_confirm(rs, reply)
-        await s._answer_confirm(rs, await en.click(s, rs, en.RS_OK, label))
+        await s._answer_confirm(rs, await _click(s, rs, en.RS_OK, label))
         if rs in s.state.screens:
             msg = f"{label}: the rule settings did not close"
             raise ItmCommandError(msg)
@@ -986,11 +976,11 @@ async def _open_installer(s: _Session, password: str, button: int, screen: int) 
     if not await en.open_installer(s):
         msg = "the energy navigator's installer settings did not open"
         raise ItmCommandError(msg)
-    await en.open_below(s, en.INSTALLER, button, screen)
+    await _open_below(s, en.INSTALLER, button, screen)
 
 
 def _row_named(state: UIState, screen: int, part: int, name: str) -> int:
-    rows = [r[0] if r else "" for r in en._cells(state, screen, part)]
+    rows = [r[0] if r else "" for r in en.list_cells(state, screen, part)]
     if rows.count(name.strip()) != 1:
         msg = f"{name!r} not listed once; listed: {rows}"
         raise ItmCommandError(msg)
@@ -1017,20 +1007,18 @@ async def set_room_temperature(
     label = f"room temperature of {point}"
     try:
         await _open_installer(s, password, en.IN_ROOM_TEMP, rt)
-        await en.select_row(
-            s, rt, en.RT_LIST, _row_named(s.state, rt, en.RT_LIST, point)
-        )
+        await _select(s, rt, en.RT_LIST, _row_named(s.state, rt, en.RT_LIST, point))
         radio = en.RT_OWN if analog_point is None else en.RT_ANALOG
-        await en.click(s, rt, radio, label)
+        await _click(s, rt, radio, label)
         if analog_point is not None:
-            await en.open_below(s, rt, en.RT_ANALOG_BUTTON, en.ANALOG_SELECT)
+            await _open_below(s, rt, en.RT_ANALOG_BUTTON, en.ANALOG_SELECT)
             row = _row_named(s.state, en.ANALOG_SELECT, en.AS_LIST, analog_point)
-            await en.select_row(s, en.ANALOG_SELECT, en.AS_LIST, row)
+            await _select(s, en.ANALOG_SELECT, en.AS_LIST, row)
             reply = await s.write(
                 f"{label}: analog input {analog_point}", en.ANALOG_SELECT, en.AS_OK
             )
             if reply is None:
-                await en.close(s, en.ANALOG_SELECT, en.AS_CANCEL)
+                await _close(s, en.ANALOG_SELECT, en.AS_CANCEL)
             else:
                 await s._answer_confirm(en.ANALOG_SELECT, reply)
             if en.ANALOG_SELECT in s.state.screens:

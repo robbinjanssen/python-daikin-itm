@@ -37,6 +37,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ._bases import ClientCore
+from ._screens import answer_name as _answer_name
+from ._screens import cell_lists as _cells
+from ._screens import close as _leave
+from ._screens import row_named as _row
+from ._screens import select as _select
 from ._util import ignore as _ignore
 from .exceptions import ItmCommandError
 from .menu import (
@@ -46,12 +51,11 @@ from .menu import (
     MenuScreen,
     emergency_stop_from_screen,
 )
-from .protocol import DataType, EventType, ScreenID
+from .protocol import ScreenID
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from .protocol import Reply
     from .session import _Session
     from .state import UIState
 
@@ -93,27 +97,9 @@ class EmergencyStopSettings:
 # -- helpers --------------------------------------------------------------------------
 
 
-def _cells(state: UIState, screen: int, part: int) -> list[list[str]]:
-    rows = (state.get(screen, part, "LIST_ROW") or {}).get("rows", [])
-    return [[html.unescape(str(t)).strip() for t in r.get("text", [])] for r in rows]
-
-
 def _last_column(state: UIState, screen: int, part: int) -> list[str]:
     """Return each row's last cell: the name, in the lists of 201-203 (assumed)."""
     return [row[-1] if row else "" for row in _cells(state, screen, part)]
-
-
-def _row(names: list[str], name: str, what: str) -> int:
-    """Return the row showing name; raise when it isn't there exactly once."""
-    found = [i for i, n in enumerate(names) if n == name.strip()]
-    if len(found) != 1:
-        msg = f"{what} {name!r} not found once (found {len(found)}); listed: {names}"
-        raise ItmCommandError(msg)
-    return found[0]
-
-
-async def _select(s: _Session, screen: int, part: int, row: int) -> None:
-    await s.select_row(screen, part, row)
 
 
 async def _open(s: _Session) -> None:
@@ -154,41 +140,6 @@ def _allowed(s: _Session, part: int, name: str, verb: str) -> None:
     if s.state.get(MAIN, part, "ENABLED") == 0:
         msg = f"{name}: the iTM does not allow {verb} this program; {BUILT_IN}"
         raise ItmCommandError(msg)
-
-
-async def _answer_name(s: _Session, reply: Reply, name: str, label: str) -> bool:
-    """Answer the CHARINPUT dialog a button opened, through ``s.write``.
-
-    Returns
-    -------
-        True when sent, False in a dry run (the dialog is cancelled).
-
-    """
-    dialogs = [u for u in reply.screens if u.update == "DLG_OPEN"]
-    if not dialogs or dialogs[0].data[1] != "CHARINPUT":
-        msg = f"{label}: no name input opened: {reply.dialogs()}"
-        raise ItmCommandError(msg)
-    d = dialogs[0]
-    low, high = d.data[4], d.data[5]
-    if not low <= len(name) <= high:
-        await s.send(d.screen, d.data[0], EventType.CLICK2)
-        msg = f"an emergency stop program name is {low}-{high} characters: {name!r}"
-        raise ItmCommandError(msg)
-    sent = await s.write(
-        label, d.screen, d.data[0], EventType.CLICK, DataType.STRING, string=name
-    )
-    if sent is None:  # dry run: cancel the name input
-        await s.send(d.screen, d.data[0], EventType.CLICK2)
-        return False
-    await s._answer_confirm(MAIN, sent)
-    return True
-
-
-async def _leave(s: _Session, screen: int, cancel: int) -> None:
-    """Leave a sub-screen with its Cancel, if it is still open."""
-    if screen in s.state.screens:
-        await s.send(screen, cancel)
-        s.state.screens.pop(screen, None)
 
 
 def _exists(s: _Session, name: str) -> None:
@@ -282,7 +233,7 @@ async def create_program(s: _Session, name: str) -> bool:
             raise ItmCommandError(msg)
         reply = await s.click(MAIN, ES_CREATE, "add emergency stop program")
         return await _answer_name(
-            s, reply, name, f"create emergency stop program {name}"
+            s, MAIN, reply, name, f"create emergency stop program {name}"
         )
     finally:
         await s.close_screen(MAIN)
@@ -303,7 +254,11 @@ async def rename_program(s: _Session, name: str, new_name: str) -> bool:
         _allowed(s, ES_RENAME, name, "renaming")
         reply = await s.click(MAIN, ES_RENAME, "rename emergency stop program")
         return await _answer_name(
-            s, reply, new_name, f"rename emergency stop program {name} to {new_name}"
+            s,
+            MAIN,
+            reply,
+            new_name,
+            f"rename emergency stop program {name} to {new_name}",
         )
     finally:
         await s.close_screen(MAIN)
@@ -324,7 +279,11 @@ async def copy_program(s: _Session, name: str, new_name: str) -> bool:
         _allowed(s, ES_COPY, name, "copying")
         reply = await s.click(MAIN, ES_COPY, "copy emergency stop program")
         return await _answer_name(
-            s, reply, new_name, f"copy emergency stop program {name} to {new_name}"
+            s,
+            MAIN,
+            reply,
+            new_name,
+            f"copy emergency stop program {name} to {new_name}",
         )
     finally:
         await s.close_screen(MAIN)

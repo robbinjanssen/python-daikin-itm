@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any, TypeVar
 
+from .exceptions import ItmCommandError
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Coroutine
 
@@ -53,3 +55,10 @@ async def run_to_completion(coro: Coroutine[Any, Any, T]) -> T:
         if cancelled:
             raise asyncio.CancelledError
         return result
+
+
+def check_wrong(name: str, wrong: list[str], result: object) -> None:
+    """Raise when a read-back shows values the iTM did not take."""
+    if wrong:
+        msg = f"{name}: the iTM did not take the {', '.join(wrong)}: {result}"
+        raise ItmCommandError(msg)

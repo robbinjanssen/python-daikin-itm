@@ -27,6 +27,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ._bases import ClientCore, SessionCore
+from ._screens import select as _select_row
+from ._screens import select_rows as _select_rows
 from .exceptions import ItmCommandError
 from .lang import mode_from_label
 from .menu import (
@@ -240,10 +242,6 @@ async def _pick(s: _Session, screen: int, part: int, index: int, what: str) -> N
         msg = f"{what}: the iTM does not offer this here"
         raise ItmCommandError(msg)
     await s.send(screen, part, EventType.CLICK, DataType.INT, index)
-
-
-async def _select_row(s: _Session, screen: int, part: int, row: int) -> None:
-    await s.send(screen, part, EventType.CLICK, DataType.INTARRAY, 1, array=(row,))
 
 
 async def _tab(s: _Session, tab: int) -> None:
@@ -793,12 +791,6 @@ CALENDAR_COPY, CC_TARGETS, CC_OK, CC_CANCEL = 106, 4, 15, 16
 def _list_names(state: UIState, screen: int, part: int) -> list[str]:
     rows = (state.get(screen, part, "LIST_ROW") or {}).get("rows", [])
     return [str((r.get("text") or [""])[0]).strip() for r in rows]
-
-
-async def _select_rows(s: _Session, screen: int, part: int, rows: list[int]) -> None:
-    await s.send(
-        screen, part, EventType.CLICK, DataType.INTARRAY, len(rows), array=tuple(rows)
-    )
 
 
 async def copy_program(

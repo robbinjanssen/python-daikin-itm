@@ -27,11 +27,11 @@ with the registration unchanged.
 
 from __future__ import annotations
 
-import html
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from ._bases import ClientCore
+from ._screens import clean as _clean
 from .exceptions import ItmCommandError
 from .menu import MenuScreen
 
@@ -89,10 +89,6 @@ class PointRegistration:
     info: str
     columns: tuple[str, ...]  # every cell of the row
     attributes: PointAttributes | None = None  # only with details=True
-
-
-def _clean(value: Any) -> str:
-    return html.unescape(str(value)).strip()
 
 
 def registrations_from_screen(state: UIState) -> tuple[PointRegistration, ...]:

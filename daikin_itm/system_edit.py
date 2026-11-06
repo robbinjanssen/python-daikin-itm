@@ -19,6 +19,9 @@ from typing import TYPE_CHECKING, Any, cast
 
 from . import zones_edit
 from ._bases import ClientCore, SessionCore
+from ._screens import close as _close
+from ._screens import open_screen as _open
+from ._screens import radio as _radio
 from ._util import ignore as _ignore
 from .exceptions import ItmCommandError, SessionEnded
 from .menu import (
@@ -154,27 +157,6 @@ class EmailServer:
     password: str | None = None  # sent once, never logged nor planned
     resend_interval: int | None = None  # option index, as the iTM lists them
     auth_method: int | None = None  # option index
-
-
-async def _close(s: _Session, screen: int, cancel: int) -> None:
-    """Leave a screen with its Cancel/Close, if it is still open."""
-    if screen in s.state.screens:
-        await s.send(screen, cancel)
-        s.state.screens.pop(screen, None)
-
-
-async def _open(s: _Session, button: int, screen: MenuScreen) -> None:
-    if not await s.open_menu_screen(button, screen):
-        msg = f"the {screen.name.lower()} screen did not open"
-        raise ItmCommandError(msg)
-
-
-def _radio(state: UIState, screen: int, on: int, off: int) -> bool | None:
-    if state.get(screen, on, "CHECK_STATE") == 1:
-        return True
-    if state.get(screen, off, "CHECK_STATE") == 1:
-        return False
-    return None
 
 
 async def _plan_or_send_input(

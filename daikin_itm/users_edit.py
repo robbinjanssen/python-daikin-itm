@@ -15,6 +15,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ._bases import ClientCore, SessionCore
+from ._screens import close as _close
+from ._screens import open_screen as _open
+from ._screens import radio as _radio
 from ._util import ignore as _ignore
 from .exceptions import ItmCommandError, LoginRejected, SessionEnded
 from .menu import CLOSE_PART, DATE_FORMATS, MenuScreen
@@ -38,7 +41,6 @@ from .system import (
     row_index,
     web_users_from_screen,
 )
-from .system_edit import _close, _open, _radio
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
