@@ -8,6 +8,7 @@ are a short length followed by the raw characters. Every reply starts with a new
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 from enum import IntEnum
@@ -182,6 +183,15 @@ DIALOG = {
 
 _HEX = re.compile(r"[0-9a-fA-F]+")
 _TRUNCATED = re.compile(r"[0-9a-fA-F]*\0*")  # a cut-off number at the end of a reply
+
+
+def login_payload(username: str, password: str) -> str:
+    """Return a login click's string, as the browser sends it.
+
+    The iTM's protocol takes the password only as its SHA-256 digest.
+    """
+    digest = hashlib.sha256(password.encode()).hexdigest() if password else ""
+    return f"{len(username):04d}{username}{digest}"
 
 
 def is_token(text: str) -> bool:

@@ -9,7 +9,6 @@ take a fresh session, see ``open_own_settings``.
 
 from __future__ import annotations
 
-import hashlib
 import html
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
@@ -23,7 +22,7 @@ from ._screens import radio as _radio
 from ._util import ignore as _ignore
 from .exceptions import ItmCommandError, LoginRejected, SessionEnded
 from .menu import CLOSE_PART, DATE_FORMATS, MenuScreen
-from .protocol import NO_TOKEN, DataType, EventType, ScreenID
+from .protocol import NO_TOKEN, DataType, EventType, ScreenID, login_payload
 from .system import (
     LANGUAGE_NAMES,
     LANGUAGE_RADIOS,
@@ -93,9 +92,8 @@ class WebUserScreens:
 
 # The login screen's (1203) second button (part 5, "User Settings") logs in
 # straight into 1205 with the same payload as Login. Seen on a real iTM: 1205 opens
-# on that login, is read and left with Cancel, and its OK saves the icon colour and a
-# new password (in the same PASSWORD inputs as 1204's). Assumed, not seen: that its
-# language button (7) opens the language screen (2501).
+# on that login and is left with Cancel; its OK saves the settings and a new password
+# (in the same PASSWORD inputs as 1204's); its language button (7) opens 2501.
 
 
 async def open_own_settings(s: _Session, username: str, password: str) -> None:
@@ -118,14 +116,13 @@ async def open_own_settings(s: _Session, username: str, password: str) -> None:
         string=s._client.web_version,
     )
     s.token = NO_TOKEN
-    digest = hashlib.sha256(password.encode()).hexdigest() if password else ""
     s.logged_in = True
     reply = await s.send(
         ScreenID.LOGIN,
         LOGIN_SETTINGS_BUTTON,
         EventType.CLICK,
         DataType.STRING,
-        string=f"{len(username):04d}{username}{digest}",
+        string=login_payload(username, password),
     )
     if OWN_SCREEN not in s.state.screens:
         dialogs = reply.dialogs()

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import hashlib
 import logging
 import re
 from dataclasses import replace
@@ -111,6 +110,7 @@ from .protocol import (
     ScreenID,
     encode_event,
     is_token,
+    login_payload,
     parse_reply,
 )
 from .schedule_edit import ScheduleSessionMixin
@@ -302,14 +302,13 @@ class _Session(
                 event=EventType.INIT, data_type=DataType.STRING, string=e.version
             )
         self.token = NO_TOKEN
-        digest = hashlib.sha256(password.encode()).hexdigest() if password else ""
         self.logged_in = True  # from here on every reply token is persisted
         reply = await self.send(
             ScreenID.LOGIN,
             LOGIN_BUTTON,
             EventType.CLICK,
             DataType.STRING,
-            string=f"{len(username):04d}{username}{digest}",
+            string=login_payload(username, password),
         )
         if any(
             s.screen == ScreenID.LOGIN and s.update == "DLG_OPEN" for s in reply.screens
