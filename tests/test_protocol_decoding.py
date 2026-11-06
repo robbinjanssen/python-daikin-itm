@@ -124,10 +124,10 @@ def test_init() -> None:
 
 def test_open_with_parts() -> None:
     """OPEN carries an int followed by parts."""
-    s = parse_one("OPEN", n(-1), n(2), h(0), h(200), "Naam", h(3), h(100), n(0))
+    s = parse_one("OPEN", n(-1), n(2), h(0), h(200), "Name", h(3), h(100), n(0))
     assert s.update == "OPEN"
     assert s.data == [-1]
-    assert s.parts == [Part(0, "LABEL", "Naam"), Part(3, "VISIBLED", 0)]
+    assert s.parts == [Part(0, "LABEL", "Name"), Part(3, "VISIBLED", 0)]
 
 
 @pytest.mark.parametrize("update", ["CLOSE", "UPDATE", "SHOW", "HIDE", "RELOAD"])
@@ -193,7 +193,11 @@ def test_dlg_download() -> None:
 
 def test_login() -> None:
     """LOGIN carries an int and two strings."""
-    assert parse_one("LOGIN", n(102), "Informatie", "").data == [102, "Informatie", ""]
+    assert parse_one("LOGIN", n(102), "Information", "").data == [
+        102,
+        "Information",
+        "",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -306,8 +310,8 @@ def test_tab_visible() -> None:
 
 def test_list_column() -> None:
     """LIST_COLUMN holds a string and four shorts per column."""
-    value = part_value("LIST_COLUMN", n(1), "Naam", h(1), h(2), h(3), h(4))
-    assert value == [["Naam", 1, 2, 3, 4]]
+    value = part_value("LIST_COLUMN", n(1), "Name", h(1), h(2), h(3), h(4))
+    assert value == [["Name", 1, 2, 3, 4]]
 
 
 def test_list_row() -> None:
@@ -366,13 +370,13 @@ def test_pntlist() -> None:
     """PNTLIST holds columns, the sort order, rows of cells and the selection."""
     value = part_value(
         "PNTLIST",
-        *(n(2), "Naam", n(1), "Status", n(2)),
+        *(n(2), "Name", n(1), "Status", n(2)),
         *(h(0), h(1)),
         *(n(1), "a", h(1), h(2), "b", h(3), h(4)),
         n(-1),
     )
     assert value == {
-        "cols": [["Naam", 1], ["Status", 2]],
+        "cols": [["Name", 1], ["Status", 2]],
         "sort": [0, 1],
         "rows": [[["a", 1, 2], ["b", 3, 4]]],
         "selected": -1,
@@ -649,7 +653,7 @@ def test_state_merges_and_closes() -> None:
 
 
 def test_select_locally() -> None:
-    """Only an existing selection of an open screen is changed locally."""
+    """A selection, or else a checkbox state, of an open screen is mirrored."""
     state = UIState()
     state.apply([ScreenUpdate(4, "OPEN", [-1], [Part(11, "SINGLE_SELIDX", 0)])])
     state.select_locally(4, 11, 3)
@@ -657,6 +661,7 @@ def test_select_locally() -> None:
     state.select_locally(5, 11, 3)
     assert state.get(4, 11, "SINGLE_SELIDX") == 3
     assert (12, "SINGLE_SELIDX") not in state.screens[4]
+    assert state.get(4, 12, "CHECK_STATE") == 3
     assert 5 not in state.screens
 
 
@@ -668,7 +673,7 @@ def test_select_locally() -> None:
     [
         (" Koelen ", "cool"),
         ("HEAT", "heat"),
-        ("Drogen", "dry"),
+        ("Dry", "dry"),
         ("Turbo", None),
         ("", None),
     ],
@@ -691,20 +696,20 @@ def test_details_from_screen() -> None:
     """The details screen gives the address, description and zones."""
     details = _details(
         {
-            4: "105",
+            4: "405",
             6: "Indoor unit",
             8: "1",
             10: "1-04",
             12: " Up &amp; down ",
-            14: "Zone:\nFloor 1&gt;Building\n Offices \n\nThermostaat\n",
+            14: "Area:\nFloor 1&gt;Building\n Wing A \n\nThermostaat\n",
         }
     )
     assert details == {
-        "point_id": "105",
+        "point_id": "405",
         "address": "1:1-04",
         "unit_type": "Indoor unit",
         "description": "Up & down",
-        "zones": ("Floor 1>Building", "Offices"),
+        "zones": ("Floor 1>Building", "Wing A"),
     }
 
 
@@ -724,7 +729,7 @@ def test_unit_setback_and_capabilities_key() -> None:
     """Setback follows the state icon; the capability key prefers the address."""
     unit = Unit(
         name="1:1-10",
-        power="SB Laag",
+        power="SB Low",
         running=False,
         state_icon=ICON_STATE_SETBACK,
         setpoint=None,
@@ -738,7 +743,7 @@ def test_unit_setback_and_capabilities_key() -> None:
         filter_sign=False,
     )
     assert unit.setback is True
-    caps = Capabilities("a", {"cool": "Koelen"}, fan_speed=False)
+    caps = Capabilities("a", {"cool": "Cool"}, fan_speed=False)
     assert caps.key == "a"
     assert caps.modes == ("cool",)
     assert Capabilities("a", {}, fan_speed=False, address="1:1-04").key == "1:1-04"
@@ -753,13 +758,13 @@ def test_capabilities_from_dialog() -> None:
     """Unknown and duplicate mode labels are skipped; fan needs a known icon."""
     state = UIState()
     parts = [
-        Part(18, "COMBO_STRS", ["Koelen", "Turbo", "Cool", "Verwarmen"]),
+        Part(18, "COMBO_STRS", ["Cool", "Turbo", "Cool", "Heat"]),
         Part(28, "VISIBLED", 1),
         Part(31, "ICONID", 1234),
     ]
     state.apply([ScreenUpdate(7, "OPEN", [0], parts)])
     caps = capabilities_from_dialog("1:1-00", state)
-    assert caps.mode_labels == {"cool": "Koelen", "heat": "Verwarmen"}
+    assert caps.mode_labels == {"cool": "Cool", "heat": "Heat"}
     assert caps.fan_speed is False
 
 

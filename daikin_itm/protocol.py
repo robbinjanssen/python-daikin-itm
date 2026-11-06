@@ -8,6 +8,7 @@ are a short length followed by the raw characters. Every reply starts with a new
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 from enum import IntEnum
@@ -73,6 +74,14 @@ class DataType(IntEnum):
     NONE = 0
     INT = 1
     STRING = 2
+    FLOAT = 4  # a number input: [integer part, thousandths]
+    INTARRAY = 8  # a list selection: the selected rows
+    SETTEMP_C = 16  # a temperature input in °C: [integer part, thousandths]
+    SETTEMP_F = 32  # a temperature input in °F
+    TIME = 64  # a date/time input: [year, month 0-11, day, hour, minute, second]
+    DATE = 128  # a date input: [year, month 0-11, day]
+    HOURMIN = 256  # a time of day input: [hour, minute]
+    IPADDRESS = 512  # an IP address input: the four numbers
 
 
 class ScreenID(IntEnum):
@@ -85,6 +94,9 @@ class ScreenID(IntEnum):
     OPERATION = 4
     SETTINGS = 7  # "Gedetailleerde instellingen" dialog, from the operation panel
     DETAILS = 9  # "Gedetailleerde info": name, ID, type, port, address, description
+    ERROR_INFORMATION = (
+        10  # from the main menu bar's error button, while an error is on
+    )
     LOGIN = 1203
 
 
@@ -171,6 +183,15 @@ DIALOG = {
 
 _HEX = re.compile(r"[0-9a-fA-F]+")
 _TRUNCATED = re.compile(r"[0-9a-fA-F]*\0*")  # a cut-off number at the end of a reply
+
+
+def login_payload(username: str, password: str) -> str:
+    """Return a login click's string, as the browser sends it.
+
+    The iTM's protocol takes the password only as its SHA-256 digest.
+    """
+    digest = hashlib.sha256(password.encode()).hexdigest() if password else ""
+    return f"{len(username):04d}{username}{digest}"
 
 
 def is_token(text: str) -> bool:
@@ -392,7 +413,6 @@ def encode_event(  # noqa: PLR0913, PLR0917  # pylint: disable=too-many-argument
     return "snD=" + w.buf
 
 
-# -- decoding -------------------------------------------------------------------------
 # Fixed layouts are written as one letter per field: N = int, H = short, S = string.
 # Lowercase letters are read and dropped (fields the web UI skips as well).
 _FIELD_READERS: dict[str, Callable[[Reader], Any]] = {

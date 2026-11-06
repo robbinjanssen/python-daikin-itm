@@ -39,6 +39,9 @@ class FakeClient(ItmClient):
         kw.setdefault("confirm_interval", 0)
         kw.setdefault("confirm_timeout", 0.5)
         kw.setdefault("zone_path", ("Building", "Indoor units"))
+        # The behaviour tests exercise the experimental writes too;
+        # tests/test_experimental.py covers the opt-in itself.
+        kw.setdefault("allow_experimental", True)
         super().__init__("fake", "user", "secret", **kw)
         self.itm = itm
 
@@ -75,17 +78,17 @@ async def test_fetch_units(itm: FakeITM) -> None:
     """Read all units in one session."""
     units = await FakeClient(itm).fetch_units()
     assert list(units) == ["1:1-00", "1:1-04", "1:1-09"]
-    assert units["1:1-04"].setpoint == 20
+    assert units["1:1-04"].setpoint == 23
     assert units["1:1-04"].mode == "cool"
     assert units["1:1-09"].running is False
-    assert itm.session is None  # logged out again
+    assert itm.session is None
 
 
 async def test_fetch_unit(itm: FakeITM) -> None:
     """Read a single unit."""
     unit = await FakeClient(itm).fetch_unit("1:1-04")
     assert unit.name == "1:1-04"
-    assert unit.setpoint == 20
+    assert unit.setpoint == 23
     assert itm.session is None
 
 
@@ -93,7 +96,11 @@ async def test_list_zones(itm: FakeITM) -> None:
     """List the zones and units at a path."""
     client = FakeClient(itm)
     assert await client.list_zones() == ["Building"]
-    assert await client.list_zones(("Building",)) == ["Indoor units", "Ventilation"]
+    assert await client.list_zones(("Building",)) == [
+        "Indoor units",
+        "Ventilation",
+        "Analog",
+    ]
 
 
 async def test_set_setpoint_running_unit(itm: FakeITM) -> None:
@@ -107,8 +114,8 @@ async def test_set_setpoint_running_unit(itm: FakeITM) -> None:
 
 async def test_set_setpoint_unchanged(itm: FakeITM) -> None:
     """Setting the current setpoint again writes nothing."""
-    unit = confirmed(await FakeClient(itm).set_setpoint("1:1-04", 20))
-    assert unit.setpoint == 20
+    unit = confirmed(await FakeClient(itm).set_setpoint("1:1-04", 23))
+    assert unit.setpoint == 23
     assert not any(r["event"] == 3 for r in itm.requests)  # no commit
 
 
@@ -116,7 +123,7 @@ async def test_setpoint_refused_while_stopped(itm: FakeITM) -> None:
     """The iTM ignores setpoints of stopped units, so the client refuses them."""
     with pytest.raises(ItmCommandError, match="stopped"):
         await FakeClient(itm).set_setpoint("1:1-09", 17)
-    assert itm.units[2].setpoint == 16
+    assert itm.units[2].setpoint == 18
     assert itm.session is None
 
 
@@ -130,14 +137,14 @@ async def test_own_selection_is_tracked_within_a_session(itm: FakeITM) -> None:
         await s.commit(0)
         await s.select_by_name("1:1-00")
         await s.select_by_name("1:1-04")
-        assert unit_from_panel(s.state).setpoint == 21
+        assert unit_from_panel(s.state).setpoint == 20
 
 
 async def test_setpoint_out_of_range(itm: FakeITM) -> None:
     """A setpoint outside the unit's range is refused, with the range it accepts."""
     with pytest.raises(SetpointOutOfRange) as err:
         await FakeClient(itm).set_setpoint("1:1-04", 30)
-    assert err.value.allowed == (20, 21, 22, 23, 24, 25)
+    assert err.value.allowed == (19, 20, 21, 22, 23, 24, 25, 26, 27)
     assert (err.value.unit, err.value.value) == ("1:1-04", 30)
     assert isinstance(err.value, ItmCommandError)
     assert itm.session is None
@@ -146,8 +153,8 @@ async def test_setpoint_out_of_range(itm: FakeITM) -> None:
 async def test_setpoint_range_is_checked_as_read_while_writing(itm: FakeITM) -> None:
     """The range read in the write session counts, not an earlier read."""
     client = FakeClient(itm)
-    assert (await client.fetch_units())["1:1-04"].setpoint_range[0] == 20
-    itm.units[1].setpoint_range = (21, 22, 23, 24)  # e.g. after a mode change
+    assert (await client.fetch_units())["1:1-04"].setpoint_range[0] == 19
+    itm.units[1].setpoint_range = (21, 22, 23, 24)
     itm.units[1].setpoint = 22
     with pytest.raises(SetpointOutOfRange) as err:
         await client.set_setpoint("1:1-04", 20)
@@ -238,13 +245,11 @@ async def test_network_error_keeps_token_and_next_run_releases_it(
     c = FakeClient(itm, store=store)
     async with c._session() as s:
         await s.open_zone(c.zone_path)
-        # The logout never reaches the iTM.
         itm.fail_next = aiohttp.ClientConnectionError("gone")
         with pytest.raises(aiohttp.ClientConnectionError):
             await s.logout()
     assert itm.session is not None
     assert store.token == itm.session
-    # A new client (e.g. after a restart) frees the stale session before logging in.
     units = await FakeClient(itm, store=store).fetch_units()
     assert len(units) == 3
     assert itm.session is None
@@ -289,15 +294,15 @@ async def test_capabilities(itm: FakeITM) -> None:
     assert caps["1:1-04"].fan_speed
     assert caps["1:1-09"].modes == ("fan", "cool", "heat", "dry", "auto")
     assert not caps["1:1-09"].fan_speed
-    assert itm.dialog is None  # every dialog cancelled
-    assert itm.session is None  # and logged out
+    assert itm.dialog is None
+    assert itm.session is None
 
 
 async def test_set_mode(itm: FakeITM) -> None:
     """Change the operation mode."""
     c = FakeClient(itm)
     await c.set_mode("1:1-04", "heat")
-    assert itm.units[1].mode == "Verwarmen"
+    assert itm.units[1].mode == "Heat"
     assert (await c.fetch_units())["1:1-04"].mode == "heat"
 
 
@@ -305,7 +310,7 @@ async def test_set_mode_not_offered(itm: FakeITM) -> None:
     """A mode the unit does not offer is refused and the dialog cancelled."""
     with pytest.raises(ItmCommandError):
         await FakeClient(itm).set_mode("1:1-04", "dry")
-    assert itm.units[1].mode == "Koelen"
+    assert itm.units[1].mode == "Cool"
     assert itm.dialog is None
     assert itm.session is None
 
@@ -332,7 +337,7 @@ async def test_apply_combined(itm: FakeITM) -> None:
     await c.apply("1:1-09", power=True, mode="heat")
     u = itm.units[2]
     assert u.running
-    assert u.mode == "Verwarmen"
+    assert u.mode == "Heat"
 
 
 async def test_write_waits_until_change_reaches_unit(itm: FakeITM) -> None:
@@ -358,10 +363,10 @@ async def test_capabilities_include_identity(itm: FakeITM) -> None:
     caps = await FakeClient(itm).fetch_capabilities()
     c = caps["1:1-04"]
     assert (c.point_id, c.address, c.unit_type, c.description) == (
-        "105",
+        "405",
         "1:1-04",
         "Indoor unit",
-        "Meeting room",
+        "AC 05",
     )
     assert c.zones == ("Floor 1>Building>Indoor units",)
     assert c.key == "1:1-04"
@@ -371,7 +376,7 @@ async def test_web_version_follows_the_device(
     itm: FakeITM, caplog: pytest.LogCaptureFixture
 ) -> None:
     """The client adopts the web UI version the iTM reports."""
-    itm.web_version = "Ver1.40.00"  # e.g. after a firmware update
+    itm.web_version = "Ver1.40.00"
     c = FakeClient(itm)
     assert len(await c.fetch_units()) == 3
     assert c.web_version == "Ver1.40.00"
@@ -497,7 +502,7 @@ async def test_unknown_zone(itm: FakeITM) -> None:
     """A zone that is not there names the ones that are."""
     with pytest.raises(ZoneNotFound) as err:
         await FakeClient(itm, zone_path=("Building", "Nope")).fetch_units()
-    assert err.value.available == ["Indoor units", "Ventilation"]
+    assert err.value.available == ["Indoor units", "Ventilation", "Analog"]
     assert itm.session is None
 
 
@@ -547,8 +552,6 @@ async def test_unconfirmed_logout_keeps_the_token_for_the_next_run(
     expected = "f" * 32 if failure == UNREADABLE else itm.session
     assert store.token == expected
     itm.session = expected  # the iTM moved on to the token it sent along
-    # The next client (e.g. after a restart) releases the session with that token
-    # and carries on.
     units = await FakeClient(itm, store=store).fetch_units()
     assert len(units) == 3
     assert itm.session is None
@@ -565,11 +568,11 @@ async def test_cancel_during_logout_holds_the_lock_until_logged_out(
     order = []
 
     async def post(body: str) -> str:
-        if is_logout(body) and not in_logout.is_set():  # the first LOGOUT is slow
+        if is_logout(body) and not in_logout.is_set():
             in_logout.set()
             await asyncio.sleep(0.1)
             order.append("first logout")
-        elif body[44:48] == "0000":  # INIT, the start of a new session
+        elif body[44:48] == "0000":  # INIT
             order.append("init")
         return await orig(body)
 
@@ -577,7 +580,6 @@ async def test_cancel_during_logout_holds_the_lock_until_logged_out(
     first = asyncio.create_task(c.fetch_units())
     await in_logout.wait()
     first.cancel()
-    # Starts right away, while the logout is still on its way.
     second = asyncio.create_task(c.fetch_units())
     with pytest.raises(asyncio.CancelledError):
         await first
@@ -609,7 +611,7 @@ async def test_apply_without_changes_does_not_write(itm: FakeITM) -> None:
         r["screen"] == 7 or (r["screen"] == 4 and r["part"] == 17) for r in itm.requests
     )
     assert itm.session is None
-    await c.set_power("1:1-09", on=False)  # already stopped
+    await c.set_power("1:1-09", on=False)
     assert not any(r["screen"] == 7 for r in itm.requests)
 
 
@@ -625,13 +627,12 @@ async def test_apply_without_changes_records_no_unconfirmed_change(
 async def test_apply_sends_only_what_differs(itm: FakeITM) -> None:
     """Only the settings that differ from the unit are ticked."""
     c = FakeClient(itm)
-    # Already running: only the mode is set.
     await c.apply("1:1-04", power=True, mode="heat")
     ticks = [
         r["part"] for r in itm.requests if r["screen"] == 7 and r["part"] in {2, 17, 28}
     ]
     assert ticks == [17]
-    assert itm.units[1].mode == "Verwarmen"
+    assert itm.units[1].mode == "Heat"
 
 
 async def test_default_zone_path_is_the_top_level(itm: FakeITM) -> None:
@@ -641,3 +642,15 @@ async def test_default_zone_path_is_the_top_level(itm: FakeITM) -> None:
     assert await client.fetch_units() == {}  # only a zone at the top level
     itm.root.children = [*itm.units, *itm.root.children]
     assert set(await client.fetch_units()) == {"1:1-00", "1:1-04", "1:1-09"}
+
+
+async def test_zone_path_steps(itm: FakeITM) -> None:
+    """A zone step is a name, the "All" zone in any language, or #n."""
+    itm.root.children[0].name = "All"  # an iTM switched to English
+    for path in (("Alles", "Indoor units"), ("Tout", "#0"), ("#0", "#0")):
+        units = await FakeClient(itm, zone_path=path).fetch_units()
+        assert units
+    with pytest.raises(ZoneNotFound):
+        await FakeClient(itm, zone_path=("#7",)).fetch_units()
+    with pytest.raises(ZoneNotFound):
+        await FakeClient(itm, zone_path=("Nowhere",)).fetch_units()

@@ -19,23 +19,70 @@ The Home Assistant integration
 - `ItmClient`: its constructor signature, public attributes and methods, and
   `_post`, which tests patch to fake the iTM.
 - `daikin_itm.protocol`: `PART_UPDATE_CODE`, `SCREEN_UPDATE_CODE`, `Reader`
-  and `Writer`. `tests/fake_itm.py` uses them, and the integration copies that
-  file into its own tests.
+  and `Writer`. `tests/fake_itm.py` and its `tests/fake_itm_*.py` modules use
+  them, and the integration copies those files into its own tests.
 
 ```text
 daikin_itm/
-  __init__.py      public API (re-exports)
-  client.py        ItmClient, the session stores, _Session (one logged-in conversation)
-  exceptions.py    ItmError and subclasses
-  models.py        Unit, Capabilities, FAN_SPEEDS, mode normalization, part IDs
-  protocol.py      encoding and decoding of /cmd/ requests and replies
-  state.py         UIState: the merged view of the screens built from delta replies
-  cli.py           the itm command
+  __init__.py         public API (re-exports)
+  client.py           ItmClient (with the feature modules' *Mixin classes), the session
+                      stores
+  session.py          _Session: one logged-in session, the screen work behind ItmClient
+  settings_dialog.py  the unit settings dialog (screen 7), a _Session mixin
+  exceptions.py       ItmError and subclasses
+  _util.py            helpers shared by the modules (T, ignore, check_wrong)
+  _screens.py         screen helpers shared by the feature modules
+  _bases.py           ClientCore, SessionCore: the internals the mixins use (typing only)
+  models.py           Unit, UnitSettings, Capabilities, part IDs, screen readers
+  lang.py             the labels the iTM only sends as text, per display language
+  menu.py             the main menu's screens: IDs, models and readers
+  system.py           system settings screens: models and readers
+  service.py          the installer's service screens (read only, service login)
+  changeover.py       auto changeover group writes (session and client mixins)
+  schedule_edit.py    schedule writes: events, period, special days, calendar, copies
+  zones_edit.py       zone tree, members, member order, icons; the zone error screen
+  system_edit.py      e-mail, confirm dialogs, ports, remote management, region, clock,
+                      hardware (session and client mixins)
+  users_edit.py       web users, a web user's allowed screens, own settings (session
+                      and client mixins)
+  emergency.py        emergency stop programs, settings, release (never a start)
+  dealer_functions.py temperature limit, sliding temperature, heating mode
+                      optimisation (dealer options); dealer_cli.py their and
+                      interlock's CLI commands
+  interlock.py        interlock programs: list, enable, add, rename, copy,
+                      delete, setup (inputs, outputs, conditions, actions)
+  demand.py           demand (power limit) control and energy saving
+  layout.py           the graphical layout view; layout_cli.py its CLI command
+  point_registry.py   the installer's management point registrations (read only)
+  service_edit.py     leakage check, layout setup, R32 output ports, password setting
+                      (each write guarded)
+  energy_navigator.py energy navigator readers
+  energy_edit.py      energy navigator writes
+  exports.py          downloads: history, energy data, point list, setup export,
+                      backup; PPD
+  history_export.py   parse_history_export: the history archive's records, in memory
+  trace.py            the CLI's --trace (request numbers, replies without token)
+  protocol.py         encoding and decoding of /cmd/ requests and replies
+  state.py            UIState: the merged view of the screens built from delta replies
+  cli.py              the itm command: parsing, sessions, the unit commands
+  cli_common.py       output and argument helpers shared by the CLI modules
+  schedule_cli.py     schedules; energy_cli.py energy navigator, PPD, exports;
+  system_cli.py       system, users, zones, region and clock; service_cli.py the
+                      installer's service commands, demand, emergency stop
   py.typed
 tests/
-  fake_itm.py                  simulated iTM used by the behaviour tests
-  test_client.py, test_protocol.py, test_protocol_decoding.py, test_cli.py, test_security.py
-  fixtures/                    replies captured from a real iTM
+  fake_itm.py                  simulated iTM used by the behaviour tests: request
+                               handling, replies, FakeITM's assembly
+  fake_itm_base.py             its shared data, dataclasses and state
+  fake_itm_panel.py            icon/list views, operation panel, settings dialog
+  fake_itm_menu.py             main menu bar, menu, changeover, setback, history
+  fake_itm_system.py           system settings and service screens, SystemWrites
+  fake_itm_schedule.py         schedule screens and event editor
+  fake_*.py                    the simulator's extra screens, one file per area
+  export_archive.py            a made-up history archive
+  test_*.py                    behaviour, decoding, CLI and security tests
+  fixtures/                    iTM replies in the protocol's format, with
+                               synthetic content
 ```
 
 ## Commands
@@ -82,6 +129,70 @@ changing it.
   change to show (`_settle`). `apply` compares the request with the unit as
   read in the write session and only sends what differs; when nothing differs
   it writes nothing and records no unconfirmed change.
+- **The list view shows every unit of a zone in one reply** (`PNTLIST`, 25
+  columns, `fetch_units(view="list")`), the icon view one operation panel per
+  unit. The list's columns are addressed by index (the headers are localised),
+  so a list with another number of columns is refused rather than misread
+  (except a zone holding only zones: its short list of zones gives no units). The
+  list view is left again before logout. It doesn't show the on/off options nor
+  the setpoint range.
+- **Only a few labels carry meaning as text**: operation modes, wall remote
+  locks and the status lines on the Details screen. `lang.py` maps them for the
+  iTM's ten display languages; everything else goes by part ID, icon ID or
+  index. Unknown mode labels are reported in `Capabilities.unknown_labels`,
+  never dropped silently. Don't add code that depends on label text without a
+  table there.
+- **A zone holds more than indoor units.** The icon ID says what a point is
+  (`PointKind`, `KIND_BY_ICON`): indoor unit, heat reclaim ventilation unit
+  (on/off only, no mode or setpoint) or analog input (a measured value with an
+  alarm limit; only its Details screen says what it watches). `fetch_points`
+  returns them by kind, `fetch_units` marks `Unit.kind`. The main menu bar's
+  error button (screen 0 part 19) is only visible while a unit has an error and
+  opens screen 10; that screen has not been seen with content yet.
+- **The main menu** (`menu.py`) is opened from the main menu bar (screen 0 part
+  0) and its buttons open screens whether or not their tab is active, and
+  whether or not the button is visible (the iTM hides, it doesn't block). Every
+  read closes its screen with the Close/Cancel part in `CLOSE_PART`, never OK.
+  Long lists (the history) load behind a PROGRESS dialog: the browser sends
+  UPD_PROG with the job ID until the dialog closes, then a POLLING event brings
+  the data (`wait_for_progress`). The history's day and class filters are
+  display settings.
+- **Schedules** are read through the program's editor (104): the pattern bars
+  give the event times (96 slots of 15 min per day, Sunday first), each
+  weekday's event list (107) the events, and an event's own screen (109) its
+  settings. That screen has the same part IDs as a unit's settings dialog; a
+  setting is part of the event only when its checkbox is checked. The event
+  list has separator rows between times: select events by `ScheduleEvent.row`,
+  never by their index. `fetch_schedule` parses the event list's text and opens
+  event screens only with `details=True` (cost). Leaving the editor with Cancel
+  asks for confirmation, answered with Yes (`close_editor`); nothing is saved.
+  The day overview (102) is the cheap read.
+- **Writes through the menu** follow one pattern (`_Session.write` and
+  `press_ok`): make the picks, send the one request that persists them (OK, or
+  an immediate button such as Enable), answer the iTM's CONFIRM dialog with
+  Yes, raise on an ERROR/INFO dialog, and verify in a fresh session. With
+  `ItmClient.dry_run` that one request is recorded in `planned` instead of sent
+  and the screen cancelled; keep every new write on that path so dry runs and
+  `read_only` stay complete. In the unit's settings dialog a setting is only
+  changed when its checkbox is ticked first; the limit values are entered in a
+  NUMBER dialog whose `data[2]` says how to answer it (0 int, 1 float, 2 °C as
+  [whole, thousandths]) and `data[6..9]` its range.
+- **Never click a button the iTM reports disabled** (`ENABLED 0`). Its web
+  server doesn't guard against it: the request never gets an answer, the TCP
+  connection dies after some 20 s and the session is lost (seen on firmware
+  Ver1.32.00, by clicking Edit with a separator row selected). `_Session.send`
+  and `write` refuse such a click on every screen except the unit settings
+  dialog, whose controls open disabled until their checkbox is ticked. Use
+  `s.click(screen, part, what)` to name the part in the error.
+- **`read_only=True`** makes every write raise `ReadOnlyError` before a request
+  is sent: the public write methods check it, and so do the session's commit,
+  panel picks and the settings dialog's OK. Keep that guard on any new write.
+- **Experimental writes** (not validated on a real iTM) call
+  `self._experimental("what it does")` first: without `allow_experimental=True`
+  they raise `ExperimentalError` before anything is sent (read only refuses
+  first; a dry run is always allowed). Arguments of a validated method that
+  aren't validated are checked one by one (`_EXPERIMENTAL_UNIT_SETTINGS`,
+  `set_region`, `set_zone_member_order`).
 - **Web UI version**: when the iTM reports another version string (after a
   firmware update), the client adopts it and logs a warning.
 - **Replies are untrusted.** `Reader` bounds-checks every read and count (also
@@ -99,15 +210,29 @@ changing it.
 - Assign exception messages to `msg` before raising (`raise ItmError(msg)`).
 - Only add a targeted `# noqa: CODE - reason` where a rule doesn't fit; don't
   disable rules globally.
+- A new write that hasn't been validated on a real iTM must call the experimental
+  guard (`self._experimental(...)`); once it is validated live, remove the guard
+  and mark it V in `FEATURES.md`.
+- Keep `FEATURES.md` current: when a screen gets a reader or a write, or is
+  validated on a real iTM, update its row. Keep `ROADMAP.md` in step: move an item
+  out of it once it is done, and give a reason for anything left out on purpose.
+- English is the default: code, comments, docs, the fake iTM, the fixtures and
+  the tests use the iTM's English labels. Other display languages live only in
+  `lang.py`, and `tests/test_lang.py` checks each of them.
+- Never put values from a real installation in the repo (names, addresses,
+  descriptions, network settings, credentials, readings, schedules, captured
+  dates, or the structure of the installation): fixtures hold synthetic content,
+  tests and docs generic names.
 
 ## Tests
 
 - Behaviour tests run against `FakeITM` in `tests/fake_itm.py` (single session,
   delta replies, ignored setpoints on stopped units). Extend the simulator when
   the client starts relying on more of the iTM.
-- Decoding tests use the replies captured from a real device in
-  `tests/fixtures/`. Keep those files byte for byte as captured; the
-  end-of-file, whitespace and codespell hooks skip them.
+- Decoding tests use the replies in `tests/fixtures/`: the real protocol format
+  with synthetic content. Every reply must still decode after an edit (each
+  string carries its length); the end-of-file, whitespace and codespell hooks
+  skip them.
 - Add a test for every bug fix that fails without the fix. Keep coverage at 90%
   or more.
 
