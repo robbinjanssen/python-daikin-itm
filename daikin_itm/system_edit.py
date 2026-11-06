@@ -337,6 +337,8 @@ async def delete_email_address(s: _Session, address: str) -> bool:
         await s._select_listed(e, EMAIL_LIST, 1, address, "e-mail address")
         if s.state.get(e, EMAIL_DELETE, "ENABLED") == 0:
             msg = f"the iTM does not allow deleting {address!r}"
+            if _radio(s.state, e, EMAIL_ON, EMAIL_OFF):
+                msg += ": switch its e-mail off first"
             raise ItmCommandError(msg)
         reply = await s.write(f"delete e-mail address {address}", e, EMAIL_DELETE)
         if reply is None:
@@ -347,19 +349,24 @@ async def delete_email_address(s: _Session, address: str) -> bool:
         await s.close_screen(e)
 
 
-async def set_email_enabled(s: _Session, *, enabled: bool) -> bool:
-    """Switch e-mail notification on or off (the radio applies at once: no OK)."""
+async def set_email_enabled(s: _Session, address: str, *, enabled: bool) -> bool:
+    """Switch e-mail notification on or off for one listed address.
+
+    The radios belong to the selected address: the iTM enables them once its row
+    is selected, and a click applies at once (no OK).
+    """
     e = MenuScreen.EMAIL
     await _open(s, MB_EMAIL, e)
     try:
+        await s._select_listed(e, EMAIL_LIST, 1, address, "e-mail address")
         if _radio(s.state, e, EMAIL_ON, EMAIL_OFF) is enabled:
             return True
         part = EMAIL_ON if enabled else EMAIL_OFF
         if s.state.get(e, part, "ENABLED") == 0:
-            msg = "e-mail activation is disabled (it needs an address first)"
+            msg = f"e-mail activation is disabled for {address!r}"
             raise ItmCommandError(msg)
         verb = "on" if enabled else "off"
-        reply = await s.write(f"e-mail notification {verb}", e, part)
+        reply = await s.write(f"e-mail notification {verb} for {address}", e, part)
         if reply is None:
             return False
         await s._answer_confirm(e, reply)
@@ -622,11 +629,14 @@ class SystemMixin(ClientCore):  # pylint: disable=too-many-public-methods
             msg = f"{address}: the iTM did not delete the address"
             raise ItmCommandError(msg)
 
-    async def set_email_enabled(self, *, enabled: bool) -> EmailSettings | None:
-        """Switch the e-mail notification on or off.
+    async def set_email_enabled(
+        self, address: str, *, enabled: bool
+    ) -> EmailSettings | None:
+        """Switch the e-mail notification on or off for one address.
 
         Args:
         ----
+            address: The listed e-mail address.
             enabled: On (True) or off.
 
         Returns:
@@ -635,13 +645,14 @@ class SystemMixin(ClientCore):  # pylint: disable=too-many-public-methods
 
         """
         await self._system_write(
-            lambda s: _ignore(set_email_enabled(s, enabled=enabled))
+            lambda s: _ignore(set_email_enabled(s, address, enabled=enabled))
         )
         if self.dry_run:
             return None
         email = await self._email()
-        if email.enabled is not enabled:
-            msg = f"the iTM did not switch e-mail {'on' if enabled else 'off'}"
+        if (enabled, address) not in email.addresses:
+            verb = "on" if enabled else "off"
+            msg = f"the iTM did not switch e-mail {verb} for {address!r}"
             raise ItmCommandError(msg)
         return email
 

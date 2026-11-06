@@ -26,7 +26,7 @@ from daikin_itm.protocol import PART_UPDATE_CODE, SCREEN_UPDATE_CODE, Writer
 
 from .fake_energy import _columns, _rows
 from .fake_energy_edit import CONFIRM_ID, FakeEnergyEditITM
-from .fake_itm import _encode_data, _encode_part
+from .fake_itm import _enabled, _encode_data, _encode_part
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -503,7 +503,7 @@ class FakeEnergyMoreITM(FakeEnergyEditITM):  # pylint: disable=too-many-instance
                 (4, "CHECK_STATE", int(analog is None)),
                 (5, "CHECK_STATE", int(analog is not None)),
                 (6, "TEXT", analog or ""),
-                *[(p, "ENABLED", 1) for p in (4, 5, 6, 8)],
+                *_enabled((4, 5, 6, 8), 1),
                 (7, "ENABLED", int(analog is not None)),
             ]
         return parts

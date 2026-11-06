@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterable, Iterator
 
 POWER_OPTIONS = ["Start", "SB Low", "SB High", "Stop"]
 
@@ -583,6 +583,11 @@ class FakeITMBase:  # pylint: disable=too-many-instance-attributes
         self.pending_setpoint: int | None = None
         self.pending_power: int | None = None
         self.confirming_setback: int | None = None
+
+
+def _enabled(parts: Iterable[int], on: int) -> list[tuple[int, str, Any]]:
+    """Return ENABLED updates for parts, all on or all off."""
+    return [(p, "ENABLED", int(on)) for p in parts]
 
 
 def _rows(cells: list[list[str]]) -> dict[str, Any]:

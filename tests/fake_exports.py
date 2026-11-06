@@ -13,7 +13,7 @@ from typing import Any
 
 from daikin_itm.protocol import PART_UPDATE_CODE, SCREEN_UPDATE_CODE, Writer
 
-from .fake_itm import FakeITM, Update, _encode_data, _encode_part
+from .fake_itm import FakeITM, Update, _enabled, _encode_data, _encode_part
 
 DATE_RANGE = ((2023, 11, 21), (2025, 0, 1))  # [year, month 0-11, day] from, to
 PERIODS = ["01/2025-01/2025", "01/2024-12/2024"]
@@ -225,7 +225,8 @@ class FakeExportsITM(FakeITM):  # pylint: disable=too-many-instance-attributes
         parts: list[tuple[int, str, Any]] = []
         for check, day in zip(WEEKDAY_CHECKS, self.weekdays, strict=True):
             parts += [
-                (check, "CHECK_STATE", int(day["on"])),
+                *([(check, "CHECK_STATE", 1)] if day["on"] else []),
+                *_enabled((check + 1, check + 3, check + 4), day["on"]),
                 (check + 1, "COMBO_STRS", ADVANCED_OPTIONS),
                 (check + 1, "SINGLE_SELIDX", day["option"]),
                 (check + 2, "TEXT", day["time"]),
@@ -238,7 +239,15 @@ class FakeExportsITM(FakeITM):  # pylint: disable=too-many-instance-attributes
         if part in WEEKDAY_CHECKS:
             change = self.pending_weekdays.setdefault(WEEKDAY_CHECKS.index(part), {})
             change["on"] = ev["number"] == 1
-        elif part - 1 in WEEKDAY_CHECKS:
+            return [
+                (
+                    "UPDATE",
+                    2901,
+                    [],
+                    _enabled((part + 1, part + 3, part + 4), change["on"]),
+                )
+            ]
+        if part - 1 in WEEKDAY_CHECKS:
             change = self.pending_weekdays.setdefault(
                 WEEKDAY_CHECKS.index(part - 1), {}
             )

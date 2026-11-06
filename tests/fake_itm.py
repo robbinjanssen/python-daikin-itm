@@ -54,6 +54,7 @@ from .fake_itm_base import (
     FakeVentilation,
     FakeZone,
     Update,
+    _enabled,
     _rows,
 )
 from .fake_itm_menu import MenuMixin
@@ -101,6 +102,7 @@ __all__ = [
     "FakeZone",
     "SystemWrites",
     "Update",
+    "_enabled",
     "_encode_data",
     "_encode_part",
     "_rows",

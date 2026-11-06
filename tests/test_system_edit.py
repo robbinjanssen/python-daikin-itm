@@ -8,7 +8,13 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from daikin_itm import ItmCommandError, ReadOnlyError
+from daikin_itm._screens import open_screen
+from daikin_itm.menu import MenuScreen
+from daikin_itm.system import MB_EMAIL
 from daikin_itm.system_edit import (
+    EMAIL_LIST,
+    EMAIL_OFF,
+    EMAIL_ON,
     EmailServer,
     add_email_address,
     delete_email_address,
@@ -25,6 +31,7 @@ from daikin_itm.users_edit import (
     leave_own_settings,
     open_own_settings,
     own_settings_from_screen,
+    read_own_language,
     set_own_settings,
 )
 
@@ -64,7 +71,7 @@ async def test_email_address_add_edit_delete(itm: FakeSystemEditITM) -> None:
     unit = itm.units[0].name
     assert await run(itm, add_email_address, ADDRESS, (unit,)) is True
     assert itm.emails == {ADDRESS: [unit]}
-    assert itm.email_active is False  # activation is not touched
+    assert itm.email_active == {ADDRESS: False}  # activation is not touched
     with pytest.raises(ItmCommandError, match="exists already"):
         await run(itm, add_email_address, ADDRESS, (unit,))
     other = itm.units[1].name
@@ -87,16 +94,42 @@ async def test_email_add_without_points(itm: FakeSystemEditITM) -> None:
 
 
 async def test_email_activation(itm: FakeSystemEditITM) -> None:
-    """Activation needs an address first; it applies at once."""
-    with pytest.raises(ItmCommandError, match="needs an address"):
-        await run(itm, set_email_enabled, enabled=True)
+    """Activation is per address: select its row, then the radio applies at once."""
+    with pytest.raises(ItmCommandError, match="not found"):
+        await run(itm, set_email_enabled, ADDRESS, enabled=True)
+    other = "ops@example.com"
     await run(itm, add_email_address, ADDRESS, (itm.units[0].name,))
-    assert await run(itm, set_email_enabled, enabled=True) is True
-    assert itm.email_active is True
-    assert await run(itm, set_email_enabled, enabled=True) is True
-    dry: dict[str, Any] = {"dry_run": True}
-    assert await run(itm, set_email_enabled, enabled=False, client=dry) is False
-    assert itm.email_active is True
+    await run(itm, add_email_address, other, (itm.units[0].name,))
+    assert await run(itm, set_email_enabled, ADDRESS, enabled=True) is True
+    assert itm.email_active == {ADDRESS: True, other: False}
+    assert await run(itm, set_email_enabled, ADDRESS, enabled=True) is True
+    assert await run(itm, set_email_enabled, other, enabled=True) is True
+    assert await run(itm, set_email_enabled, ADDRESS, enabled=False) is True
+    assert itm.email_active == {ADDRESS: False, other: True}
+    with pytest.raises(ItmCommandError, match="not found"):
+        await run(itm, set_email_enabled, "nobody@example.com", enabled=True)
+    c = FakeClient(itm, dry_run=True)
+    async with c._session() as s:
+        assert await set_email_enabled(s, other, enabled=False) is False
+    assert any(f"off for {other}" in line for line in c.planned)
+    assert itm.email_active == {ADDRESS: False, other: True}
+
+
+async def test_email_radios_need_a_selection(itm: FakeSystemEditITM) -> None:
+    """Like the real iTM: the radios are disabled until an address is selected."""
+    await run(itm, add_email_address, ADDRESS, ())
+    e = MenuScreen.EMAIL
+    async with FakeClient(itm)._session() as s:
+        await open_screen(s, MB_EMAIL, e)
+        assert [s.state.get(e, p, "ENABLED") for p in (3, 4)] == [0, 0]
+        await s._select_listed(e, EMAIL_LIST, 1, ADDRESS, "e-mail address")
+        assert [s.state.get(e, p, "ENABLED") for p in (3, 4)] == [1, 1]
+        assert s.state.get(e, EMAIL_OFF, "CHECK_STATE") == 1
+        await s.close_screen(e)
+    async with FakeClient(itm)._session() as s:
+        await open_screen(s, MB_EMAIL, e)
+        with pytest.raises(ItmCommandError, match="disabled"):
+            await s.send(e, EMAIL_ON)
 
 
 async def test_email_server(itm: FakeSystemEditITM) -> None:
@@ -108,13 +141,13 @@ async def test_email_server(itm: FakeSystemEditITM) -> None:
     change = EmailServer(
         smtp_address="mail.example.com",
         smtp_port=587,
-        auth_method=1,
+        auth_method=2,
         password="placeholder",
     )
     assert await run(itm, set_email_server, change) is True
     assert itm.email_server[19] == "mail.example.com"
     assert itm.email_server[22] == "587"
-    assert itm.email_server[26] == 1
+    assert itm.email_server[26] == 2
     assert itm.email_password == "placeholder"
     c = FakeClient(itm, dry_run=True)
     async with c._session() as s:
@@ -187,7 +220,8 @@ async def test_own_settings(itm: FakeSystemEditITM) -> None:
         False,
         1,
     )
-    assert own.language == "English"
+    assert own.language == "en"
+    assert await read_own_language(s) == "en"
     assert await set_own_settings(s, time_24h=False, decimal_comma=True) is True
     assert itm.own["24h"] is False
     assert itm.own["comma"] is True
@@ -253,14 +287,22 @@ async def test_client_email_and_confirm(itm: FakeSystemEditITM) -> None:
     )
     assert email is not None
     assert [a for _, a in email.addresses] == ["it@example.com"]
-    email = await c.set_email_enabled(enabled=True)
+    email = await c.set_email_enabled("it@example.com", enabled=True)
     assert email is not None
-    assert email.enabled is True
+    assert email.addresses == ((True, "it@example.com"),)
+    dry = FakeClient(itm, dry_run=True)
+    assert await dry.set_email_enabled("it@example.com", enabled=False) is None
+    assert itm.email_active == {"it@example.com": True}
+    with pytest.raises(ItmCommandError, match="not found"):
+        await c.set_email_enabled("nobody@example.com", enabled=True)
     server = await c.set_email_server(
         EmailServer(smtp_address="mail.example.com", smtp_port=587, password="x")
     )
     assert server is not None
     assert itm.email_password == "x"
+    with pytest.raises(ItmCommandError, match="switch its e-mail off first"):
+        await c.delete_email_address("it@example.com")
+    await c.set_email_enabled("it@example.com", enabled=False)
     await c.delete_email_address("it@example.com")
     assert itm.emails == {}
     assert await c.set_confirm_dialogs(enabled=False) is False
@@ -271,6 +313,5 @@ async def test_client_email_and_confirm(itm: FakeSystemEditITM) -> None:
         await c.set_web_server_port(8080)
     with pytest.raises(ItmCommandError, match="allow_remote_change"):
         await c.set_remote_management(connect=True)
-    dry = FakeClient(itm, dry_run=True)
     assert await dry.add_email_address("x@example.com", [point]) is None
     assert itm.emails == {}

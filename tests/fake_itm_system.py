@@ -14,6 +14,7 @@ from .fake_itm_base import (
     WEEKS,
     FakeITMBase,
     Update,
+    _enabled,
     _rows,
 )
 
@@ -222,8 +223,8 @@ class SystemMixin(FakeITMBase):
                 for p, v in zip((8, 9, 10, 11, 12, 13, 14), self.network, strict=True)
             ],
             1300: [
-                (1, "LIST_ROW", rows(["On", "ops@example.com"])),
-                (3, "CHECK_STATE", 1),
+                (1, "LIST_ROW", rows(["Enable", "ops@example.com"])),
+                *_enabled((3, 4, 7, 8), 0),
             ],
             1200: [
                 (2, "LIST_ROW", rows(*self.web_users)),
@@ -339,7 +340,7 @@ class SystemWrites:
             return [("UPDATE", 1202, [], [])]
         self.itm.system_selected[self.screen] = self.ev["array"][0]
         enable = {1700: [2], 1600: [9], 1200: [5, 6], 2700: [4, 5]}.get(self.screen, [])
-        return [("UPDATE", self.screen, [], [(p, "ENABLED", 1) for p in enable])]
+        return [("UPDATE", self.screen, [], _enabled(enable, 1))]
 
     def _selected(self) -> int:
         """Return the selected row; a button clicked without one hangs the real iTM."""
@@ -610,7 +611,7 @@ class SystemWrites:
         if self.part in {6, 7}:
             pending["dst"] = self.part == 6
             on = int(self.part == 6)
-            return [("UPDATE", 2400, [], [(p, "ENABLED", on) for p in itm.dst_rule])]
+            return [("UPDATE", 2400, [], _enabled(itm.dst_rule, on))]
         if self.part in itm.dst_rule:
             if not pending.get("dst", itm.dst):
                 msg = "a disabled summer time combo was clicked"

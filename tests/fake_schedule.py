@@ -25,6 +25,7 @@ from .fake_itm import (
     FakeVentilation,
     FakeZone,
     Update,
+    _enabled,
     _encode_data,
     _encode_part,
 )
@@ -391,7 +392,7 @@ class FakeScheduleITM(FakeITM):  # pylint: disable=too-many-public-methods
                 del self._day_list()[self.selected_event]
                 self.selected_event = None
                 rows = (4, "LIST_ROW", self._event_rows(self._day_list()))
-                parts = [rows, *[(p, "ENABLED", 0) for p in (6, 7, 8)]]
+                parts = [rows, *_enabled((6, 7, 8), 0)]
                 updates.append(("UPDATE", 107, [], parts))
             return updates
         if screen == 107 and part == 9:

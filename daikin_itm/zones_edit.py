@@ -310,13 +310,11 @@ async def set_zone_members(s: _Session, zone: str, members: tuple[str, ...]) -> 
 
 
 async def _jump(s: _Session, zone: str, name: str, position: int) -> None:
-    """Move a member to a row with Jump: select it, Jump (1602), pick the row, OK.
+    """Move a member to a row (not the first) with Jump (1602).
 
-    Assumption (script.js only lays 1602 out, the iTM decides): 1602 lists the
-    members in their order and the selected member takes the picked row's place, so
-    it lands before that row's member when it moves up and after it when it moves
-    down. 1601's list is checked afterwards; anything else is refused (nothing is
-    saved before 1601's OK).
+    1602 lists the other members; the selected one lands after the picked row's
+    member, so the first row can't be reached this way. 1601's list is checked
+    afterwards; nothing is saved before 1601's OK.
     """
     row = _find_row(s.state, MEMBERS, MB_LIST, 1, name)
     await _select(s, MEMBERS, MB_LIST, row)
@@ -326,10 +324,10 @@ async def _jump(s: _Session, zone: str, name: str, position: int) -> None:
         raise ItmCommandError(msg)
     try:
         count = len(_rows(s.state, ORDER, OR_LIST))
-        if count != len(zone_members_from_screen(s.state)):
-            msg = f"{zone}: the order screen lists {count} rows, not the members"
+        if count != len(zone_members_from_screen(s.state)) - 1:
+            msg = f"{zone}: the order screen lists {count} rows, not the other members"
             raise ItmCommandError(msg)
-        await _select(s, ORDER, OR_LIST, position)
+        await _select(s, ORDER, OR_LIST, position - 1)
         await _click(s, ORDER, OR_OK, "jump member to")
     finally:
         await _leave(s, ORDER, OR_CANCEL)
@@ -357,8 +355,8 @@ async def set_zone_member_order(
     """Put a zone's members in this order, then OK.
 
     By default with the member list's up button, one row at a time; with use_jump
-    each member out of place is moved to its row at once with Jump (1602, see
-    ``_jump`` for the assumption it rests on). Members not named keep their
+    each member out of place below the first row is moved to its row at once with
+    Jump (1602). Members not named keep their
     relative order after the named ones.
 
     Returns
@@ -381,7 +379,7 @@ async def set_zone_member_order(
                 msg = f"{zone}: not members: {missing}"
                 raise ItmCommandError(msg)
             for position, name in enumerate(wanted):
-                if not use_jump:
+                if not use_jump or position == 0:
                     await _move_up(s, zone, name, position)
                 elif _find_row(s.state, MEMBERS, MB_LIST, 1, name) != position:
                     await _jump(s, zone, name, position)
@@ -612,17 +610,14 @@ class ZonesMixin(ClientCore):
             zone: The zone.
             order: Member names, first to last; members not named follow them, in
                 their current order.
-            use_jump: Move each member to its row with the list's Jump (one
-                step, 1602) instead of the up button (tested against the
-                simulated iTM only).
+            use_jump: Move each member below the first row to its row with the
+                list's Jump (one step, 1602) instead of the up button.
 
         Returns:
         -------
             The members as read back, or None in a dry run.
 
         """
-        if use_jump:
-            self._experimental("reorder zone members with Jump")
         wanted = tuple(m.strip() for m in order)
         await self._system_write(
             lambda s: _ignore(set_zone_member_order(s, zone, wanted, use_jump=use_jump))

@@ -80,8 +80,8 @@ def print_system(  # noqa: PLR0912  # pylint: disable=too-many-branches,too-many
             f"{n.dns_secondary}"
         )
     if (e := st.email) is not None:
-        addresses = ", ".join(a for _, a in e.addresses) or "no addresses"
-        echo(f"e-mail: {onoff(e.enabled)}, {addresses}")
+        addresses = ", ".join(f"{a} ({onoff(on)})" for on, a in e.addresses)
+        echo(f"e-mail: {addresses or 'no addresses'}")
     if st.web_users is not None:
         users = ", ".join(
             f"{u.name} ({'admin' if u.admin else u.kind})" for u in st.web_users

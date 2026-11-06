@@ -8,6 +8,7 @@ from .fake_itm_base import (
     EVENT_MODES,
     FakeITMBase,
     Update,
+    _enabled,
 )
 
 
@@ -278,7 +279,7 @@ class ScheduleMixin(FakeITMBase):
             row = ev["array"][0] if ev["array"] else number
             self.selected_event = row // 2 if row % 2 == 0 else None
             enabled = 1 if self.selected_event is not None else 0
-            return [("UPDATE", 107, [], [(p, "ENABLED", enabled) for p in (6, 7, 8)])]
+            return [("UPDATE", 107, [], _enabled((6, 7, 8), enabled))]
         if screen == 107 and part == 8:
             if self.selected_event is None:
                 msg = "Edit clicked while disabled: the real iTM hangs here"

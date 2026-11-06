@@ -272,7 +272,7 @@ async def _zone_structure(client: ItmClient, args: argparse.Namespace) -> None:
 
 
 async def _email(client: ItmClient, args: argparse.Namespace) -> None:
-    """Show or change the e-mail notification: addresses, on/off."""
+    """Show or change the e-mail notification: addresses, on/off per address."""
     action = args.action
     if action == "add":
         await client.add_email_address(args.address, args.point or [])
@@ -283,7 +283,9 @@ async def _email(client: ItmClient, args: argparse.Namespace) -> None:
     elif action == "delete":
         await client.delete_email_address(args.address)
     elif action in {"on", "off"}:
-        await client.set_email_enabled(enabled=action == "on")
+        if not args.address:
+            sys.exit(f"email {action} needs the address it applies to")
+        await client.set_email_enabled(args.address, enabled=action == "on")
     if _print_plan(client):
         return
     _print_system(await client.fetch_system(["email"]))
@@ -452,7 +454,9 @@ def _add_email_commands(sub: Any) -> None:
         default="show",
         choices=["show", "add", "edit", "delete", "on", "off"],
     )
-    em.add_argument("address", nargs="?", help="the e-mail address (add/edit/delete)")
+    em.add_argument(
+        "address", nargs="?", help="the e-mail address (add/edit/delete/on/off)"
+    )
     em.add_argument("--point", action="append", help="a point it reports on")
     em.add_argument("--new-address", help="edit: the new address")
     cd = sub.add_parser("confirm-dialogs", help="show or switch the confirm dialogs")

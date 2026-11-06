@@ -181,18 +181,18 @@ read-back:
 | `fetch_zone_attributes(zone)` / `set_zone_attributes(zone, *, name=None, info=None, start_interval=None, stop_interval=None)` | A zone's settings screen. |
 | `create_web_user(name, password, *, zones, admin=False)` / `set_web_user(name, *, password=None, admin=None, zones=None)` / `delete_web_user(name)` | Web access users; a new user needs at least one managed zone. The account the client logs in with is refused; passwords are never logged. |
 | `fetch_web_user_screens(name)` / `set_web_user_screens(name, screens)` | The screens a normal web user may open (`WebUserScreens`: allowed and available). Administrators are refused (the iTM disables the button for them). |
-| `fetch_own_settings()` / `set_own_settings(*, date_format=None, time_24h=None, decimal_comma=None, icon_colour=None, language=None, password=None, allow_password_change=False)` | The logged-in user's own settings (`OwnSettings`), reached through the login screen's "user settings" button; the iTM ends the session when they apply. A new password needs `allow_password_change=True`; it is sent once, never logged or planned, and used for the read-back login. Reading, the icon colour, the password and the date format are validated on a real iTM; the language and the time and decimal formats are tested against the simulated iTM only and need `allow_experimental=True`. |
+| `fetch_own_settings()` / `set_own_settings(*, date_format=None, time_24h=None, decimal_comma=None, icon_colour=None, language=None, password=None, allow_password_change=False)` | The logged-in user's own settings (`OwnSettings`), reached through the login screen's "user settings" button; the iTM ends the session when they apply. A new password needs `allow_password_change=True`; it is sent once, never logged or planned, and used for the read-back login. The language reads and sets as a code (`en`, `nl`, ...). All of it is validated on a real iTM. |
 | `fetch_language()` / `set_language(code)` | The display language (en, de, es, pt, ja, fr, it, nl, zh, ko). It belongs to the logged-in web user: the iTM ends the session when it changes. |
 | `fetch_dst()` / `set_dst(*, enabled=True, start=EU_DST_START, end=EU_DST_END)` | Summer time and its rule (`DstRule`). Set it before the clock. |
 | `set_clock(when=None)` | The iTM's clock (default: this computer's local time). |
 | `set_region(*, date_format=None, time_24h=None, temperature_unit=None, decimal_separator=None)` | How the iTM shows dates, times, temperatures and decimals (the library reads every format). |
 | `create_zone(name, *, parent=None)`, `delete_zone(name)`, `move_zone(name, parent)`, `fetch_zone_members(zone)`, `set_zone_members(zone, members)`, `set_zone_member_order(zone, order, *, use_jump=False)`, `set_zone_icon(zone, icon)`, `set_point_icon(point, icon)` | The zone tree and icons (moving or renaming a zone changes its zone paths). |
-| `add_email_address(address, points)`, `edit_email_address(...)`, `delete_email_address(address)`, `set_email_enabled(*, enabled)`, `fetch_email_server()`, `set_email_server(EmailServer(...))`, `send_test_email(address, *, allow_send=False)` | E-mail notification; the server password is never logged. |
+| `add_email_address(address, points)`, `edit_email_address(...)`, `delete_email_address(address)`, `set_email_enabled(address, *, enabled)`, `fetch_email_server()`, `set_email_server(EmailServer(...))`, `send_test_email(address, *, allow_send=False)` | E-mail notification; activation is per address (`EmailSettings.addresses`) and an active address cannot be deleted. The sender must differ from the recipient, or the iTM may not send. The server password is never logged. |
 | `set_confirm_dialogs(*, enabled)` | The iTM's "confirm settings" dialogs. |
 | `fetch_password_settings()`, `set_password_setting(kind, *, enabled=None, password=None, allow_password_change=False)` | Whether the touch panel's administrator and screen password are enabled (`PasswordSettings`); enable, disable or change one (`kind` is `administrator` or `screen`). Refused unless `allow_password_change`; the password is sent once and never logged or planned. |
 | `set_planned_consumption(*, year=None, energy_type=None, ratio=None, per_month=None, months=None)`, `set_actual_consumption(*, year=None, energy_type=None, co2_factor=None, months=None)` | The energy navigator's planned consumption (ratio to the previous year, yearly or per month, targets per month) and hand-entered actual consumption (values per month, CO2 factor) of a fiscal year, read back as `PlannedYear` / `ActualYear`. The expected yearly value has no input and is not written. Tested against the simulated iTM only. |
 | `create_energy_type(name, *, group=False)`, `rename_energy_type(name, new_name, *, group=False)`, `delete_energy_type(name, *, group=False)` | The energy types (or with `group=True` the energy groups). Validated on a real iTM. |
-| `create_energy_rule(name)`, `rename_energy_rule(name, new_name)`, `delete_energy_rule(name)`, `copy_energy_rule(name, new_name)`, `copy_energy_rule_calendar(name, targets)`, `set_energy_rule_day(rule, day, ranges)` | The equipment management's rules: the rule list, copying a rule under a new name, copying a rule's calendar to other rules, and one day's time ranges (`RuleRange`: start, end, cooling and heating setpoints), saved through the rule editor and read back as `RuleDay`. All but the calendar copy are validated on a real iTM. |
+| `create_energy_rule(name)`, `rename_energy_rule(name, new_name)`, `delete_energy_rule(name)`, `copy_energy_rule(name, new_name)`, `copy_energy_rule_calendar(name, targets)`, `set_energy_rule_day(rule, day, ranges)` | The equipment management's rules: the rule list, copying a rule under a new name, copying a rule's calendar to other rules, and one day's time ranges (`RuleRange`: start, end, cooling and heating setpoints), saved through the rule editor and read back as `RuleDay`. Validated on a real iTM. |
 | `set_energy_room_temperature(password, point, *, analog_point=None, allow_service_change=False, allow_restart=False)`, `set_energy_collection_start(password, month, *, allow_service_change=False, allow_restart=False)`, `set_energy_conversion(password, change, *, allow_service_change=False, allow_restart=False)` | The energy navigator's installer settings, behind the service login: a point's room temperature source (the unit's return air temperature or an analog input), the month data collection starts and the energy conversion's name and unit texts (`ConversionType`). Saving restarts the iTM (it says so in its confirm dialog), so each also needs `allow_restart=True`; the read-back waits until the iTM is back. Refused unless `allow_service_change=True` (a dry run plans without both); the password is sent once, never stored or logged; the data clear button is never pressed. Tested against the simulated iTM only. |
 | `set_emergency_stop_enabled(name, *, enabled, allow_safety_change=False)` | Arms or disarms an emergency stop program: refused unless `allow_safety_change` (disarming switches a safety function off; arming may start a stop at once when the input is in alarm). |
 | `create_emergency_stop_program(name)`, `rename_emergency_stop_program(name, new_name)`, `copy_emergency_stop_program(name, new_name)`, `delete_emergency_stop_program(name)` | Emergency stop programs (adding needs the iTM's emergency stop dealer option; the built-in program can't be renamed, copied, deleted or edited; a program is deleted only while disarmed). |
@@ -414,10 +414,10 @@ been tested against the simulated iTM, because they need a dealer option, a
 licence or equipment that wasn't available for testing. `FEATURES.md` marks
 them `F`. Among them: the dealer functions, demand control and energy saving,
 emergency stop changes, energy navigator changes, the installer's service
-writes (leakage check, layout setup, R32 ports, password setting), PPD settings,
-the backup job, the test e-mail, web server port, remote management and network
-changes, the own language and formats and setting a web user's allowed screens, Jump in
-`set_zone_member_order`, °F and the decimal comma in `set_region`, and the
+writes (leakage check, layout setup, R32 ports, password setting), the backup
+job, the test e-mail, web server port, remote management and network changes,
+setting a web user's allowed screens, °F and
+the decimal comma in `set_region`, and the
 settings dialog's ventilation, reset, low noise, capacity, reheat, water and
 output settings in `set_unit_settings`.
 
@@ -573,7 +573,8 @@ itm demand                # demand (power limit) control; also target, forced-le
 itm energy-saving suspend # also show, resume, disable --allow-service-change
 itm region --time 12h      # also --date-format, --temperature, --decimal
 itm zone-add "Zone A"    # also zone-delete, zone-move, zone-members, zone-icon, point-icon
-itm email add ops@example.com --point 1:1-09   # also edit, delete, on, off
+itm email add ops@example.com --point 1:1-09   # also edit, delete
+itm email on ops@example.com                   # or off: per address
 itm confirm-dialogs off
 itm emgstop settings "Fire alarm"   # also add, rename, copy, delete, active
 itm emgstop disable "Fire alarm" --allow-safety-change  # or enable

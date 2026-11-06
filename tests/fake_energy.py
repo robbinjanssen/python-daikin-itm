@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from . import fake_itm
-from .fake_itm import FakeITM, Update
+from .fake_itm import FakeITM, Update, _enabled
 
 if TYPE_CHECKING:
     from daikin_itm.protocol import Writer
@@ -196,7 +196,7 @@ class FakeEnergyITM(FakeITM):  # pylint: disable=too-many-instance-attributes
         self.locked -= {(screen, p) for p in ROW_BUTTONS}
         if builtin:
             self.locked |= {(screen, p) for p in ROW_BUTTONS}
-        parts = [(p, "ENABLED", int(not builtin)) for p in ROW_BUTTONS]
+        parts = _enabled(ROW_BUTTONS, not builtin)
         return [("UPDATE", screen, [], parts)]
 
     def _open(self, target: int) -> list[Update]:

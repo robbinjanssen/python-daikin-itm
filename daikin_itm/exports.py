@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ._bases import ClientCore
+from ._screens import checkbox as _checkbox
 from ._screens import click as _click
 from ._screens import close as _close
 from ._util import ignore as _ignore
@@ -127,11 +128,10 @@ def ppd_advanced_from_screen(state: UIState) -> PpdAdvanced:
     for check in PA_WEEKDAY_CHECKS:
         options = state.get(s, check + 1, "COMBO_STRS") or []
         idx = state.get(s, check + 1, "SINGLE_SELIDX")
-        tick = state.get(s, check, "CHECK_STATE")
         text = state.get(s, check + 2, "TEXT")
         weekdays.append(
             PpdWeekday(
-                enabled=None if tick is None else tick == 1,
+                enabled=_checkbox(state, s, check),
                 option=str(options[idx])
                 if idx is not None and idx < len(options)
                 else None,
@@ -539,7 +539,6 @@ class ExportsMixin(ClientCore):
             The settings as read back, or None in a dry run.
 
         """
-        self._experimental("change the PPD settings")
         await self._system_write(
             lambda s: _ignore(
                 set_ppd_weekday(s, weekday, enabled=enabled, option=option)

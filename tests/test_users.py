@@ -41,7 +41,7 @@ async def test_fetch_and_set_own_settings(itm: FakeUsersITM) -> None:
     c = FakeClient(itm)
     own = await c.fetch_own_settings()
     assert (own.language, own.time_24h, own.decimal_comma, own.icon_colour) == (
-        "English",
+        "en",
         True,
         False,
         1,
@@ -62,13 +62,21 @@ async def test_fetch_and_set_own_settings(itm: FakeUsersITM) -> None:
 
 
 async def test_own_language(itm: FakeUsersITM) -> None:
-    """The language screen opened from 1205; read back through the region screen."""
-    c = FakeClient(itm)
-    result = await c.set_own_settings(language="nl")
+    """The language screen opened from 1205, also read back there as a code."""
+    c = FakeClient(itm, allow_experimental=False)
+    assert (await c.fetch_own_settings()).language == "en"
+    result = await c.set_own_settings(language="nl", time_24h=False, decimal_comma=True)
     assert result is not None
-    assert result.language == "Nederlands"
+    assert (result.language, result.time_24h, result.decimal_comma) == (
+        "nl",
+        False,
+        True,
+    )
     assert itm.language_radio == 9
     assert itm.session is None
+    result = await c.set_own_settings(language="fr")
+    assert result is not None
+    assert result.language == "fr"
 
 
 async def test_own_password_is_sent_never_planned_or_logged(
@@ -300,7 +308,7 @@ async def test_own_buttons_without_answer(
     c = FakeClient(itm)
     with pytest.raises(ItmCommandError, match="no password input"):
         await c.set_own_settings(password=NEW_PASSWORD, allow_password_change=True)
-    with pytest.raises(ItmCommandError, match="language screen did not open"):
+    with pytest.raises(ItmCommandError, match="screen 2501 did not open"):
         await c.set_own_settings(language="en")
     assert itm.session is None
 

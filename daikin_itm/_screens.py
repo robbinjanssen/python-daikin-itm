@@ -75,6 +75,16 @@ def ticked(state: UIState, screen: int, part: int) -> bool:
     return bool(state.get(screen, part, "CHECK_STATE") == 1)
 
 
+def checkbox(state: UIState, screen: int, part: int) -> bool | None:
+    """Tell whether a checkbox is ticked, or None while its screen isn't open.
+
+    The iTM sends no check state for an unticked checkbox.
+    """
+    if screen not in state.screens:
+        return None
+    return bool(state.get(screen, part, "CHECK_STATE") == 1)
+
+
 def checked_index(state: UIState, screen: int, parts: tuple[int, ...]) -> int | None:
     """Return the index of the checked radio among parts, or None."""
     for i, part in enumerate(parts):

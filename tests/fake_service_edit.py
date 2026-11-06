@@ -17,7 +17,7 @@ from typing import Any
 
 from daikin_itm.protocol import PART_UPDATE_CODE, SCREEN_UPDATE_CODE, Writer
 
-from .fake_itm import FakeITM, Update, _encode_data, _encode_part, _rows
+from .fake_itm import FakeITM, Update, _enabled, _encode_data, _encode_part, _rows
 
 LEAKAGE, REGISTRATION, SCHEDULE, COPY = 3100, 3101, 3102, 3103
 LAYOUT, R32, PORTS, PASSWORDS = 1510, 1516, 1517, 1900
@@ -184,11 +184,11 @@ class FakeServiceEditITM(FakeITM):  # pylint: disable=too-many-instance-attribut
     def _leakage_parts(self) -> list[tuple[int, str, Any]]:
         parts: list[tuple[int, str, Any]] = [(2, "LIST_ROW", self._outdoor_rows())]
         if self.lk_selected is None:
-            return [*parts, *[(p, "ENABLED", 0) for p in LK_BUTTONS]]
+            return [*parts, *_enabled(LK_BUTTONS, 0)]
         o = self.outdoors[self.lk_selected]
         return [
             *parts,
-            *[(p, "ENABLED", 1) for p in LK_BUTTONS],
+            *_enabled(LK_BUTTONS, 1),
             (6, "ENABLED", int(not o.running)),
             (7, "ENABLED", int(o.running)),
         ]

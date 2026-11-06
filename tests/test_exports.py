@@ -124,6 +124,8 @@ async def test_ppd_advanced(itm: FakeExportsITM) -> None:
     assert itm.weekdays[2]["on"] is False
     with pytest.raises(ItmCommandError, match="not offered"):
         await run(itm, set_ppd_weekday, 3, option="Weekend")
+    with pytest.raises(ItmCommandError, match="disabled"):
+        await run(itm, set_ppd_weekday, 3, option="Standby")
     with pytest.raises(ItmCommandError, match="0 \\(Sunday\\)"):
         await run(itm, set_ppd_weekday, 7, enabled=True)
     assert itm.open_screens.isdisjoint({2900, 2901})

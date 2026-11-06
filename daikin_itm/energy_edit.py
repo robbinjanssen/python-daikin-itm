@@ -1183,7 +1183,6 @@ class EnergyMixin(ClientCore):
             ItmCommandError: A target's editor doesn't show the copy afterwards.
 
         """
-        self._experimental("copy an energy navigator rule's calendar")
         wanted = tuple(t.strip() for t in targets)
         await self._system_write(lambda s: _ignore(copy_rule_calendar(s, name, wanted)))
         if self.dry_run:

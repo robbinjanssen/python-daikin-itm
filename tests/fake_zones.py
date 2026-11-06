@@ -1,8 +1,8 @@
 """A simulated iTM that also edits its zone structure and icons.
 
 Zone settings (1600) with add/delete/members/settings/move, the member screen
-(1601) with its Jump to the member order screen (1602: off as on a real iTM unless
-``jump_enabled``; the selected member takes the picked row's place), the icon
+(1601) with its Jump to the member order screen (1602: it lists the other members
+and the selected one lands after the picked row's member), the icon
 list (1604, for zone and point icons) and the move screen (1605),
 plus the point icon on the point settings screen (1701). Strict like the real iTM:
 clicking a part it reports disabled raises.
@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .fake_itm import FakeITM, FakeUnit, Update
+from .fake_itm import FakeITM, FakeUnit, Update, _enabled
 
 ZONE_ICONS = list(range(1000, 1010))
 POINT_ICONS = [2100, 2102, 2114, 2201, 2601, 2704]
@@ -60,7 +60,7 @@ class FakeZonesITM(FakeITM):  # pylint: disable=too-many-instance-attributes
         self.z_pending: dict[str, Any] = {}
         # Set: the next confirmed member change opens the zone error screen (1606).
         self.zone_error: str | None = None
-        self.jump_enabled = False  # a real iTM showed Jump disabled
+        self.jump_enabled = True
 
     # -- the tree -------------------------------------------------------------
     def _z_flat(self) -> list[tuple[Zone, int, Zone | None]]:
@@ -119,7 +119,7 @@ class FakeZonesITM(FakeITM):  # pylint: disable=too-many-instance-attributes
     def _z_list_update(self) -> list[tuple[int, str, Any]]:
         return [
             (4, "LIST_ROW", _text_rows(self._z_rows())),
-            *[(p, "ENABLED", 0) for p in (7, 9, 10)],
+            *_enabled((7, 9, 10), 0),
         ]
 
     # -- screens --------------------------------------------------------------
@@ -197,7 +197,7 @@ class FakeZonesITM(FakeITM):  # pylint: disable=too-many-instance-attributes
         if screen == 1600:
             self.z_selected = row
             enabled = 0 if row == 0 else 1  # the root can't be deleted/edited/moved
-            parts = [(p, "ENABLED", enabled) for p in (7, 9, 10)]
+            parts = _enabled((7, 9, 10), enabled)
             return [("UPDATE", 1600, [], parts)]
         if screen == 1700:
             self.system_selected[1700] = row
@@ -308,7 +308,8 @@ class FakeZonesITM(FakeITM):  # pylint: disable=too-many-instance-attributes
             if part == 5:
                 p.pop("sel1602_1", None)
                 self.open_screens.add(1602)
-                rows = _text_rows([["Indoor", n] for n in p["members"]])
+                others = [n for i, n in enumerate(p["members"]) if i != row]
+                rows = _text_rows([["Indoor", n] for n in others])
                 return [("OPEN", 1602, [-1], [(1, "LIST_ROW", rows)])]
             other = row - 1 if part == 3 else row + 1
             members = p["members"]
@@ -352,13 +353,13 @@ class FakeZonesITM(FakeITM):  # pylint: disable=too-many-instance-attributes
         return [("UPDATE", 1601, [], [])]
 
     def _z_order_event(self, part: int) -> list[Update]:
-        """1602: OK moves the selected member to the picked row's place."""
+        """1602: OK puts the selected member after the picked row's member."""
         p = self.z_pending
         self.open_screens.discard(1602)
         if part == 2:
             members, target = p["members"], p.pop("sel1602_1")
-            members.insert(target, members.pop(p["sel1601_2"]))
-            p["sel1601_2"] = target
+            members.insert(target + 1, members.pop(p["sel1601_2"]))
+            p["sel1601_2"] = target + 1
             return [
                 ("CLOSE", 1602, [], []),
                 ("UPDATE", 1601, [], self._z_member_parts()),

@@ -18,12 +18,9 @@ from daikin_itm import cli as itm_cli
 from .fake_dealer_functions import FakeDealerITM
 from .fake_demand import FakeDemandITM
 from .fake_emergency import FakeEmergencyITM
-from .fake_energy_more import FakeEnergyMoreITM
 from .fake_itm import FakeITM
 from .fake_service_edit import FakeServiceEditITM
 from .fake_system_edit import FakeSystemEditITM
-from .fake_users import FakeUsersITM
-from .fake_zones import FakeZonesITM
 from .test_cli import fixture_itm
 from .test_client import FakeClient
 
@@ -40,17 +37,14 @@ GUARDED: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = [
     ("set_network", (), {"dns_secondary": "10.0.0.9", "allow_network_change": True}),
     ("set_planned_consumption", (), {}),
     ("set_actual_consumption", (), {}),
-    ("copy_energy_rule_calendar", ("Rule A", ("Rule B",)), {}),
     ("set_energy_room_temperature", (SERVICE, "1:1-00"), {}),
     ("set_energy_collection_start", (SERVICE, "April"), {}),
     ("set_energy_conversion", (SERVICE, None), {}),
-    ("set_ppd_weekday", (1,), {"enabled": True}),
     ("run_backup", (), {}),
     ("send_test_email", ("user@example.com",), {"allow_send": True}),
     ("set_web_server_port", (8080,), {"allow_network_change": True}),
     ("set_remote_management", (), {"connect": True, "allow_remote_change": True}),
     ("set_web_user_screens", ("viewer", ("Screen A",)), {}),
-    ("set_own_settings", (), {"time_24h": False}),
     ("set_emergency_stop_enabled", ("Program 1",), {"enabled": False}),
     ("create_emergency_stop_program", ("Program 2",), {}),
     ("rename_emergency_stop_program", ("Program 1", "Program 2"), {}),
@@ -93,7 +87,6 @@ GUARDED: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = [
     ("set_password_setting", ("admin",), {}),
     ("set_unit_settings", ("1:1-00",), {"low_noise": "Step 2"}),
     ("set_region", (), {"temperature_unit": "°F"}),
-    ("set_zone_member_order", ("Zone A", ("1:1-00",)), {"use_jump": True}),
 ]
 
 
@@ -164,23 +157,6 @@ async def test_demand() -> None:
     assert itm.target == 120.5
 
 
-async def test_energy_navigator() -> None:
-    """An energy navigator write (it returns None, so checked on the simulator)."""
-    itm = FakeEnergyMoreITM()
-    guarded = FakeClient(itm, allow_experimental=False)
-    with pytest.raises(ExperimentalError):
-        await guarded.copy_energy_rule_calendar("Rule A", ["Rule B"])
-    assert not itm.requests
-    dry = FakeClient(itm, allow_experimental=False, dry_run=True)
-    dry.progress_interval = 0
-    await dry.copy_energy_rule_calendar("Rule A", ["Rule B"])
-    assert dry.planned
-    client = FakeClient(itm, allow_experimental=True)
-    client.progress_interval = 0
-    await client.copy_energy_rule_calendar("Rule A", ["Rule B"])
-    assert itm.calendars["Rule B"] == itm.calendars["Rule A"]
-
-
 async def test_test_email() -> None:
     """The test e-mail (it also needs allow_send)."""
     itm = FakeSystemEditITM()
@@ -214,18 +190,6 @@ async def test_guards_add_up() -> None:
     assert itm.outdoors[0].running
     dry = FakeClient(itm, allow_experimental=False, dry_run=True)
     assert await dry.stop_leakage_check(SERVICE, "1-00") is None
-
-
-async def test_own_settings_per_argument() -> None:
-    """The own icon colour needs no opt-in; the own language does."""
-    itm = FakeUsersITM()
-    client = FakeClient(itm, allow_experimental=False)
-    assert (await client.set_own_settings(icon_colour=2)) is not None
-    assert itm.own["colour"] == 2
-    itm.requests.clear()
-    with pytest.raises(ExperimentalError, match="own language: not validated"):
-        await client.set_own_settings(language="de", icon_colour=1)
-    assert not itm.requests
 
 
 async def test_unit_settings_per_argument(hw_itm: FakeITM) -> None:
@@ -268,26 +232,6 @@ async def test_region_per_argument() -> None:
     info = await client.set_region(decimal_separator=",")
     assert info is not None
     assert info.decimal_separator == ","
-
-
-async def test_zone_member_order_per_argument() -> None:
-    """The up button is validated; Jump is experimental."""
-    itm = FakeZonesITM()
-    a, b, c = (u.name for u in itm.units[:3])
-    client = FakeClient(itm, allow_experimental=False)
-    assert await client.set_zone_members("Zone A", (a, b, c)) is not None
-    assert await client.set_zone_member_order("Zone A", (c,)) == (c, a, b)
-    itm.requests.clear()
-    with pytest.raises(ExperimentalError, match="Jump"):
-        await client.set_zone_member_order("Zone A", (a,), use_jump=True)
-    assert not itm.requests
-    itm.jump_enabled = True
-    client.allow_experimental = True
-    assert await client.set_zone_member_order("Zone A", (a,), use_jump=True) == (
-        a,
-        c,
-        b,
-    )
 
 
 async def test_validated_write_needs_no_opt_in() -> None:

@@ -24,6 +24,7 @@ from .fake_itm_base import (
     FakeVentilation,
     FakeZone,
     Update,
+    _enabled,
 )
 
 if TYPE_CHECKING:
@@ -300,10 +301,10 @@ class PanelMixin(FakeITMBase):
         for check, controls in EXTRA_CONTROLS.items():
             if offered[check]:
                 parts.append((check, "VISIBLED", 1))
-                parts.extend((c, "ENABLED", 0) for c in controls)
+                parts.extend(_enabled(controls, 0))
             elif check in {37, 94, 129}:
                 # Like a real iTM: on the hidden outputs tab, shown but disabled.
-                parts.extend((p, "ENABLED", 0) for p in (check, *controls))
+                parts.extend(_enabled((check, *controls), 0))
             else:
                 parts.extend(
                     (p, t, 0)
@@ -346,7 +347,7 @@ class PanelMixin(FakeITMBase):
         pending = d.setdefault("unit", {})
         if part in EXTRA_CONTROLS and event == 1:
             (d["ticks"].add if number else d["ticks"].discard)(part)
-            enabled = [(c, "ENABLED", number) for c in EXTRA_CONTROLS[part]]
+            enabled = _enabled(EXTRA_CONTROLS[part], number)
             return [("UPDATE", 7, [], [(part, "CHECK_STATE", number), *enabled])]
         if part in EXTRA_OWNER and event == 1:
             if EXTRA_OWNER[part] not in d["ticks"]:
@@ -472,7 +473,7 @@ class PanelMixin(FakeITMBase):
             d["vent_mode" if part == 34 else "vent_amount"] = number
         elif part == 88 and event == 1 and d.get("airflow"):
             (d["ticks"].add if number else d["ticks"].discard)(part)
-            enabled = [(p, "ENABLED", number) for p in (89, 90)]
+            enabled = _enabled((89, 90), number)
             updates = [("UPDATE", 7, [], [(88, "CHECK_STATE", number), *enabled])]
         elif part in {89, 90} and event == 1:
             if 88 not in d["ticks"]:

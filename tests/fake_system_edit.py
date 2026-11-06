@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from daikin_itm.protocol import Reader
 
-from .fake_itm import FakeITM, Update, _rows
+from .fake_itm import FakeITM, Update, _enabled, _rows
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -42,9 +42,8 @@ class FakeSystemEditITM(FakeITM):  # pylint: disable=too-many-instance-attribute
     def __init__(self) -> None:
         """Start with no e-mail address and confirm dialogs on."""
         super().__init__()
-        # Address -> (points it reports on); activation is None while there is none.
         self.emails: dict[str, list[str]] = {}
-        self.email_active: bool | None = None
+        self.email_active: dict[str, bool] = {}
         self.email_server: dict[int, Any] = {
             3: "Site",
             9: "itm@example.com",
@@ -115,6 +114,7 @@ class FakeSystemEditITM(FakeITM):  # pylint: disable=too-many-instance-attribute
 
     def _system_parts(self, target: int) -> list[tuple[int, str, Any]]:
         if target == EMAIL:
+            self.edit.pop("row", None)
             return self._email_parts()
         if target == CONFIRM:
             return [
@@ -133,16 +133,19 @@ class FakeSystemEditITM(FakeITM):  # pylint: disable=too-many-instance-attribute
 
     # -- parts ----------------------------------------------------------------------
     def _email_parts(self) -> list[tuple[int, str, Any]]:
-        has = bool(self.emails)
-        active = "On" if self.email_active else "Off"
+        rows = [["Enable" if self.email_active.get(a) else " ", a] for a in self.emails]
+        return [(1, "LIST_ROW", _rows(rows)), *self._email_selection_parts()]
+
+    def _email_selection_parts(self) -> list[tuple[int, str, Any]]:
+        row = self.edit.get("row")
+        if row is None:
+            return _enabled((3, 4, 7, 8), 0)
+        active = self.email_active.get(list(self.emails)[row], False)
         return [
-            (1, "LIST_ROW", _rows([[active, a] for a in self.emails])),
-            (3, "ENABLED", int(has)),
-            (4, "ENABLED", int(has)),
-            (3, "CHECK_STATE", int(bool(self.email_active))),
-            (4, "CHECK_STATE", int(self.email_active is False)),
-            (7, "ENABLED", 0),
-            (8, "ENABLED", 0),
+            *_enabled((3, 4, 8), 1),
+            (7, "ENABLED", int(not active)),
+            (3, "CHECK_STATE", int(active)),
+            (4, "CHECK_STATE", int(not active)),
         ]
 
     def _address_parts(self) -> list[tuple[int, str, Any]]:
@@ -190,10 +193,7 @@ class FakeSystemEditITM(FakeITM):  # pylint: disable=too-many-instance-attribute
 
     def _current_parts(self, screen: int) -> list[tuple[int, str, Any]]:
         if screen == EMAIL:
-            parts = self._email_parts()
-            if "row" in self.edit:  # a selection enables edit and delete
-                parts = [p for p in parts if p[0] not in {7, 8}]
-            return parts
+            return self._email_parts()
         if screen == ADDRESS:
             parts = self._address_parts()
             return [p for p in parts if p[0] not in self.edit.get("enabled", set())]
@@ -261,9 +261,9 @@ class FakeSystemEditITM(FakeITM):  # pylint: disable=too-many-instance-attribute
     def _email_event(  # noqa: PLR0911  # pylint: disable=too-many-return-statements
         self, part: int, ev: dict[str, Any]
     ) -> list[Update]:
-        if ev["dtype"] == 8:  # a row selection enables edit and delete
+        if ev["dtype"] == 8:  # a row selection enables the radios, edit and delete
             self.edit["row"] = ev["array"][0]
-            return [("UPDATE", EMAIL, [], [(7, "ENABLED", 1), (8, "ENABLED", 1)])]
+            return [("UPDATE", EMAIL, [], self._email_selection_parts())]
         if part == 6:  # like the real iTM: the address first, then 1301
             self.edit["address_input"] = True
             data = [14, 4, "E-mail address", "", 1, 128, 0, 1, 0, "Words", "OK"]
@@ -274,8 +274,7 @@ class FakeSystemEditITM(FakeITM):  # pylint: disable=too-many-instance-attribute
                 return close
             # Like the real iTM: the address goes straight into the list.
             self.emails[ev["string"]] = []
-            if self.email_active is None:
-                self.email_active = False
+            self.email_active[ev["string"]] = False
             return [*close, ("UPDATE", EMAIL, [], self._email_parts())]
         if part == 8:
             address = list(self.emails)[self.edit["row"]]
@@ -290,12 +289,12 @@ class FakeSystemEditITM(FakeITM):  # pylint: disable=too-many-instance-attribute
 
             def delete() -> None:
                 del self.emails[address]
-                if not self.emails:
-                    self.email_active = None
+                self.email_active.pop(address, None)
+                self.edit.pop("row", None)
 
             return self._confirm(EMAIL, delete, close=False)
         if part in {3, 4}:
-            self.email_active = part == 3
+            self.email_active[list(self.emails)[self.edit["row"]]] = part == 3
             return [("UPDATE", EMAIL, [], self._email_parts())]
         if part == 10:
             self.open_screens.add(SERVER)
@@ -306,7 +305,7 @@ class FakeSystemEditITM(FakeITM):  # pylint: disable=too-many-instance-attribute
             parts += [
                 (6, "COMBO_STRS", ["1", "2", "4"]),
                 (6, "SINGLE_SELIDX", self.email_server[6]),
-                (26, "COMBO_STRS", ["None", "SMTP-AUTH", "POP before SMTP"]),
+                (26, "COMBO_STRS", ["None", "POP before SMTP", "SMTP-AUTH"]),
                 (26, "SINGLE_SELIDX", self.email_server[26]),
                 (38, "TEXT", "***"),
             ]
@@ -361,11 +360,12 @@ class FakeSystemEditITM(FakeITM):  # pylint: disable=too-many-instance-attribute
                 return [("DLG_OPEN", ADDRESS, error, [])]
 
             def save() -> None:
+                active = False
                 if e.get("original"):
                     del self.emails[e["original"]]
+                    active = self.email_active.pop(e["original"], False)
                 self.emails[e["address"]] = list(e["points"])
-                if self.email_active is None:
-                    self.email_active = False
+                self.email_active[e["address"]] = active
 
             return self._confirm(ADDRESS, save, close=True)
         return [("UPDATE", ADDRESS, [], [])]

@@ -39,7 +39,7 @@ def test_own_settings_command(
     """Show, dry-run and change the own settings; the password never printed."""
     run("own-settings")
     out = capsys.readouterr().out
-    assert "language English" in out
+    assert "language en" in out
     assert "time 24h, decimal point, icon colour 1" in out
     monkeypatch.setenv("ITM_NEW_PASSWORD", NEW_PASSWORD)
     run("--dry-run", "own-settings", "--password", "--time", "12h")
@@ -59,7 +59,7 @@ def test_own_settings_command(
     out = capsys.readouterr().out
     assert "date %Y/%m/%d, time 12h, decimal comma" in out
     run("own-settings", "--language", "en", "--icon-colour", "2")
-    assert "language English" in capsys.readouterr().out
+    assert "language en" in capsys.readouterr().out
 
 
 def test_user_screens_command(

@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import hashlib
 import html
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from ._bases import ClientCore, SessionCore
+from ._screens import clean as _clean
 from ._screens import close as _close
+from ._screens import open_below as _open_below
 from ._screens import open_screen as _open
 from ._screens import radio as _radio
 from ._util import ignore as _ignore
@@ -23,6 +25,7 @@ from .exceptions import ItmCommandError, LoginRejected, SessionEnded
 from .menu import CLOSE_PART, DATE_FORMATS, MenuScreen
 from .protocol import NO_TOKEN, DataType, EventType, ScreenID
 from .system import (
+    LANGUAGE_NAMES,
     LANGUAGE_RADIOS,
     LG_OK,
     MB_WEB_USERS,
@@ -38,6 +41,7 @@ from .system import (
     WU_CHANGE,
     WU_DELETE,
     WU_LIST,
+    language_from_screen,
     row_index,
     web_users_from_screen,
 )
@@ -72,7 +76,7 @@ UA_ALLOWED, UA_ADD, UA_REMOVE, UA_AVAILABLE, UA_OK, UA_CANCEL = 2, 4, 5, 8, 9, 1
 class OwnSettings:
     """The logged-in user's own region settings (screen 1205)."""
 
-    language: str | None
+    language: str | None  # a code: en, de, es, pt, ja, fr, it, nl, zh or ko
     date_format: str | None  # a strptime format, see menu.DATE_FORMATS
     time_24h: bool | None
     decimal_comma: bool | None
@@ -139,13 +143,16 @@ async def open_own_settings(s: _Session, username: str, password: str) -> None:
 
 
 def own_settings_from_screen(state: UIState) -> OwnSettings:
-    """Read the open own-settings screen (1205); the password shows as asterisks."""
+    """Read the open own-settings screen (1205); the password shows as asterisks.
+
+    The language is None when 1205 shows a name not in LANGUAGE_NAMES.
+    """
     o = OWN_SCREEN
-    language = state.get(o, OWN_LANGUAGE, "TEXT")
+    language = LANGUAGE_NAMES.get(_clean(state.get(o, OWN_LANGUAGE, "TEXT") or ""))
     idx = state.get(o, OWN_DATE_FORMAT, "SINGLE_SELIDX")
     colour = _radio(state, o, OWN_COLOUR_1, OWN_COLOUR_2)
     return OwnSettings(
-        language=html.unescape(language).strip() if isinstance(language, str) else None,
+        language=language,
         date_format=DATE_FORMATS[idx]
         if idx is not None and 0 <= idx < len(DATE_FORMATS)
         else None,
@@ -201,13 +208,20 @@ async def _enter_own_password(s: _Session, password: str) -> None:
     await s._answer_password(reply, password)
 
 
+async def read_own_language(s: _Session) -> str | None:
+    """Open the language screen from 1205, read the checked language and cancel."""
+    g = MenuScreen.LANGUAGE
+    await _open_below(s, OWN_SCREEN, OWN_LANGUAGE_BUTTON, g)
+    try:
+        return language_from_screen(s.state)
+    finally:
+        await _close(s, g, CLOSE_PART[g])
+
+
 async def _pick_own_language(s: _Session, code: str) -> None:
     """Open the language screen from 1205, pick a language and press its OK."""
     g = MenuScreen.LANGUAGE
-    await s.click(OWN_SCREEN, OWN_LANGUAGE_BUTTON, "own language")
-    if g not in s.state.screens:
-        msg = "the language screen did not open"
-        raise ItmCommandError(msg)
+    await _open_below(s, OWN_SCREEN, OWN_LANGUAGE_BUTTON, g)
     try:
         await s.send(g, LANGUAGE_RADIOS[code])
         await s.press_ok(f"pick own language {code}", g, LG_OK, CLOSE_PART[g])
@@ -560,12 +574,15 @@ class UsersMixin(ClientCore):
 
         Returns
         -------
-            Language (as shown), date format, 12/24 hours, decimal separator and
+            Language (a code), date format, 12/24 hours, decimal separator and
             icon colour.
 
         """
         async with self._own_session() as s:
-            return own_settings_from_screen(s.state)
+            settings = own_settings_from_screen(s.state)
+            if settings.language is None:
+                settings = replace(settings, language=await read_own_language(s))
+            return settings
 
     async def set_own_settings(  # noqa: PLR0913  # pylint: disable=too-many-arguments,too-many-locals
         self,
@@ -606,13 +623,6 @@ class UsersMixin(ClientCore):
             ItmCommandError: Not allowed, nothing to change, or the read-back failed.
 
         """
-        for name, value in (
-            ("language", language),
-            ("time format", time_24h),
-            ("decimal sign", decimal_comma),
-        ):
-            if value is not None:
-                self._experimental(f"change the own {name}")
         self._writable()
         if password is not None and not allow_password_change and not self.dry_run:
             msg = (
@@ -646,7 +656,6 @@ class UsersMixin(ClientCore):
             self._password = password
         try:
             result = await self.fetch_own_settings()
-            code = await self.fetch_language() if language is not None else None
         except (ItmCommandError, LoginRejected) as err:
             msg = "could not log in again after changing the own settings"
             if password is not None:
@@ -661,8 +670,8 @@ class UsersMixin(ClientCore):
             for k, v in changes.items()
             if v is not None and getattr(result, k) != v
         }
-        if language is not None and code != language:
-            wrong["language"] = code
+        if language is not None and result.language != language:
+            wrong["language"] = result.language
         if wrong:
             msg = f"the iTM did not take the own settings: {wrong}"
             raise ItmCommandError(msg)
@@ -672,7 +681,8 @@ class UsersMixin(ClientCore):
         """Switch to a password if a login with it works; else keep the current one."""
         current, self._password = self._password, password
         try:
-            await self.fetch_language()
+            async with self._session():
+                pass
         except (ItmCommandError, LoginRejected):
             self._password = current
             return False

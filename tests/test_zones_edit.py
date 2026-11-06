@@ -134,36 +134,41 @@ async def test_zone_member_order(itm: FakeZonesITM) -> None:
 
 
 async def test_zone_member_order_with_jump(itm: FakeZonesITM) -> None:
-    """Jump moves a member to its row in one step (1602); the default keeps up."""
+    """Jump moves a member below the first row in one step; the first row needs up."""
     a, b, c = (u.name for u in itm.units[:3])
     assert await run(itm, set_zone_members, "Zone A", (a, b, c)) is True
-    itm.jump_enabled = True
-    assert await run(itm, set_zone_member_order, "Zone A", (c, b), use_jump=True)
-    assert itm.zone("Zone A").points == [c, b, a]
+    assert await run(itm, set_zone_member_order, "Zone A", (a, c), use_jump=True)
+    assert itm.zone("Zone A").points == [a, c, b]
     picks = [r["array"] for r in itm.requests if (r["screen"], r["part"]) == (1602, 1)]
-    assert picks == [[0], [1]]
+    assert picks == [[0]]
     ups = [r for r in itm.requests if (r["screen"], r["part"]) == (1601, 3)]
     assert ups == []
+    itm.requests.clear()
+    assert await run(itm, set_zone_member_order, "Zone A", (b, a), use_jump=True)
+    assert itm.zone("Zone A").points == [b, a, c]
+    picks = [r["array"] for r in itm.requests if (r["screen"], r["part"]) == (1602, 1)]
+    assert picks == []
     assert itm.open_screens == set()
 
-    client = FakeClient(itm)
-    assert await client.set_zone_member_order("Zone A", (a,), use_jump=True) == (
-        a,
-        c,
+    client = FakeClient(itm, allow_experimental=False)
+    assert await client.set_zone_member_order("Zone A", (b, c), use_jump=True) == (
         b,
+        c,
+        a,
     )
     client.dry_run = True
-    assert await client.set_zone_member_order("Zone A", (b,), use_jump=True) is None
-    assert itm.zone("Zone A").points == [a, c, b]
+    assert await client.set_zone_member_order("Zone A", (a,), use_jump=True) is None
+    assert itm.zone("Zone A").points == [b, c, a]
     assert itm.open_screens == set()
 
 
 async def test_jump_refusals(itm: FakeZonesITM) -> None:
-    """Jump disabled (as on a real iTM), 1602 not opening or misplacing: refused."""
+    """Jump disabled, 1602 not opening or misplacing: refused."""
     a, b, c = (u.name for u in itm.units[:3])
     assert await run(itm, set_zone_members, "Zone A", (a, b, c)) is True
+    itm.jump_enabled = False
     with pytest.raises(ItmCommandError, match="has this disabled"):
-        await run(itm, set_zone_member_order, "Zone A", (c,), use_jump=True)
+        await run(itm, set_zone_member_order, "Zone A", (a, c), use_jump=True)
     assert not [r for r in itm.requests if (r["screen"], r["part"]) == (1601, 5)]
     itm.jump_enabled = True
     original = itm._z_order_event
@@ -175,7 +180,7 @@ async def test_jump_refusals(itm: FakeZonesITM) -> None:
 
     itm._z_order_event = misplace  # type: ignore[method-assign]
     with pytest.raises(ItmCommandError, match="Jump did not put"):
-        await run(itm, set_zone_member_order, "Zone A", (c,), use_jump=True)
+        await run(itm, set_zone_member_order, "Zone A", (a, c), use_jump=True)
     itm._z_order_event = original  # type: ignore[method-assign]
     original_event = itm._z_members_event
 
@@ -188,7 +193,7 @@ async def test_jump_refusals(itm: FakeZonesITM) -> None:
 
     itm._z_members_event = open_short  # type: ignore[method-assign]
     with pytest.raises(ItmCommandError, match="lists 0 rows"):
-        await run(itm, set_zone_member_order, "Zone A", (c,), use_jump=True)
+        await run(itm, set_zone_member_order, "Zone A", (a, c), use_jump=True)
 
     def open_nothing(part: int, event: int) -> Any:
         updates = original_event(part, event)
@@ -199,7 +204,7 @@ async def test_jump_refusals(itm: FakeZonesITM) -> None:
 
     itm._z_members_event = open_nothing  # type: ignore[method-assign]
     with pytest.raises(ItmCommandError, match="order screen did not open"):
-        await run(itm, set_zone_member_order, "Zone A", (c,), use_jump=True)
+        await run(itm, set_zone_member_order, "Zone A", (a, c), use_jump=True)
     assert itm.zone("Zone A").points == [a, b, c]
     assert itm.open_screens == set()
 

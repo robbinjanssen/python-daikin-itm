@@ -21,7 +21,7 @@ from daikin_itm.menu import (
 from daikin_itm.protocol import parse_reply
 from daikin_itm.state import UIState
 
-from .fake_itm import FakeITM
+from .fake_itm import FakeITM, _enabled
 from .test_client import FakeClient
 
 FIXTURE = Path(__file__).parent / "fixtures" / "schedule_session.json"
@@ -215,7 +215,7 @@ async def test_disabled_edit_button_is_not_clicked(itm: FakeITM) -> None:
         updates = original(ev)
         if ev["screen"] == 107 and ev["part"] == 4:
             itm.selected_event = None
-            return [("UPDATE", 107, [], [(p, "ENABLED", 0) for p in (6, 7, 8)])]
+            return [("UPDATE", 107, [], _enabled((6, 7, 8), 0))]
         return updates
 
     itm._schedule_event = disabled  # type: ignore[method-assign]

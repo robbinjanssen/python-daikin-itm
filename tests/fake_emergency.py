@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .fake_itm import FakeITM, Update, _rows
+from .fake_itm import FakeITM, Update, _enabled, _rows
 
 MAIN, RELEASE, SETTINGS, PICKER = 200, 201, 202, 203
 NAME_DIALOG, DELETE_DIALOG, OK_CONFIRM = 12, 13, 30
@@ -104,7 +104,7 @@ class FakeEmergencyITM(FakeITM):  # pylint: disable=too-many-instance-attributes
             (5, "CHECK_STATE", 0),
             *[(p, "VISIBLED", shown) for p in range(6, 12)],
             (7, "ENABLED", 1),
-            *[(p, "ENABLED", 0) for p in EDIT_PARTS],
+            *_enabled(EDIT_PARTS, 0),
         ]
 
     def _selection_parts(self) -> list[tuple[int, str, Any]]:
@@ -118,7 +118,7 @@ class FakeEmergencyITM(FakeITM):  # pylint: disable=too-many-instance-attributes
             (5, "ENABLED", 1),
             (4, "CHECK_STATE", 1 if p.enabled else 0),
             (5, "CHECK_STATE", 0 if p.enabled else 1),
-            *[(part, "ENABLED", editable) for part in EDIT_PARTS],
+            *_enabled(EDIT_PARTS, editable),
         ]
 
     def _selected(self, part: int) -> Program:

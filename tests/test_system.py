@@ -100,7 +100,6 @@ def test_captured_email_confirm_remote() -> None:
     """No e-mail addresses, confirm dialogs on, remote management disconnected."""
     email = email_from_screen(_captured("email"))
     assert not email.addresses
-    assert email.enabled is None  # neither radio checked while the list is empty
     assert confirm_dialogs_from_screen(_captured("confirm")) is True
     remote = remote_management_from_screen(_captured("remote"))
     assert remote.ip_address == "0.0.0.0"  # noqa: S104 - as shown
@@ -173,7 +172,6 @@ async def test_fetch_system(itm: FakeITM) -> None:
     assert st.network is not None
     assert st.network.dns_secondary is None
     assert st.email is not None
-    assert st.email.enabled is True
     assert st.email.addresses == ((True, "ops@example.com"),)
     assert st.web_users is not None
     assert [u.admin for u in st.web_users] == [True, False]

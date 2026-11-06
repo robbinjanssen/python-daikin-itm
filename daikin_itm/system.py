@@ -18,6 +18,9 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
+from ._screens import activation as _activation
+from ._screens import cell_lists as _cell_lists
+from ._screens import checkbox as _checkbox
 from ._screens import radio as _radio
 from ._screens import raw_rows as _rows
 from ._screens import row_cells as _cells
@@ -38,7 +41,7 @@ ZN_POSITION, ZN_LIST = 2, 4
 PT_LIST = 1
 MT_IN_MAINTENANCE, MT_AVAILABLE = 2, 8
 NW_FIELDS = (8, 9, 10, 11, 12, 13, 14)  # name, hostname, IP, mask, gateway, DNS 1, 2
-EM_LIST, EM_ENABLED, EM_DISABLED = 1, 3, 4
+EM_LIST, EM_DISABLED = 1, 4
 WU_LIST = 2
 SS_MODE, SS_DELAY, SS_OFF_ON_ERROR, SS_ON_ON_ERROR = 2, 5, 8, 9
 SS_DELAY_BUTTON, SS_OK = 6, 10
@@ -81,6 +84,19 @@ LANGUAGE_RADIOS = {
     "nl": 9,
     "zh": 10,
     "ko": 11,
+}
+# The languages' own names, as 1205 and 2501 show them in every display language.
+LANGUAGE_NAMES = {
+    "English": "en",
+    "Deutsch": "de",
+    "Español": "es",
+    "Português": "pt",
+    "日本語": "ja",
+    "Français": "fr",
+    "Italiano": "it",
+    "Nederlands": "nl",
+    "Chinese": "zh",
+    "Korean": "ko",
 }
 TM_CHANGE, TM_DST_ON, TM_DST_OFF, TM_OK = 3, 6, 7, 18  # 2400
 # 1800: the Change button of each network field, in NetworkSettings order, and OK.
@@ -156,10 +172,9 @@ class NetworkSettings:
 
 @dataclass(frozen=True)
 class EmailSettings:
-    """E-mail notification: whether it is on, and the addresses."""
+    """E-mail notification: the addresses, each with whether it is active."""
 
-    enabled: bool | None
-    addresses: tuple[tuple[bool | None, str], ...]  # (active, address)
+    addresses: tuple[tuple[bool, str], ...]  # (active, address)
 
 
 @dataclass(frozen=True)
@@ -372,14 +387,11 @@ def network_from_screen(state: UIState) -> NetworkSettings:
 
 
 def email_from_screen(state: UIState) -> EmailSettings:
-    """Read the e-mail settings: on or off, and the addresses."""
+    """Read the e-mail settings: the addresses and whether each is active."""
     s = MenuScreen.EMAIL
-    addresses = []
-    for row in _rows(state, s, EM_LIST):
-        cells = [*_cells(row), "", ""]
-        addresses.append((on_off(cells[0]) if cells[0] else None, cells[1]))
+    rows = [[*cells, "", ""] for cells in _cell_lists(state, s, EM_LIST)]
     return EmailSettings(
-        enabled=_radio(state, s, EM_ENABLED, EM_DISABLED), addresses=tuple(addresses)
+        addresses=tuple((_activation(state, s, EM_DISABLED, c[0]), c[1]) for c in rows)
     )
 
 
@@ -455,9 +467,8 @@ def ppd_from_screen(state: UIState) -> PpdSettings:
                 standby_kwh=_float(cells[2]),
             )
         )
-    limit = state.get(s, PPD_TIME_LIMIT, "CHECK_STATE")
     return PpdSettings(
-        time_limit=None if limit is None else limit == 1,
+        time_limit=_checkbox(state, s, PPD_TIME_LIMIT),
         start=_text(state, s, PPD_START),
         end=_text(state, s, PPD_END),
         calculation_day=_int(_text(state, s, PPD_DAY)),

@@ -703,7 +703,7 @@ def test_system_command(capsys: pytest.CaptureFixture[str]) -> None:
     out = capsys.readouterr().out
     assert "zones (shown from Top):" in out
     assert "network: intelligent Touch Manager, host localhost" in out
-    assert "e-mail: on, ops@example.com" in out
+    assert "e-mail: ops@example.com (on)" in out
     assert "web users: admin (admin), viewer (User)" in out
     assert "touch panel: backlight 7, buzzer volume 1 for continuous" in out
     assert "screensaver: backlight_off after 10 min, off on error off" in out
@@ -931,6 +931,15 @@ def test_email_and_confirm_commands(
     assert "ops@example.com" in capsys.readouterr().out
     run("email")
     assert "e-mail server:" in capsys.readouterr().out
+    run("email", "on", "ops@example.com")
+    assert "e-mail: ops@example.com (on)" in capsys.readouterr().out
+    run("--dry-run", "email", "off", "ops@example.com")
+    assert "off for ops@example.com" in capsys.readouterr().out
+    assert fake.email_active == {"ops@example.com": True}
+    run("email", "off", "ops@example.com")
+    assert "e-mail: ops@example.com (off)" in capsys.readouterr().out
+    with pytest.raises(SystemExit, match="needs the address"):
+        run("email", "on")
     run("email", "delete", "ops@example.com")
     assert "no addresses" in capsys.readouterr().out
     run("confirm-dialogs", "off")
