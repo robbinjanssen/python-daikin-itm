@@ -27,7 +27,7 @@ live); and the °F and decimal comma display settings (the date format and 12-ho
 clock are validated live). Pre-cool/pre-heat, time and management point parts of
 screen 7 belong to schedule events, not to a unit.
 
-172 screens, each counted by its best status (read or write). Covered: 138 (validated on a real iTM: 92, dry run only: 0, simulated iTM only: 46); probed only: 0; needs a licence or another iTM: 0; out of scope: 33; not covered: 1.
+172 screens, each counted by its best status (read or write). Covered: 138 (validated on a real iTM: 93, dry run only: 0, simulated iTM only: 45); probed only: 0; needs a licence or another iTM: 0; out of scope: 33; not covered: 1.
 
 | Screen | Class | Read | Write | Notes |
 | ---: | :---- | :--: | :---: | :---- |
@@ -155,7 +155,7 @@ screen 7 belong to schedule events, not to a unit.
 | 2826 | `ScMngSettingGeneralAHU` | - | X | service: management point data registration (installer) |
 | 2827 | `ScMngSettingGeneralChiller` | - | X | service: management point data registration (installer) |
 | 2900 | `ScPPDSetup` | V | - | PPD: period and use per unit (calculation: F) |
-| 2901 | `ScPPDAdvancedSetup` | F | F | PPD advanced setup |
+| 2901 | `ScPPDAdvancedSetup` | V | F | PPD advanced setup (read V; weekday settings F) |
 | 3000 | `ScSetbackMain` | V | V | setback offsets |
 | 3001 | `ScSetbackAdvanced` | V | V | setback recovery temperatures |
 | 3100 | `ScLeakageChkOutdoorSetup` | V | F | service: leakage check outdoor units (read V, on an empty list); start/stop guarded (allow_leakage_check) |
@@ -181,7 +181,7 @@ screen 7 belong to schedule events, not to a unit.
 | 3216 | `ScEnergyNaviCalenderCopy` | F | F | energy navigator: calendar copy |
 | 3217 | `ScEnergyNaviRuleSetting` | V | V | energy navigator: rule settings: time ranges per day and their cool/heat setpoints |
 | 3218 | `ScEnergyNaviExtractSetting` | V | - | energy navigator: sampling targets (a view filter, no save) |
-| 3219 | `ScEnergyNaviDataOutput` | V | F | energy navigator: data output periods (V); exports (F) |
+| 3219 | `ScEnergyNaviDataOutput` | V | V | energy navigator: data output periods and exports (energy data, point list) |
 | 3220 | `ScEnergyNaviTrialSetting` | V | F | energy navigator installer settings (read V; the data clear button is never pressed) |
 | 3221 | `ScEnergyNaviRoomTempSetting` | V | F | energy navigator: room temperature per point (read V; guarded; saving restarts the iTM) |
 | 3222 | `ScEnergyNaviMngSelect` | F | F | energy navigator: analog point selection |
