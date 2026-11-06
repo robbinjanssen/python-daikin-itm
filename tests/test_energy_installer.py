@@ -30,6 +30,11 @@ PASSWORD = "test-service"  # the simulator's placeholder
 SAVES = {(3221, 9), (3223, 3), (3224, 14)}
 
 
+@pytest.fixture(autouse=True)
+def _no_restart_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ee, "RESTART_POLL", 0)
+
+
 @pytest.fixture
 def itm() -> FakeEnergyMoreITM:
     """Return a simulated iTM with the installer's energy navigator screens."""
@@ -129,14 +134,18 @@ async def test_room_temperature(itm: FakeEnergyMoreITM) -> None:
     """Pick the analog input in 3222, apply to the row, OK; and back to own."""
     c = client(itm)
     point = await c.set_energy_room_temperature(
-        PASSWORD, "AC1", analog_point="AI 2", allow_service_change=True
+        PASSWORD,
+        "AC1",
+        analog_point="AI 2",
+        allow_service_change=True,
+        allow_restart=True,
     )
     assert point == RoomTemperaturePoint(
         "AC1", "AI 2", own_sensor=False, analog_point="AI 2"
     )
     assert itm.room_temp["AC1"] == "AI 2"
     point = await c.set_energy_room_temperature(
-        PASSWORD, "AC2", allow_service_change=True
+        PASSWORD, "AC2", allow_service_change=True, allow_restart=True
     )
     assert point is not None
     assert point.own_sensor is True
@@ -145,20 +154,58 @@ async def test_room_temperature(itm: FakeEnergyMoreITM) -> None:
     assert_closed(itm)
 
 
+async def test_restart_needs_its_own_opt_in(itm: FakeEnergyMoreITM) -> None:
+    """Saving restarts the iTM: refused without allow_restart, nothing sent."""
+    with pytest.raises(ItmCommandError, match="allow_restart"):
+        await client(itm).set_energy_collection_start(
+            PASSWORD, "Feb", allow_service_change=True
+        )
+    assert itm.requests == []
+
+
+async def test_read_back_after_the_restart(
+    itm: FakeEnergyMoreITM, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The iTM drops the session while it restarts; the read-back waits for it."""
+    c = client(itm)
+    original = itm.handle
+    restarts = {"left": 1, "refused": 2}
+
+    def restarting(body: str) -> str:
+        reply = original(body)
+        if itm.saved and restarts["left"]:
+            restarts["left"] = 0
+            raise TimeoutError
+        if not restarts["left"] and restarts["refused"]:
+            restarts["refused"] -= 1
+            raise TimeoutError
+        return reply
+
+    monkeypatch.setattr(itm, "handle", restarting)
+    month = await c.set_energy_collection_start(
+        PASSWORD, "Apr", allow_service_change=True, allow_restart=True
+    )
+    assert month == "Apr"
+    assert restarts == {"left": 0, "refused": 0}
+
+
 async def test_collection_start_and_conversion(itm: FakeEnergyMoreITM) -> None:
     """The month combo and the conversion texts, each saved by OK and read back."""
     c = client(itm)
     month = await c.set_energy_collection_start(
-        PASSWORD, "Apr", allow_service_change=True
+        PASSWORD, "Apr", allow_service_change=True, allow_restart=True
     )
     assert month == "Apr"
     assert itm.collect_month == 3
     # The month shown already: nothing picked, OK all the same.
     assert await c.set_energy_collection_start(
-        PASSWORD, "Apr", allow_service_change=True
+        PASSWORD, "Apr", allow_service_change=True, allow_restart=True
     )
     shown = await c.set_energy_conversion(
-        PASSWORD, ConversionType(name="Power", one="Wh"), allow_service_change=True
+        PASSWORD,
+        ConversionType(name="Power", one="Wh"),
+        allow_service_change=True,
+        allow_restart=True,
     )
     assert shown == ConversionType("Power", "Wh", "MWh", "GWh")
     assert itm.saved == ["collection start", "collection start", "conversion"]
@@ -228,39 +275,46 @@ async def test_installer_write_refusals(itm: FakeEnergyMoreITM) -> None:
 
     await write(
         lambda: c.set_energy_room_temperature(
-            PASSWORD, "AC9", allow_service_change=True
+            PASSWORD, "AC9", allow_service_change=True, allow_restart=True
         ),
         "'AC9' not listed once",
     )
     await write(
         lambda: c.set_energy_room_temperature(
-            PASSWORD, "AC1", analog_point="AI 9", allow_service_change=True
+            PASSWORD,
+            "AC1",
+            analog_point="AI 9",
+            allow_service_change=True,
+            allow_restart=True,
         ),
         "'AI 9' not listed once",
     )
     await write(
         lambda: c.set_energy_collection_start(
-            PASSWORD, "Month 13", allow_service_change=True
+            PASSWORD, "Month 13", allow_service_change=True, allow_restart=True
         ),
         "not offered",
     )
     # Nothing changed: 3224's OK stays disabled, so it is not clicked.
     await write(
         lambda: c.set_energy_conversion(
-            PASSWORD, ConversionType(), allow_service_change=True
+            PASSWORD, ConversionType(), allow_service_change=True, allow_restart=True
         ),
         "has this disabled",
     )
     await write(
         lambda: c.set_energy_conversion(
-            PASSWORD, ConversionType(one="x" * 17), allow_service_change=True
+            PASSWORD,
+            ConversionType(one="x" * 17),
+            allow_service_change=True,
+            allow_restart=True,
         ),
         "must be 1-16 characters",
     )
     itm.disabled = {(3223, 2)}
     await write(
         lambda: c.set_energy_collection_start(
-            PASSWORD, "May", allow_service_change=True
+            PASSWORD, "May", allow_service_change=True, allow_restart=True
         ),
         "has this disabled",
     )
@@ -271,7 +325,11 @@ async def test_installer_write_refusals(itm: FakeEnergyMoreITM) -> None:
     )
     await write(
         lambda: c.set_energy_room_temperature(
-            PASSWORD, "AC1", analog_point="AI 2", allow_service_change=True
+            PASSWORD,
+            "AC1",
+            analog_point="AI 2",
+            allow_service_change=True,
+            allow_restart=True,
         ),
         "selection did not close",
     )
@@ -279,7 +337,7 @@ async def test_installer_write_refusals(itm: FakeEnergyMoreITM) -> None:
     itm.unavailable = {3220}
     await write(
         lambda: c.set_energy_collection_start(
-            PASSWORD, "May", allow_service_change=True
+            PASSWORD, "May", allow_service_change=True, allow_restart=True
         ),
         "did not open",
     )
@@ -295,13 +353,22 @@ async def test_installer_read_back_mismatch(itm: FakeEnergyMoreITM) -> None:
     )
     with pytest.raises(ItmCommandError, match="AC1: the iTM shows"):
         await c.set_energy_room_temperature(
-            PASSWORD, "AC1", analog_point="AI 2", allow_service_change=True
+            PASSWORD,
+            "AC1",
+            analog_point="AI 2",
+            allow_service_change=True,
+            allow_restart=True,
         )
     with pytest.raises(ItmCommandError, match="collection start: the iTM shows"):
-        await c.set_energy_collection_start(PASSWORD, "Jun", allow_service_change=True)
+        await c.set_energy_collection_start(
+            PASSWORD, "Jun", allow_service_change=True, allow_restart=True
+        )
     with pytest.raises(ItmCommandError, match="conversion one: the iTM shows"):
         await c.set_energy_conversion(
-            PASSWORD, ConversionType(one="Wh"), allow_service_change=True
+            PASSWORD,
+            ConversionType(one="Wh"),
+            allow_service_change=True,
+            allow_restart=True,
         )
     assert_closed(itm)
 
@@ -355,12 +422,17 @@ def test_cli_installer(
     assert "save energy conversion" in out
     with pytest.raises(SystemExit, match="allow_service_change"):
         main("energy-edit", "collection-start", "--start-month", "Feb")
-    allow = "--allow-service-change"
-    main("energy-edit", "collection-start", "--start-month", "Feb", allow)
+    with pytest.raises(SystemExit, match="allow_restart"):
+        main(
+            "energy-edit", "collection-start", "--start-month", "Feb",
+            "--allow-service-change",
+        )  # fmt: skip
+    allow = ("--allow-service-change", "--allow-restart")
+    main("energy-edit", "collection-start", "--start-month", "Feb", *allow)
     assert fake.collect_month == 1
-    out = main("energy-edit", "room-temp", "--point", "AC1", "--analog", "AI 2", allow)
+    out = main("energy-edit", "room-temp", "--point", "AC1", "--analog", "AI 2", *allow)
     assert "room-temp: done, the iTM shows" in out
-    main("energy-edit", "conversion", "--conversion-name", "Power", allow)
+    main("energy-edit", "conversion", "--conversion-name", "Power", *allow)
     assert fake.conversion[2] == "Power"
     for args, error in (
         (["room-temp"], "needs --point"),

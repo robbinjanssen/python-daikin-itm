@@ -5,9 +5,8 @@ On top of FakeEnergyITM (which guards the reads): the planned (3202) and actual
 (3203) consumption take an energy type pick, the yearly/monthly radios, NUMBER
 inputs for the ratio, the CO2 factor and the selected month's value, and keep them
 pending until OK (answered with a CONFIRM) saves them; Cancel discards them. The
-equipment management (3210) takes DATE inputs for its sampling period, saved at once,
-and the sampling target list (3218) its OK. The energy type and group lists (3205,
-3207) create and rename through a CHARINPUT dialog and delete after a CONFIRM.
+energy type and group lists (3205, 3207) create and rename through a CHARINPUT dialog
+and delete after a CONFIRM.
 
 Buttons that need a selected row (a month's Change) stay disabled until one is
 selected; a click on a disabled part fails the request, as in FakeEnergyITM.
@@ -19,15 +18,14 @@ import copy
 from typing import TYPE_CHECKING, Any
 
 from .fake_energy import FakeEnergyITM, _rows
-from .fake_exports import FakeExportsITM
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from .fake_itm import Update
 
-NUMBER_ID, CONFIRM_ID, DATE_ID, NAME_ID, DELETE_ID = 40, 41, 42, 44, 46
-DATE_RANGE = ((2024, 0, 1), (2026, 11, 31))  # [year, month 0-11, day] from, to
+NUMBER_ID, CONFIRM_ID, NAME_ID, DELETE_ID = 40, 41, 44, 46
+RECALC_ID = 32
 # Per tab of 3202: year radio, month radio, ratio text, ratio button, month list,
 # month button; of 3203: month list, month button, CO2 text, CO2 button.
 PLANNED_TABS = ((4, 11, 6, 8, 13, 12), (18, 25, 20, 22, 27, 26))
@@ -43,17 +41,14 @@ def _number(value: list[int]) -> str:
 class FakeEnergyEditITM(FakeEnergyITM):
     """A FakeEnergyITM whose energy navigator settings can be changed."""
 
-    # The DATE dialog needs the exports fake's encoding.
-    _reply = staticmethod(FakeExportsITM._reply)
-
     def __init__(self, *, data: bool = True) -> None:
         """Start like FakeEnergyITM, nothing pending."""
         super().__init__(data=data)
         self.plan_pending: dict[int, Any] = {}  # per tab: the unsaved values
         self.edit_dialog: tuple[Any, ...] | None = None  # what the open dialog answers
         self.list_row: dict[tuple[int, int], int] = {}
-        self.target_row: int | None = None
         self.saved: list[str] = []  # what OK or an input saved, in order
+        self.recalculating = False
         self.offer_settings = False  # open 3206/3208 after a create's name
 
     # -- routing ----------------------------------------------------------------------
@@ -66,8 +61,6 @@ class FakeEnergyEditITM(FakeEnergyITM):
         handler = {
             3202: self._planned_event,
             3203: self._actual_event,
-            3210: self._equipment_event,
-            3218: self._target_event,
             3205: self._list_event,
             3207: self._list_event,
             3206: self._settings_event,
@@ -108,30 +101,16 @@ class FakeEnergyEditITM(FakeEnergyITM):
         data = [NAME_ID, 4, "Name", "", 1, 16, 0, 0, 1, "Words", "OK", "Cancel"]
         return [("DLG_OPEN", screen, [*data, *[""] * 11, ""], [])]
 
-    def _date_dialog(self, key: str) -> list[Update]:
-        self.edit_dialog = (DATE_ID, "date", key)
-        data = [DATE_ID, 9, 6, key, 2024, 11, 20, *DATE_RANGE[0], *DATE_RANGE[1]]
-        return [("DLG_OPEN", 3210, [*data, "OK", "Cancel", *[""] * 11], [])]
-
     def _answer(self, screen: int, ev: dict[str, Any]) -> list[Update]:
         assert self.edit_dialog is not None
         dialog_id, kind, *what = self.edit_dialog
         self.edit_dialog = None
-        types = {"number": 6, "confirm": 2, "date": 9, "name": 4}
+        types = {"number": 6, "confirm": 2, "name": 4}
         close: list[Update] = [("DLG_CLOSE", screen, [dialog_id, types[kind]], [])]
         if ev["event"] != 1:
             return close
         if kind == "number":
             return close + self._entered(screen, what, _number(ev["array"]))
-        if kind == "date":
-            y, m0, d = ev["array"]
-            self.sampling[what[0]] = f"{d:02d}/{m0 + 1:02d}/{y}"
-            self.saved.append(f"sampling {what[0]}")
-            part = 2 if what[0] == "from" else 5
-            return [
-                *close,
-                ("UPDATE", 3210, [], [(part, "TEXT", self.sampling[what[0]])]),
-            ]
         if kind == "name":
             return close + self._named(screen, what, ev["string"])
         action: Callable[[], list[Update]] = what[0]  # a confirm: its action
@@ -164,7 +143,12 @@ class FakeEnergyEditITM(FakeEnergyITM):
             self.plan_pending[tab]["months"][what[2]][1] = text
             return [("UPDATE", screen, [], [])]
         self.plan_pending[tab][key] = text
-        return [("UPDATE", screen, [], [(what[2], "TEXT", text)])]
+        updates: list[Update] = [("UPDATE", screen, [], [(what[2], "TEXT", text)])]
+        if screen == 3202 and key == "ratio":
+            self.recalculating = True
+            data = [RECALC_ID, 11, "Now Loading.", 1, 1, "Progress", "Cancel"]
+            updates.append(("DLG_OPEN", 3202, data, []))
+        return updates
 
     def _save_plan(self, screen: int) -> list[Update]:
         values = self.plans if screen == 3202 else self.actuals
@@ -177,11 +161,16 @@ class FakeEnergyEditITM(FakeEnergyITM):
         self, ev: dict[str, Any]
     ) -> list[Update] | None:
         part, event = ev["part"], ev["event"]
+        if part == RECALC_ID and event == 5:
+            self.recalculating = False
+            return [("DLG_CLOSE", 3202, [RECALC_ID, 11], [])]
         if event != 1:
             return None
         if part == 2:
             return self._pick_type(3202, ev["number"])
         if part == 14:
+            if self.recalculating:
+                self._violation(ev, "OK while the iTM still recalculates")
             return self._confirm_dialog(3202, lambda: self._save_plan(3202))
         for tab, (year, month, text, ratio, months, month_button) in enumerate(
             PLANNED_TABS
@@ -226,29 +215,6 @@ class FakeEnergyEditITM(FakeEnergyITM):
                 )
             if part == co2:
                 return self._number_dialog(3203, tab, "co2", text)
-        return None
-
-    # -- sampling ---------------------------------------------------------------------
-    def _equipment_event(self, ev: dict[str, Any]) -> list[Update] | None:
-        if ev["part"] == 3:
-            return self._date_dialog("from")
-        if ev["part"] == 6:
-            return self._date_dialog("to")
-        return None
-
-    def _target_event(self, ev: dict[str, Any]) -> list[Update] | None:
-        if ev["part"] == 2 and ev["event"] == 1:
-            self.target_row = ev["array"][0]
-            return [("UPDATE", 3218, [], [])]
-        if ev["part"] == 3 and ev["event"] == 1:  # OK
-            name = ["All", "Indoor units"][self.target_row or 0]
-            self.sampling["target"] = f"Building&gt;{name}"
-            self.saved.append("sampling target")
-            updates = self._close(3218)
-            return [
-                *updates,
-                ("UPDATE", 3210, [], [(8, "TEXT", self.sampling["target"])]),
-            ]
         return None
 
     # -- energy types and groups ------------------------------------------------------

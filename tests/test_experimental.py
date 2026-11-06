@@ -40,7 +40,6 @@ GUARDED: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = [
     ("set_network", (), {"dns_secondary": "10.0.0.9", "allow_network_change": True}),
     ("set_planned_consumption", (), {}),
     ("set_actual_consumption", (), {}),
-    ("set_energy_sampling", (), {}),
     ("copy_energy_rule_calendar", ("Rule A", ("Rule B",)), {}),
     ("set_energy_room_temperature", (SERVICE, "1:1-00"), {}),
     ("set_energy_collection_start", (SERVICE, "April"), {}),

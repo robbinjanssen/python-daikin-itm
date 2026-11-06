@@ -608,7 +608,6 @@ class UsersMixin(ClientCore):
         """
         for name, value in (
             ("language", language),
-            ("date format", date_format),
             ("time format", time_24h),
             ("decimal sign", decimal_comma),
         ):

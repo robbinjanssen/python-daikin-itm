@@ -126,6 +126,9 @@ class SessionCore:
         async def close_screen(self, screen: MenuScreen) -> None:
             """Close (or cancel) a menu screen, if it is open. Never OK."""
 
+        async def wait_for_progress(self, reply: Reply, *, attempts: int = 20) -> None:
+            """Wait out a PROGRESS dialog a reply opened, like the browser does."""
+
         async def _open_system_screen(
             self, button: int, screen: MenuScreen
         ) -> None: ...

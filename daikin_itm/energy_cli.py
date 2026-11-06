@@ -170,10 +170,6 @@ async def _energy_edit(client: ItmClient, args: argparse.Namespace) -> None:
         result = await client.set_actual_consumption(
             year=args.year, energy_type=args.type, co2_factor=args.co2, months=months
         )
-    elif action == "sampling":
-        result = await client.set_energy_sampling(
-            start=_date_arg(args.start), end=_date_arg(args.end), target=args.target
-        )
     elif not args.name or (action == "rename" and not args.new_name):
         sys.exit(
             f"energy-edit {action} needs a name"
@@ -208,7 +204,10 @@ async def _energy_installer_edit(client: ItmClient, args: argparse.Namespace) ->
     password = os.environ.get("ITM_SERVICE_PASSWORD")
     if not password:
         sys.exit(f"energy-edit {action} needs ITM_SERVICE_PASSWORD")
-    allow = args.allow_service_change
+    allow = {
+        "allow_service_change": args.allow_service_change,
+        "allow_restart": args.allow_restart,
+    }
     if action == "room-temp":
         if not args.point:
             sys.exit("energy-edit room-temp needs --point")
@@ -216,18 +215,16 @@ async def _energy_installer_edit(client: ItmClient, args: argparse.Namespace) ->
             password,
             args.point,
             analog_point=args.analog,
-            allow_service_change=allow,
+            **allow,
         )
     if action == "collection-start":
         if not args.start_month:
             sys.exit("energy-edit collection-start needs --start-month")
         return await client.set_energy_collection_start(
-            password, args.start_month, allow_service_change=allow
+            password, args.start_month, **allow
         )
     change = ConversionType(args.conversion_name, args.one, args.thousand, args.million)
-    return await client.set_energy_conversion(
-        password, change, allow_service_change=allow
-    )
+    return await client.set_energy_conversion(password, change, **allow)
 
 
 async def _energy_rule_edit(client: ItmClient, args: argparse.Namespace) -> Any:
@@ -345,7 +342,6 @@ def add_energy_commands(sub: Any) -> None:
         choices=[
             "planned",
             "actual",
-            "sampling",
             "create",
             "rename",
             "delete",
@@ -369,6 +365,11 @@ def add_energy_commands(sub: Any) -> None:
         help="room-temp/collection-start/conversion: really change it",
     )
     ee.add_argument(
+        "--allow-restart",
+        action="store_true",
+        help="room-temp/collection-start/conversion: saving restarts the iTM",
+    )
+    ee.add_argument(
         "name", nargs="?", help="the energy type or group, or the rule (rule-*)"
     )
     ee.add_argument(
@@ -381,9 +382,6 @@ def add_energy_commands(sub: Any) -> None:
     ee.add_argument("--per-month", choices=["yes", "no"], help="planned: per month")
     ee.add_argument("--co2", type=float, help="actual: the CO2 factor")
     ee.add_argument("--month", action="append", help="MONTH=VALUE, as listed")
-    ee.add_argument("--start", help="sampling: YYYY-MM-DD")
-    ee.add_argument("--end", help="sampling: YYYY-MM-DD")
-    ee.add_argument("--target", help="sampling: the target, as listed")
     pp = sub.add_parser("ppd", help="power proportional distribution for a period")
     pp.add_argument("--start", help="YYYY-MM-DD")
     pp.add_argument("--end", help="YYYY-MM-DD")

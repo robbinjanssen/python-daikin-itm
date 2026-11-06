@@ -180,10 +180,12 @@ class SettingsDialogMixin(SessionCore):
         whole = int(value)
         thousandths = round((value - whole) * 1000)
         if kind == 0:
-            await self.send(d.screen, dialog_id, EventType.CLICK, DataType.INT, whole)
+            reply = await self.send(
+                d.screen, dialog_id, EventType.CLICK, DataType.INT, whole
+            )
         elif kind in {1, 2}:
             data_type = DataType.FLOAT if kind == 1 else DataType.SETTEMP_C
-            await self.send(
+            reply = await self.send(
                 d.screen,
                 dialog_id,
                 EventType.CLICK,
@@ -192,13 +194,14 @@ class SettingsDialogMixin(SessionCore):
                 array=(whole, thousandths),
             )
         elif kind == 3:
-            await self.send(
+            reply = await self.send(
                 d.screen, dialog_id, EventType.CLICK, DataType.SETTEMP_F, round(value)
             )
         else:
             await self.send(d.screen, dialog_id, EventType.CLICK2)
             msg = f"{what}: number input of kind {kind} is not supported"
             raise ItmCommandError(msg)
+        await self.wait_for_progress(reply)
 
     async def answer_text(self, screen: int, button: int, text: str, what: str) -> None:
         """Press a "change" button and enter text in the input dialog it opens.

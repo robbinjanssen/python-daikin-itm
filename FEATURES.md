@@ -81,7 +81,7 @@ screen 7 belong to schedule events, not to a unit.
 | 1202 | `ScSysWebAccessManageArea` | - | V | a web user's managed zones |
 | 1203 | `ScMainLogin` | V | - | login screen |
 | 1204 | `ScSysWebAccessUserSetup` | - | V | web user setup: name, password, type |
-| 1205 | `ScWebUserSetup` | V | V | the logged-in user's own settings, opened through the login screen's user settings button: read, icon colour and password (V); language and date/time/decimal formats (F) |
+| 1205 | `ScWebUserSetup` | V | V | the logged-in user's own settings, opened through the login screen's user settings button: read, icon colour, password and date format (V); language and time/decimal formats (F) |
 | 1300 | `ScEmlSetting` | V | V | e-mail notification: activation and addresses |
 | 1301 | `ScEmlAddrEdit` | V | V | e-mail address edit |
 | 1302 | `ScEmlTrial` | - | F | test e-mail (guarded: allow_send) |
@@ -172,7 +172,7 @@ screen 7 belong to schedule events, not to a unit.
 | 3207 | `ScEnergyNaviEnergyGroupList` | V | V | energy navigator: energy groups: create, rename, delete |
 | 3208 | `ScEnergyNaviEnergyGroupSetting` | V | - | energy navigator: an energy group's settings |
 | 3209 | `ScEnergyNaviLegendPlanManage` | X | X | energy navigator legend (static help, no data) |
-| 3210 | `ScEnergyNaviEquipmentManage` | V | F | energy navigator: equipment management, sampling period and target (read V; write F) |
+| 3210 | `ScEnergyNaviEquipmentManage` | V | - | energy navigator: equipment management; the sampling period and target are a view filter (no save) |
 | 3211 | `ScEnergyNaviDetailInfo` | F | - | energy navigator: equipment details (only offered with data) |
 | 3212 | `ScEnergyNaviLegendDriveInfo` | X | X | energy navigator legend (static help, no data) |
 | 3213 | `ScEnergyNaviRuleList` | V | V | energy navigator: management rule list: create, rename, delete, copy under a new name |
@@ -180,13 +180,13 @@ screen 7 belong to schedule events, not to a unit.
 | 3215 | `ScEnergyNaviCopySelect` | - | - | energy navigator: rule copy screen (not opened by the rule list's Copy, which asks a new rule's name) |
 | 3216 | `ScEnergyNaviCalenderCopy` | F | F | energy navigator: calendar copy |
 | 3217 | `ScEnergyNaviRuleSetting` | V | V | energy navigator: rule settings: time ranges per day and their cool/heat setpoints |
-| 3218 | `ScEnergyNaviExtractSetting` | V | F | energy navigator: sampling targets (read V; choosing one F) |
+| 3218 | `ScEnergyNaviExtractSetting` | V | - | energy navigator: sampling targets (a view filter, no save) |
 | 3219 | `ScEnergyNaviDataOutput` | V | F | energy navigator: data output periods (V); exports (F) |
 | 3220 | `ScEnergyNaviTrialSetting` | V | F | energy navigator installer settings (read V; the data clear button is never pressed) |
-| 3221 | `ScEnergyNaviRoomTempSetting` | V | F | energy navigator: room temperature per point (read V; guarded) |
+| 3221 | `ScEnergyNaviRoomTempSetting` | V | F | energy navigator: room temperature per point (read V; guarded; saving restarts the iTM) |
 | 3222 | `ScEnergyNaviMngSelect` | F | F | energy navigator: analog point selection |
-| 3223 | `ScEnergyNaviCollectStartSetting` | V | F | energy navigator: data collection start month (read V; guarded) |
-| 3224 | `ScEnergyNaviExchangeTypeSetting` | V | F | energy navigator: energy conversion (read V; guarded) |
+| 3223 | `ScEnergyNaviCollectStartSetting` | V | F | energy navigator: data collection start month (read V; guarded; saving restarts the iTM) |
+| 3224 | `ScEnergyNaviExchangeTypeSetting` | V | F | energy navigator: energy conversion (read V; guarded; saving restarts the iTM) |
 | 3300 | `ScDemandControlMain` | F | - | demand control (needs the dealer option and a pulse input) |
 | 3301 | `ScDemandSetup` | F | F | demand control (needs the dealer option and a pulse input) |
 | 3302 | `ScDemandLegend` | F | - | demand control (needs the dealer option and a pulse input) |

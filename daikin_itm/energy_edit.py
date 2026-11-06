@@ -11,8 +11,6 @@ it opened with its Close or Cancel:
   month, the ratio to the previous year and the target per month, then OK;
 - the actual consumption entered by hand (3203): the value per month and the CO2
   factor, then OK;
-- the equipment management's sampling period (3210, each date saved by its input)
-  and sampling target (3218, OK);
 - creating, renaming and deleting energy types (3205) and groups (3207), behind the
   budget overview's display settings (3200 -> 3204);
 - creating, renaming, deleting and copying management rules (3213; Copy asks the
@@ -37,12 +35,17 @@ UI's script and the part IDs it lists (FEATURES.md has the status per screen).
 
 from __future__ import annotations
 
+import asyncio
 import html
 import itertools
+import logging
 import math
 import re
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+
+import aiohttp
 
 from . import energy_navigator as en
 from ._bases import ClientCore
@@ -54,14 +57,11 @@ from ._screens import open_below as _open_below
 from ._screens import press_ok as _press_ok
 from ._screens import select as _select
 from ._util import ignore as _ignore
-from .exceptions import ItmCommandError
-from .menu import MenuScreen
+from .exceptions import ItmCommandError, ItmError, SessionEnded
 from .protocol import DataType, EventType
-from .system import MB_ENERGY_EQUIPMENT
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable, Mapping
-    from datetime import date
 
     from .energy_navigator import (
         ActualYear,
@@ -84,10 +84,8 @@ PL_TAB_INPUTS = ((8, 12), (22, 26))
 # Actual consumption (3203).
 AC_OK = 15
 AC_TAB_INPUTS = ((6, 10), (22, 26))
-# Equipment management (3210) and sampling targets (3218).
-EQ_FROM_BUTTON, EQ_TO_BUTTON = 3, 6
-EQ_FROM, EQ_TO, EQ_TARGET_TEXT = 2, 5, 8
-ST_OK = 3
+_LOGGER = logging.getLogger(__name__)
+RESTART_TIMEOUT, RESTART_POLL = 300, 10
 # Energy type list (3205) and group list (3207): (3204 button, list screen).
 LISTS = {False: (en.DS_TYPES, en.TYPE_LIST), True: (en.DS_GROUPS, en.GROUP_LIST)}
 
@@ -329,137 +327,6 @@ async def confirm_actual(s: _Session, change: ActualChange) -> en.ActualYear:
         raise ItmCommandError(msg)
     _check_months(year.months, change.months, year.name)
     return year
-
-
-# -- sampling period and target --------------------------------------------------------
-
-
-async def _enter_date(s: _Session, button: int, value: date, what: str) -> bool:
-    """Enter a sampling date in the DATE dialog its button opens (saved at once).
-
-    The dialog's range ([year, month 0-11, day] from and to) is checked first. In a
-    dry run the dialog is cancelled and the date planned.
-    """
-    screen = MenuScreen.ENERGY_EQUIPMENT
-    _ensure_enabled(s, screen, button, what)
-    reply = await s.send(screen, button)
-    dialogs = [
-        u for u in reply.screens if u.update == "DLG_OPEN" and u.data[1] == "DATE"
-    ]
-    if not dialogs:
-        msg = f"{what}: no date input opened: {reply.dialogs()}"
-        raise ItmCommandError(msg)
-    d = dialogs[0]
-    wanted = (value.year, value.month - 1, value.day)
-    if not tuple(d.data[7:10]) <= wanted <= tuple(d.data[10:13]):
-        await s.send(d.screen, d.data[0], EventType.CLICK2)
-        msg = f"{what}: {value} outside the iTM's range"
-        raise ItmCommandError(msg)
-    s._writable()
-    if s._client.dry_run:
-        await s.send(d.screen, d.data[0], EventType.CLICK2)
-        s._client.planned.append(
-            f"{what} = {value}: screen {d.screen} input {d.data[0]}"
-        )
-        return False
-    answer = await s.send(
-        d.screen, d.data[0], EventType.CLICK, DataType.DATE, 3, array=wanted
-    )
-    await s._answer_confirm(screen, answer)
-    return True
-
-
-async def set_sampling(
-    s: _Session,
-    *,
-    start: date | None = None,
-    end: date | None = None,
-    target: str | None = None,
-) -> bool:
-    """Change the equipment management's sampling period and target (3210, 3218).
-
-    Returns
-    -------
-        True when something was sent, False in a dry run.
-
-    Raises
-    ------
-        ItmCommandError: A screen did not open, a date or target is not offered, an
-            input is disabled, or the iTM refused.
-
-    """
-    s._writable()
-    eq = MenuScreen.ENERGY_EQUIPMENT
-    sent = False
-    try:
-        if not await en.open_from_menu(s, MB_ENERGY_EQUIPMENT, eq):
-            msg = "the equipment management did not open"
-            raise ItmCommandError(msg)
-        if start is not None:
-            sent |= await _enter_date(s, EQ_FROM_BUTTON, start, "sampling from")
-        if end is not None:
-            sent |= await _enter_date(s, EQ_TO_BUTTON, end, "sampling to")
-        if target is not None:
-            await _open_below(s, eq, en.EQ_TARGET, en.SAMPLING_TARGETS)
-            names = [t.name for t in en.sampling_targets_from_screen(s.state)]
-            if names.count(target.strip()) != 1:
-                msg = f"sampling target {target!r} not listed once: {names}"
-                raise ItmCommandError(msg)
-            await _select(
-                s, en.SAMPLING_TARGETS, en.ST_LIST, names.index(target.strip())
-            )
-            sent |= await _press_ok(
-                s, f"sampling target {target}", en.SAMPLING_TARGETS, ST_OK, en.ST_CANCEL
-            )
-        return sent
-    finally:
-        await _close(s, en.SAMPLING_TARGETS, en.ST_CANCEL)
-        await _close(s, eq, en.EQ_CLOSE)
-
-
-def _same_date(text: str | None, value: date) -> bool:
-    """Tell whether a shown date ("02/01/2025", in the iTM's format) is value."""
-    numbers = sorted(int(n) for n in re.findall(r"\d+", text or ""))
-    return numbers == sorted((value.day, value.month, value.year))
-
-
-async def confirm_sampling(
-    s: _Session,
-    *,
-    start: date | None = None,
-    end: date | None = None,
-    target: str | None = None,
-) -> tuple[str | None, str | None, str | None]:
-    """Read the sampling period and target back (3210, closed) and compare.
-
-    Returns
-    -------
-        From, to and target as the iTM shows them.
-
-    Raises
-    ------
-        ItmCommandError: It doesn't show the change.
-
-    """
-    eq = MenuScreen.ENERGY_EQUIPMENT
-    try:
-        if not await en.open_from_menu(s, MB_ENERGY_EQUIPMENT, eq):
-            msg = "the equipment management did not open"
-            raise ItmCommandError(msg)
-        shown = tuple(
-            html.unescape(str(s.state.get(eq, part, "TEXT") or "")).strip() or None
-            for part in (EQ_FROM, EQ_TO, EQ_TARGET_TEXT)
-        )
-    finally:
-        await _close(s, eq, en.EQ_CLOSE)
-    for value, text, what in ((start, shown[0], "from"), (end, shown[1], "to")):
-        if value is not None and not _same_date(text, value):
-            msg = f"sampling {what}: the iTM shows {text!r}, not {value}"
-            raise ItmCommandError(msg)
-    if target is not None and not (shown[2] or "").endswith(target.strip()):
-        msg = f"sampling target: the iTM shows {shown[2]!r}, not {target!r}"
-        raise ItmCommandError(msg)
-    return shown[0], shown[1], shown[2]
 
 
 # -- energy types and groups -----------------------------------------------------------
@@ -863,8 +730,8 @@ async def _enter_range(s: _Session, r: en.RuleRange) -> None:
     the end of the day.
     """
     rs = en.RULE_SETTING
-    for button, time, label in _time_order(s.state, r):
-        await _enter_time(s, button, time, label)
+    for button, hhmm, label in _time_order(s.state, r):
+        await _enter_time(s, button, hhmm, label)
     managed = r.cool is not None or r.heat is not None
     await _check(s, rs, en.RS_SETPOINT, on=managed, what="setpoint")
     if not managed:
@@ -955,18 +822,31 @@ def same_ranges(
 # -- the installer's settings (3220 -> 3221 / 3222 / 3223 / 3224) ---------------------
 
 
-def check_service_change(*, dry_run: bool, allow_service_change: bool) -> None:
+def check_service_change(
+    *, dry_run: bool, allow_service_change: bool, allow_restart: bool
+) -> None:
     """Refuse an installer setting change unless allowed (or a dry run).
+
+    Saving one restarts the iTM (it says so in its confirm dialog, seen on a real
+    iTM), so it needs allow_restart as well.
 
     Raises
     ------
-        ItmCommandError: Neither.
+        ItmCommandError: Not allowed.
 
     """
-    if not dry_run and not allow_service_change:
+    if dry_run:
+        return
+    if not allow_service_change:
         msg = (
             "the energy navigator's installer settings change how it collects "
             "data; use a dry run, or pass allow_service_change=True"
+        )
+        raise ItmCommandError(msg)
+    if not allow_restart:
+        msg = (
+            "saving the energy navigator's installer settings restarts the iTM; "
+            "use a dry run, or pass allow_restart=True"
         )
         raise ItmCommandError(msg)
 
@@ -1192,36 +1072,6 @@ class EnergyMixin(ClientCore):
             return None
         return await self._in_session(lambda s: confirm_actual(s, change))
 
-    async def set_energy_sampling(
-        self,
-        *,
-        start: date | None = None,
-        end: date | None = None,
-        target: str | None = None,
-    ) -> tuple[str | None, str | None, str | None] | None:
-        """Change the equipment management's sampling period and target (3210).
-
-        Args:
-        ----
-            start: The first day sampled.
-            end: The last day sampled.
-            target: The sampling target, by its name in the target list (3218).
-
-        Returns:
-        -------
-            From, to and target as read back; None in a dry run.
-
-        """
-        self._experimental("set the energy navigator's sampling")
-        await self._system_write(
-            lambda s: _ignore(set_sampling(s, start=start, end=end, target=target))
-        )
-        if self.dry_run:
-            return None
-        return await self._in_session(
-            lambda s: confirm_sampling(s, start=start, end=end, target=target)
-        )
-
     async def _energy_names(self, *, group: bool) -> tuple[str, ...]:
         return await self._in_session(lambda s: read_names(s, group=group))
 
@@ -1384,15 +1234,38 @@ class EnergyMixin(ClientCore):
         call: Callable[[_Session], Awaitable[bool]],
         *,
         allow_service_change: bool,
+        allow_restart: bool,
     ) -> EnergyInstallerSettings | None:
         self._writable()
         check_service_change(
-            dry_run=self.dry_run, allow_service_change=allow_service_change
+            dry_run=self.dry_run,
+            allow_service_change=allow_service_change,
+            allow_restart=allow_restart,
         )
-        await self._in_session(lambda s: _ignore(call(s)))
+        try:
+            await self._in_session(lambda s: _ignore(call(s)))
+        except (SessionEnded, TimeoutError, aiohttp.ClientError) as err:
+            if self.dry_run:
+                raise
+            _LOGGER.info("the iTM restarts after saving: %s", err)
         if self.dry_run:
             return None
+        await self._wait_until_back()
         return await self._in_session(lambda s: read_installer(s, password))
+
+    async def _wait_until_back(self) -> None:
+        """Wait until the iTM answers a login again after its restart."""
+        deadline = time.monotonic() + RESTART_TIMEOUT
+        while True:
+            await asyncio.sleep(RESTART_POLL)
+            try:
+                await self.fetch_info()
+            except (ItmError, TimeoutError, aiohttp.ClientError) as err:
+                if time.monotonic() >= deadline:
+                    msg = f"the iTM did not come back after its restart: {err}"
+                    raise ItmCommandError(msg) from err
+            else:
+                return
 
     async def set_energy_room_temperature(
         self,
@@ -1401,11 +1274,13 @@ class EnergyMixin(ClientCore):
         *,
         analog_point: str | None = None,
         allow_service_change: bool = False,
+        allow_restart: bool = False,
     ) -> RoomTemperaturePoint | None:
         """Set a point's room temperature source for the energy navigator (3221).
 
-        Behind the service login; refused unless allow_service_change (or a dry
-        run). The password is sent once, never stored or logged.
+        Behind the service login; refused unless allow_service_change and
+        allow_restart (or a dry run): saving restarts the iTM, and the read-back
+        waits until it is back. The password is sent once, never stored or logged.
 
         Args:
         ----
@@ -1414,6 +1289,7 @@ class EnergyMixin(ClientCore):
             analog_point: An analog input to take it from; None for the unit's
                 return air temperature.
             allow_service_change: Really change the installer setting.
+            allow_restart: Accept that saving restarts the iTM.
 
         Returns:
         -------
@@ -1425,6 +1301,7 @@ class EnergyMixin(ClientCore):
             password,
             lambda s: set_room_temperature(s, password, point, analog_point),
             allow_service_change=allow_service_change,
+            allow_restart=allow_restart,
         )
         if settings is None:
             return None
@@ -1440,18 +1317,25 @@ class EnergyMixin(ClientCore):
         return found[0]
 
     async def set_energy_collection_start(
-        self, password: str, month: str, *, allow_service_change: bool = False
+        self,
+        password: str,
+        month: str,
+        *,
+        allow_service_change: bool = False,
+        allow_restart: bool = False,
     ) -> str | None:
         """Set the month the energy navigator starts collecting data (3223).
 
-        Behind the service login; refused unless allow_service_change (or a dry
-        run).
+        Behind the service login; refused unless allow_service_change and
+        allow_restart (or a dry run): saving restarts the iTM, and the read-back
+        waits until it is back.
 
         Args:
         ----
             password: The service password.
             month: The month, as the iTM lists it.
             allow_service_change: Really change the installer setting.
+            allow_restart: Accept that saving restarts the iTM.
 
         Returns:
         -------
@@ -1463,6 +1347,7 @@ class EnergyMixin(ClientCore):
             password,
             lambda s: set_collection_start(s, password, month),
             allow_service_change=allow_service_change,
+            allow_restart=allow_restart,
         )
         if settings is None:
             return None
@@ -1477,17 +1362,20 @@ class EnergyMixin(ClientCore):
         change: ConversionType,
         *,
         allow_service_change: bool = False,
+        allow_restart: bool = False,
     ) -> ConversionType | None:
         """Change the energy conversion's name and unit texts (3224).
 
-        Behind the service login; refused unless allow_service_change (or a dry
-        run).
+        Behind the service login; refused unless allow_service_change and
+        allow_restart (or a dry run): saving restarts the iTM, and the read-back
+        waits until it is back.
 
         Args:
         ----
             password: The service password.
             change: The texts to set; None keeps one.
             allow_service_change: Really change the installer setting.
+            allow_restart: Accept that saving restarts the iTM.
 
         Returns:
         -------
@@ -1499,6 +1387,7 @@ class EnergyMixin(ClientCore):
             password,
             lambda s: set_conversion(s, password, change),
             allow_service_change=allow_service_change,
+            allow_restart=allow_restart,
         )
         if settings is None:
             return None

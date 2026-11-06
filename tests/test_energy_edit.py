@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-from datetime import date
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -113,7 +112,6 @@ async def test_read_only_sends_nothing(itm: FakeEnergyEditITM) -> None:
     calls: list[Callable[[], Awaitable[Any]]] = [
         lambda: c.set_planned_consumption(ratio=1),
         lambda: c.set_actual_consumption(co2_factor=1),
-        lambda: c.set_energy_sampling(target="All"),
         lambda: c.create_energy_type("New"),
         lambda: c.rename_energy_type("Gas", "Oil"),
         lambda: c.delete_energy_type("Gas"),
@@ -188,59 +186,6 @@ async def test_number_out_of_range(itm: FakeEnergyEditITM) -> None:
         await client(itm).set_planned_consumption(ratio=-1)
     assert itm.saved == []
     assert_closed(itm)
-
-
-async def test_sampling(itm: FakeEnergyEditITM) -> None:
-    """Dates saved by their inputs, the target by 3218's OK; read back."""
-    c = client(itm)
-    shown = await c.set_energy_sampling(
-        start=date(2024, 11, 20), end=date(2024, 12, 19), target="Indoor units"
-    )
-    assert shown == ("20/11/2024", "19/12/2024", "Building>Indoor units")
-    assert itm.saved == ["sampling from", "sampling to", "sampling target"]
-    assert_closed(itm)
-    dry = client(itm, dry_run=True)
-    assert await dry.set_energy_sampling(start=date(2026, 1, 2), target="All") is None
-    assert [p.split(":")[0] for p in dry.planned] == [
-        "sampling from = 2026-01-02",
-        "sampling target All",
-    ]
-    assert itm.sampling["from"] == "20/11/2024"
-    assert_closed(itm)
-
-
-async def test_sampling_refusals(itm: FakeEnergyEditITM) -> None:
-    """A date out of range, an unknown target, a disabled input, no 3210."""
-    c = client(itm)
-    with pytest.raises(ItmCommandError, match="outside the iTM's range"):
-        await c.set_energy_sampling(start=date(2020, 1, 1))
-    with pytest.raises(ItmCommandError, match="'Nowhere' not listed"):
-        await c.set_energy_sampling(target="Nowhere")
-    itm.disabled = {(3210, 6)}
-    with pytest.raises(ItmCommandError, match="sampling to: the iTM has this disabled"):
-        await c.set_energy_sampling(end=date(2026, 1, 1))
-    itm.disabled = set()
-    original = itm._date_dialog
-    itm._date_dialog = lambda *_: []  # type: ignore[method-assign]
-    with pytest.raises(ItmCommandError, match="no date input opened"):
-        await c.set_energy_sampling(start=date(2026, 1, 1))
-    itm._date_dialog = original  # type: ignore[method-assign]
-    itm.unavailable = {3210}
-    with pytest.raises(ItmCommandError, match="did not open"):
-        await c.set_energy_sampling(start=date(2026, 1, 1))
-    with pytest.raises(ItmCommandError, match="did not open"):
-        await run(itm, ee.confirm_sampling)
-    assert itm.saved == []
-    assert_closed(itm)
-
-
-async def test_sampling_read_back_mismatch(itm: FakeEnergyEditITM) -> None:
-    """A date or target the iTM doesn't show afterwards fails the confirmation."""
-    itm.sampling["target"] = "Building&gt;All"
-    with pytest.raises(ItmCommandError, match="sampling target: the iTM shows"):
-        await run(itm, lambda s: ee.confirm_sampling(s, target="Indoor units"))
-    with pytest.raises(ItmCommandError, match="sampling from: the iTM shows"):
-        await run(itm, lambda s: ee.confirm_sampling(s, start=date(2026, 1, 5)))
 
 
 async def test_energy_types_and_groups(itm: FakeEnergyEditITM) -> None:
@@ -374,8 +319,6 @@ def test_cli_energy_edit(
     assert fake.plans[0, 0]["ratio"] == "6"
     main("energy-edit", "actual", "--co2", "0.5", "--type", "Power")
     assert fake.actuals[0, 0]["co2"] == "0.5"
-    main("energy-edit", "sampling", "--start", "2024-11-20", "--target", "All")
-    assert fake.sampling["from"] == "20/11/2024"
     main("energy-edit", "create", "Oil")
     main("energy-edit", "rename", "Oil", "Fuel")
     out = main("energy-edit", "delete", "Fuel")
