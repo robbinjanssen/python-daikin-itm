@@ -123,8 +123,19 @@ def test_captured_setback() -> None:
     sb = setback_from_screen(_replay("setback_advanced", stop_before=[3001, 11]))
     assert (sb.high_up, sb.high_back, sb.low_up, sb.low_back) == (3, 4, 2, 1)
     assert (sb.recovery_cool, sb.recovery_heat) == (1, 4)
+    assert set(sb.options) == {
+        "high_up",
+        "high_back",
+        "low_up",
+        "low_back",
+        "recovery_cool",
+        "recovery_heat",
+    }
+    assert all(values for values in sb.options.values())
+    assert sb.high_up in sb.options["high_up"]
     plain = setback_from_screen(_replay("setback", stop_before=[3000, 21]))
     assert plain.recovery_cool is None
+    assert "recovery_cool" not in plain.options
 
 
 def test_captured_overtime() -> None:

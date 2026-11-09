@@ -298,6 +298,9 @@ class SetbackSettings:
     low_back: int | None
     recovery_cool: int | None = None
     recovery_heat: int | None = None
+    # The values the iTM offers per setting (field name to values, in order); a
+    # setting it didn't show is left out.
+    options: dict[str, tuple[int, ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -596,13 +599,25 @@ def changeover_settings_from_screen(state: UIState) -> dict[str, Any]:
 def setback_from_screen(state: UIState) -> SetbackSettings:
     """Read the setback screen (and the advanced screen when it is open)."""
     s, a = MenuScreen.SETBACK, MenuScreen.SETBACK_ADVANCED
+    parts = {
+        "high_up": (s, SB_HIGH_UP),
+        "high_back": (s, SB_HIGH_BACK),
+        "low_up": (s, SB_LOW_UP),
+        "low_back": (s, SB_LOW_BACK),
+        "recovery_cool": (a, SBA_COOL),
+        "recovery_heat": (a, SBA_HEAT),
+    }
+    options = {
+        key: tuple(nums)
+        for key, (screen, part) in parts.items()
+        if (nums := state.get(screen, part, "COMBO_NUMS"))
+    }
     return SetbackSettings(
-        high_up=_combo_value(state, s, SB_HIGH_UP),
-        high_back=_combo_value(state, s, SB_HIGH_BACK),
-        low_up=_combo_value(state, s, SB_LOW_UP),
-        low_back=_combo_value(state, s, SB_LOW_BACK),
-        recovery_cool=_combo_value(state, a, SBA_COOL),
-        recovery_heat=_combo_value(state, a, SBA_HEAT),
+        **{
+            key: _combo_value(state, screen, part)
+            for key, (screen, part) in parts.items()
+        },
+        options=options,
     )
 
 

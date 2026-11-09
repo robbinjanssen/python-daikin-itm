@@ -218,6 +218,24 @@ async def test_fetch_config_with_system(itm: FakeITM) -> None:
     config = await c.fetch_config(system=True)
     assert isinstance(config.system, SystemSettings)
     assert config.system.confirm_dialogs is False
+    assert config.system.web_users is not None
+
+
+async def test_fetch_config_with_some_system_screens(itm: FakeITM) -> None:
+    """fetch_config reads only the system screens asked for, in one session."""
+    c = FakeClient(itm)
+
+    def logins() -> int:
+        return sum(1 for r in itm.requests if r["screen"] == 1203 and r["event"] == 1)
+
+    before = logins()
+    config = await c.fetch_config(system=("hardware", "confirm_dialogs"))
+    assert logins() == before + 1
+    assert config.system is not None
+    assert config.system.hardware is not None
+    assert config.system.confirm_dialogs is False
+    assert config.system.web_users is None
+    assert config.system.network is None
 
 
 # -- writes --------------------------------------------------------------------------

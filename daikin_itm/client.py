@@ -1414,18 +1414,19 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
 
         return await self._in_session(read)
 
-    async def fetch_config(self, *, system: bool = False) -> ItmConfig:
+    async def fetch_config(self, *, system: bool | Iterable[str] = False) -> ItmConfig:
         """Read everything configuration-like in one session.
 
         The indicators and clock, version and region, the schedule programs, the
         auto changeover groups (without details), setback, overtime and the
         emergency stop programs; with system, the system settings of fetch_system
-        too. About twenty requests (fifty with system); meant for an hourly read,
-        not every poll.
+        too. About twenty requests (fifty with all system screens); meant for an
+        hourly read, not every poll.
 
         Args:
         ----
-            system: Also read the system settings screens.
+            system: Also read the system settings screens: True for all of them,
+                or the SystemSettings fields to read (as fetch_system's only).
 
         Returns:
         -------
@@ -1441,7 +1442,12 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
                 setback = await s.read_setback()
                 overtime = await s.read_overtime()
                 emergency_programs = tuple(await s.read_emergency_stop())
-                settings = await s.read_system() if system else None
+                if system is True:
+                    settings = await s.read_system()
+                elif system:
+                    settings = await s.read_system(frozenset(system))
+                else:
+                    settings = None
             finally:
                 await s.close_menu()
         return ItmConfig(
