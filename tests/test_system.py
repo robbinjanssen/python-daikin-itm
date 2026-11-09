@@ -238,6 +238,26 @@ async def test_fetch_config_with_some_system_screens(itm: FakeITM) -> None:
     assert config.system.network is None
 
 
+@pytest.mark.parametrize(
+    ("only", "message"),
+    [
+        ("hardware", "not the string 'hardware'"),
+        (["hardware", "screen_saver"], r"unknown system settings \[.screen_saver.\]"),
+    ],
+)
+async def test_system_names_are_checked(
+    itm: FakeITM, only: str | list[str], message: str
+) -> None:
+    """A string or an unknown field name is refused before anything is read."""
+    c = FakeClient(itm)
+    before = len(itm.requests)
+    with pytest.raises(ItmCommandError, match=message):
+        await c.fetch_system(only)
+    with pytest.raises(ItmCommandError, match=message):
+        await c.fetch_config(system=only)
+    assert len(itm.requests) == before
+
+
 # -- writes --------------------------------------------------------------------------
 
 

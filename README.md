@@ -120,7 +120,7 @@ from the package.
 | `ItmIndicators` | `fetch_indicators()` (or any session) | Whether energy saving, an error and the emergency stop are active, and the clock as the main menu bar shows it. |
 | `ItmInfo` | `fetch_info()` | Firmware `version` and `build`, the region settings (`language`, `date_format`, `time_24h`, `temperature_unit`, `decimal_separator`), the iTM's `clock` and `dst_enabled`; `clock_offset` is how many seconds the iTM's clock is ahead of this machine's. |
 | `ChangeoverGroup` | `fetch_changeover_groups(details=False)` | An auto changeover group: `name`, `enabled`, `member_count`; with details also `members`, `differential` (°C) and `reference` (`ChangeoverReference`: `fixed`, `operating`, `average`). |
-| `SetbackSettings` | `fetch_setback()` | The setback offsets `high_up`, `high_back`, `low_up`, `low_back` and the recovery temperatures `recovery_cool`, `recovery_heat` (°C), and in `options` the values the iTM offers for each. |
+| `SetbackSettings` | `fetch_setback()` | The setback offsets `high_up`, `high_back`, `low_up`, `low_back` and the recovery temperatures `recovery_cool`, `recovery_heat` (°C), with their `*_options`: the values the iTM offers (`()` when it didn't show the setting). |
 | `int` | `fetch_overtime_duration()` | The overtime timer's duration in minutes. |
 | `EmergencyStopProgram` | `fetch_emergency_stop()` | `name` and `enabled` per program. |
 | `EmergencyStopSettings` | `fetch_emergency_stop_settings(name)` | A disarmed program's `inputs` and `outputs` (point names), `release_mode` and `stop` as shown, with their `*_options`. The iTM doesn't show an armed (or the built-in) program's settings. |

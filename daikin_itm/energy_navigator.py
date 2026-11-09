@@ -46,6 +46,7 @@ from ._screens import graph as _graph
 from ._screens import part_text as _string
 from ._screens import radio as _checked
 from ._screens import ticked as _checked_on
+from ._util import field_names
 from .exceptions import ItmCommandError
 from .menu import MB_ENERGY_NAVIGATOR, MenuScreen
 from .protocol import DataType, EventType
@@ -1146,16 +1147,11 @@ def wanted_parts(only: Iterable[str] | None) -> frozenset[str]:
 
     Raises
     ------
-        ItmCommandError: A name is not one of them.
+        ItmCommandError: Only is a string, or a name is not one of them.
 
     """
-    if only is None:
-        return frozenset(DEFAULT_PARTS)
-    names = frozenset(only)
-    if unknown := names - frozenset(PARTS):
-        msg = f"unknown energy navigator parts {sorted(unknown)}; known: {PARTS}"
-        raise ItmCommandError(msg)
-    return names
+    names = field_names(only, PARTS, "energy navigator parts")
+    return frozenset(DEFAULT_PARTS) if names is None else names
 
 
 async def read_energy_navigator(

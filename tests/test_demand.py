@@ -110,6 +110,8 @@ async def test_fetch_only_and_unavailable(itm: FakeDemandITM) -> None:
     assert dc.setup is None
     with pytest.raises(ItmCommandError, match="unknown demand control parts"):
         await c.fetch_demand_control(["nope"])
+    with pytest.raises(ItmCommandError, match="not the string 'legend'"):
+        await c.fetch_demand_control("legend")
     itm.available = False
     assert await c.fetch_demand_control() is None
     itm.available = True

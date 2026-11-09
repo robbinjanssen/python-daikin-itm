@@ -476,6 +476,10 @@ def test_wanted_parts() -> None:
     assert "energy_types" not in wanted_parts(None)
     assert wanted_parts(["rule_editor"]) == frozenset({"rule_editor"})
     assert wanted_parts(["actual"]) == frozenset({"actual"})
+    with pytest.raises(ItmCommandError, match="not the string 'budget'"):
+        wanted_parts("budget")
+    with pytest.raises(ItmCommandError, match="unknown energy navigator parts"):
+        wanted_parts(["budgte"])
 
 
 def test_cli_energy(

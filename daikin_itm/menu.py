@@ -298,9 +298,13 @@ class SetbackSettings:
     low_back: int | None
     recovery_cool: int | None = None
     recovery_heat: int | None = None
-    # The values the iTM offers per setting (field name to values, in order); a
-    # setting it didn't show is left out.
-    options: dict[str, tuple[int, ...]] = field(default_factory=dict)
+    # The values the iTM offers per setting, in order; () when it didn't show it.
+    high_up_options: tuple[int, ...] = ()
+    high_back_options: tuple[int, ...] = ()
+    low_up_options: tuple[int, ...] = ()
+    low_back_options: tuple[int, ...] = ()
+    recovery_cool_options: tuple[int, ...] = ()
+    recovery_heat_options: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -607,17 +611,26 @@ def setback_from_screen(state: UIState) -> SetbackSettings:
         "recovery_cool": (a, SBA_COOL),
         "recovery_heat": (a, SBA_HEAT),
     }
-    options = {
-        key: tuple(nums)
-        for key, (screen, part) in parts.items()
-        if (nums := state.get(screen, part, "COMBO_NUMS"))
-    }
+
+    def value(key: str) -> int | None:
+        return _combo_value(state, *parts[key])
+
+    def options(key: str) -> tuple[int, ...]:
+        return tuple(state.get(*parts[key], "COMBO_NUMS") or ())
+
     return SetbackSettings(
-        **{
-            key: _combo_value(state, screen, part)
-            for key, (screen, part) in parts.items()
-        },
-        options=options,
+        high_up=value("high_up"),
+        high_back=value("high_back"),
+        low_up=value("low_up"),
+        low_back=value("low_back"),
+        recovery_cool=value("recovery_cool"),
+        recovery_heat=value("recovery_heat"),
+        high_up_options=options("high_up"),
+        high_back_options=options("high_back"),
+        low_up_options=options("low_up"),
+        low_back_options=options("low_back"),
+        recovery_cool_options=options("recovery_cool"),
+        recovery_heat_options=options("recovery_heat"),
     )
 
 
