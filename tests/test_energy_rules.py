@@ -487,6 +487,15 @@ async def test_overlapping_ranges_refused(itm: FakeEnergyMoreITM) -> None:
             "monday",
             [RuleRange("16:30", "18:00"), RuleRange("08:00", "17:00")],
         )
+    same_times = [RuleRange("08:00", "10:00", 22, 20), RuleRange("08:00", "10:00", 23)]
+    with pytest.raises(ItmCommandError, match="overlap"):
+        await client(itm).set_energy_rule_day("Rule A", "monday", same_times)
+    with pytest.raises(ItmCommandError, match="HH:MM"):
+        await client(itm).set_energy_rule_day(
+            "Rule A",
+            "monday",
+            [RuleRange("8.00", "10:00"), RuleRange("09:00", "11:00")],
+        )
     assert itm.requests == []
 
 

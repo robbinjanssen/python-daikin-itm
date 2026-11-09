@@ -122,7 +122,7 @@ async def test_email_radios_need_a_selection(itm: FakeSystemEditITM) -> None:
     async with FakeClient(itm)._session() as s:
         await open_screen(s, MB_EMAIL, e)
         assert [s.state.get(e, p, "ENABLED") for p in (3, 4)] == [0, 0]
-        await s._select_listed(e, EMAIL_LIST, 1, ADDRESS, "e-mail address")
+        await s.select_listed(e, EMAIL_LIST, 1, ADDRESS, "e-mail address")
         assert [s.state.get(e, p, "ENABLED") for p in (3, 4)] == [1, 1]
         assert s.state.get(e, EMAIL_OFF, "CHECK_STATE") == 1
         await s.close_screen(e)

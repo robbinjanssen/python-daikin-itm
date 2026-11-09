@@ -1,5 +1,3 @@
-# ruff: noqa: SLF001
-# pylint: disable=protected-access
 """The energy navigator's settings: writes.
 
 Session-level flows on the energy navigator's setting screens, each saving through
@@ -49,13 +47,11 @@ import aiohttp
 
 from . import energy_navigator as en
 from ._bases import ClientCore
-from ._screens import click as _click
 from ._screens import close as _close
-from ._screens import ensure_enabled as _ensure_enabled
 from ._screens import enter_number as _number
 from ._screens import open_below as _open_below
 from ._screens import press_ok as _press_ok
-from ._screens import select as _select
+from ._screens import set_checkbox as _set_checkbox
 from ._util import ignore as _ignore
 from .exceptions import ItmCommandError, ItmError, SessionEnded
 from .protocol import DataType, EventType
@@ -133,10 +129,9 @@ async def _pick_type(s: _Session, screen: int, energy_type: str | None) -> None:
     if energy_type not in options:
         msg = f"energy type {energy_type!r} not offered: {options}"
         raise ItmCommandError(msg)
-    _ensure_enabled(s, screen, combo, "energy type")
+    s.refuse_disabled(screen, combo, "energy type")
     index = options.index(energy_type)
     reply = await s.send(screen, combo, EventType.CLICK, DataType.INT, index)
-    s.state.select_locally(screen, combo, index)
     await s.wait_for_progress(reply)
 
 
@@ -169,7 +164,7 @@ async def _months(
         if rows.count(month.strip()) != 1:
             msg = f"month {month!r} not listed once; the months are {rows}"
             raise ItmCommandError(msg)
-        await _select(s, screen, list_part, rows.index(month.strip()))
+        await s.select_row(screen, list_part, rows.index(month.strip()))
         await _number(s, screen, button, value, f"month {month}")
 
 
@@ -213,7 +208,7 @@ async def set_planned(s: _Session, change: PlannedChange) -> bool:
             disabled, or the iTM refused.
 
     """
-    s._writable()
+    s.require_writable()
     try:
         await _open_plan(s, en.PS_PLANNED, en.PLANNED)
         await _pick_type(s, en.PLANNED, change.energy_type)
@@ -222,7 +217,7 @@ async def set_planned(s: _Session, change: PlannedChange) -> bool:
         ratio_button, month_button = PL_TAB_INPUTS[tab]
         if change.per_month is not None:
             radio = month_radio if change.per_month else year_radio
-            await _click(s, en.PLANNED, radio, "yearly or monthly")
+            await s.click(en.PLANNED, radio, "yearly or monthly")
         if change.ratio is not None:
             await _number(s, en.PLANNED, ratio_button, change.ratio, "ratio")
         await _months(s, en.PLANNED, (month_list, month_button), change.months)
@@ -246,7 +241,7 @@ async def set_actual(s: _Session, change: ActualChange) -> bool:
             disabled, or the iTM refused.
 
     """
-    s._writable()
+    s.require_writable()
     try:
         await _open_plan(s, en.PS_ACTUAL, en.ACTUAL)
         await _pick_type(s, en.ACTUAL, change.energy_type)
@@ -345,7 +340,7 @@ async def _select_entry(s: _Session, screen: int, name: str) -> None:
     if names.count(name.strip()) != 1:
         msg = f"{name!r} not listed once; listed: {names}"
         raise ItmCommandError(msg)
-    await _select(s, screen, en.EL_LIST, names.index(name.strip()))
+    await s.select_row(screen, en.EL_LIST, names.index(name.strip()))
 
 
 async def _answer_name(
@@ -370,7 +365,7 @@ async def _answer_name(
     if sent is None:  # dry run: cancel the name input
         await s.send(d.screen, d.data[0], EventType.CLICK2)
         return False
-    await s._answer_confirm(screen, sent)
+    await s.answer_confirm(screen, sent)
     return True
 
 
@@ -389,7 +384,7 @@ async def create_entry(s: _Session, name: str, *, group: bool = False) -> bool:
         True when sent, False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     screen = await _open_list(s, group=group)
     label = f"create {_kind(group=group)} {name}"
     setting, ok, cancel = (
@@ -401,7 +396,7 @@ async def create_entry(s: _Session, name: str, *, group: bool = False) -> bool:
         if name.strip() in en.list_names(s.state, screen):
             msg = f"{_kind(group=group)} {name!r} exists already"
             raise ItmCommandError(msg)
-        reply = await _click(s, screen, en.EL_CREATE, label)
+        reply = await s.click(screen, en.EL_CREATE, label)
         sent = await _answer_name(s, reply, screen, label, name)
         if sent and setting in s.state.screens:
             await _press_ok(s, f"{label}: settings", setting, ok, cancel)
@@ -421,7 +416,7 @@ async def rename_entry(
         True when sent, False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     screen = await _open_list(s, group=group)
     label = f"rename {_kind(group=group)} {name} to {new_name}"
     try:
@@ -429,7 +424,7 @@ async def rename_entry(
             msg = f"{_kind(group=group)} {new_name!r} exists already"
             raise ItmCommandError(msg)
         await _select_entry(s, screen, name)
-        reply = await _click(s, screen, en.EL_RENAME, label)
+        reply = await s.click(screen, en.EL_RENAME, label)
         return await _answer_name(s, reply, screen, label, new_name)
     finally:
         await en.leave_display_list(s, screen)
@@ -443,16 +438,16 @@ async def delete_entry(s: _Session, name: str, *, group: bool = False) -> bool:
         True when sent, False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     screen = await _open_list(s, group=group)
     label = f"delete {_kind(group=group)} {name}"
     try:
         await _select_entry(s, screen, name)
-        _ensure_enabled(s, screen, en.EL_DELETE, label)
+        s.refuse_disabled(screen, en.EL_DELETE, label)
         reply = await s.write(label, screen, en.EL_DELETE)
         if reply is None:
             return False
-        await s._answer_confirm(screen, reply)
+        await s.answer_confirm(screen, reply)
         return True
     finally:
         await en.leave_display_list(s, screen)
@@ -482,7 +477,7 @@ async def _select_rule(s: _Session, names: list[str], name: str) -> None:
     if names.count(name.strip()) != 1:
         msg = f"rule {name!r} not listed once; the rules are {names}"
         raise ItmCommandError(msg)
-    await _select(s, en.RULES, en.RL_LIST, names.index(name.strip()))
+    await s.select_row(en.RULES, en.RL_LIST, names.index(name.strip()))
 
 
 async def create_rule(s: _Session, name: str) -> bool:
@@ -493,13 +488,13 @@ async def create_rule(s: _Session, name: str) -> bool:
         True when sent, False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     label = f"create rule {name}"
     try:
         if name.strip() in await _rule_list(s):
             msg = f"rule {name!r} exists already"
             raise ItmCommandError(msg)
-        reply = await _click(s, en.RULES, en.RL_CREATE, label)
+        reply = await s.click(en.RULES, en.RL_CREATE, label)
         return await _answer_name(s, reply, en.RULES, label, name)
     finally:
         await en.leave_rules(s)
@@ -513,7 +508,7 @@ async def rename_rule(s: _Session, name: str, new_name: str) -> bool:
         True when sent, False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     label = f"rename rule {name} to {new_name}"
     try:
         names = await _rule_list(s)
@@ -521,7 +516,7 @@ async def rename_rule(s: _Session, name: str, new_name: str) -> bool:
             msg = f"rule {new_name!r} exists already"
             raise ItmCommandError(msg)
         await _select_rule(s, names, name)
-        reply = await _click(s, en.RULES, en.RL_RENAME, label)
+        reply = await s.click(en.RULES, en.RL_RENAME, label)
         return await _answer_name(s, reply, en.RULES, label, new_name)
     finally:
         await en.leave_rules(s)
@@ -535,15 +530,15 @@ async def delete_rule(s: _Session, name: str) -> bool:
         True when sent, False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     label = f"delete rule {name}"
     try:
         await _select_rule(s, await _rule_list(s), name)
-        _ensure_enabled(s, en.RULES, en.RL_DELETE, label)
+        s.refuse_disabled(en.RULES, en.RL_DELETE, label)
         reply = await s.write(label, en.RULES, en.RL_DELETE)
         if reply is None:
             return False
-        await s._answer_confirm(en.RULES, reply)
+        await s.answer_confirm(en.RULES, reply)
         return True
     finally:
         await en.leave_rules(s)
@@ -557,7 +552,7 @@ async def copy_rule(s: _Session, name: str, new_name: str) -> bool:
         True when sent, False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     label = f"copy rule {name} to {new_name}"
     try:
         names = await _rule_list(s)
@@ -565,7 +560,7 @@ async def copy_rule(s: _Session, name: str, new_name: str) -> bool:
             msg = f"rule {new_name!r} exists already"
             raise ItmCommandError(msg)
         await _select_rule(s, names, name)
-        reply = await _click(s, en.RULES, en.RL_COPY, label)
+        reply = await s.click(en.RULES, en.RL_COPY, label)
         return await _answer_name(s, reply, en.RULES, label, new_name)
     finally:
         await en.leave_rules(s)
@@ -588,7 +583,7 @@ async def copy_rule_calendar(s: _Session, name: str, targets: tuple[str, ...]) -
             a disabled button, or the iTM refused.
 
     """
-    s._writable()
+    s.require_writable()
     screen = en.CALENDAR_COPY
     label = f"copy calendar of rule {name} to {', '.join(targets)}"
     wanted = [t.strip() for t in targets]
@@ -597,7 +592,7 @@ async def copy_rule_calendar(s: _Session, name: str, targets: tuple[str, ...]) -
         raise ItmCommandError(msg)
     try:
         await _select_rule(s, await _rule_list(s), name)
-        reply = await _click(s, en.RULES, en.RL_CALENDAR_COPY, label)
+        reply = await s.click(en.RULES, en.RL_CALENDAR_COPY, label)
         prompts = [
             u
             for u in reply.screens
@@ -647,7 +642,7 @@ def _hhmm(value: str) -> tuple[int, int]:
 async def _enter_time(s: _Session, button: int, value: str, what: str) -> None:
     """Enter a time of day in the HOURMIN dialog a 3217 button opens."""
     wanted = _hhmm(value)
-    _ensure_enabled(s, en.RULE_SETTING, button, what)
+    s.refuse_disabled(en.RULE_SETTING, button, what)
     reply = await s.send(en.RULE_SETTING, button)
     dialogs = [
         u for u in reply.screens if u.update == "DLG_OPEN" and u.data[1] == "HOURMIN"
@@ -669,17 +664,6 @@ async def _enter_time(s: _Session, button: int, value: str, what: str) -> None:
         raise ItmCommandError(msg)
 
 
-async def _check(s: _Session, screen: int, part: int, *, on: bool, what: str) -> None:
-    """Tick or untick a checkbox, only when it differs.
-
-    A checkbox takes its new state as a number; the iTM ignores a plain click and
-    doesn't report the new state back, so it is kept here.
-    """
-    if (s.state.get(screen, part, "CHECK_STATE") == 1) != on:
-        s.refuse_disabled(screen, part, what)
-        await s.send(screen, part, EventType.CLICK, DataType.INT, int(on))
-
-
 def _minute_of_day(text: str, *, end: bool = False) -> int | None:
     m = _HHMM.match(text)
     if m is None:
@@ -688,12 +672,19 @@ def _minute_of_day(text: str, *, end: bool = False) -> int | None:
     return DAY_END if end and minute == 0 else minute
 
 
+def _minutes(text: str, *, end: bool = False) -> int:
+    hours, minutes = _hhmm(text)
+    minute = hours * 60 + minutes
+    return DAY_END if end and minute == 0 else minute
+
+
 def _refuse_overlaps(ranges: tuple[en.RuleRange, ...]) -> None:
     spans = sorted(
-        (_minute_of_day(r.start), _minute_of_day(r.end, end=True), r) for r in ranges
+        ((_minutes(r.start), _minutes(r.end, end=True), r) for r in ranges),
+        key=lambda span: span[:2],
     )
     for (_, end, first), (start, _, second) in itertools.pairwise(spans):
-        if start is not None and end is not None and start < end:
+        if start < end:
             msg = (
                 f"time ranges {first.start}-{first.end} and {second.start}-"
                 f"{second.end} overlap"
@@ -733,14 +724,14 @@ async def _enter_range(s: _Session, r: en.RuleRange) -> None:
     for button, hhmm, label in _time_order(s.state, r):
         await _enter_time(s, button, hhmm, label)
     managed = r.cool is not None or r.heat is not None
-    await _check(s, rs, en.RS_SETPOINT, on=managed, what="setpoint")
+    await _set_checkbox(s, rs, en.RS_SETPOINT, on=managed, what="setpoint")
     if not managed:
         return
     for value, check, button, what in (
         (r.cool, en.RS_COOL, en.RS_COOL_BUTTON, "cool"),
         (r.heat, en.RS_HEAT, en.RS_HEAT_BUTTON, "heat"),
     ):
-        await _check(s, rs, check, on=value is not None, what=what)
+        await _set_checkbox(s, rs, check, on=value is not None, what=what)
         if value is not None:
             await _number(s, rs, button, value, f"{what} setpoint")
 
@@ -764,7 +755,7 @@ async def set_rule_day(
             outside the iTM's range, or the iTM refused.
 
     """
-    s._writable()
+    s.require_writable()
     for r in ranges:
         _hhmm(r.start)
         _hhmm(r.end)
@@ -776,25 +767,25 @@ async def set_rule_day(
             msg = f"rule {rule}: the iTM does not offer editing {day}"
             raise ItmCommandError(msg)
         while rows := en.list_rows(s.state, rs, en.RS_LIST)[0]:
-            await _select(s, rs, en.RS_LIST, 0)
-            reply = await _click(s, rs, en.RS_DELETE, "delete time range")
-            await s._answer_confirm(rs, reply)
+            await s.select_row(rs, en.RS_LIST, 0)
+            reply = await s.click(rs, en.RS_DELETE, "delete time range")
+            await s.answer_confirm(rs, reply)
             if len(en.list_rows(s.state, rs, en.RS_LIST)[0]) >= len(rows):
                 msg = f"{label}: a time range was not deleted"
                 raise ItmCommandError(msg)
         for r in ranges:
             await _enter_range(s, r)
-            reply = await _click(s, rs, en.RS_ADD, f"add {r.start}-{r.end}")
-            await s._answer_confirm(rs, reply)
-        await s._answer_confirm(rs, await _click(s, rs, en.RS_OK, label))
+            reply = await s.click(rs, en.RS_ADD, f"add {r.start}-{r.end}")
+            await s.answer_confirm(rs, reply)
+        await s.answer_confirm(rs, await s.click(rs, en.RS_OK, label))
         if rs in s.state.screens:
             msg = f"{label}: the rule settings did not close"
             raise ItmCommandError(msg)
-        _ensure_enabled(s, en.RULE_EDITOR, en.RE_OK, label)
+        s.refuse_disabled(en.RULE_EDITOR, en.RE_OK, label)
         saved = await s.write(label, en.RULE_EDITOR, en.RE_OK)
         if saved is None:
             return False
-        await s._answer_confirm(en.RULE_EDITOR, saved)
+        await s.answer_confirm(en.RULE_EDITOR, saved)
         if en.RULE_EDITOR in s.state.screens:
             msg = f"{label}: the rule editor did not close"
             raise ItmCommandError(msg)
@@ -822,35 +813,6 @@ def same_ranges(
 # -- the installer's settings (3220 -> 3221 / 3222 / 3223 / 3224) ---------------------
 
 
-def check_service_change(
-    *, dry_run: bool, allow_service_change: bool, allow_restart: bool
-) -> None:
-    """Refuse an installer setting change unless allowed (or a dry run).
-
-    Saving one restarts the iTM (it says so in its confirm dialog, seen on a real
-    iTM), so it needs allow_restart as well.
-
-    Raises
-    ------
-        ItmCommandError: Not allowed.
-
-    """
-    if dry_run:
-        return
-    if not allow_service_change:
-        msg = (
-            "the energy navigator's installer settings change how it collects "
-            "data; use a dry run, or pass allow_service_change=True"
-        )
-        raise ItmCommandError(msg)
-    if not allow_restart:
-        msg = (
-            "saving the energy navigator's installer settings restarts the iTM; "
-            "use a dry run, or pass allow_restart=True"
-        )
-        raise ItmCommandError(msg)
-
-
 async def _open_installer(s: _Session, password: str, button: int, screen: int) -> None:
     await s.service_login(password)
     if not await en.open_installer(s):
@@ -865,6 +827,14 @@ def _row_named(state: UIState, screen: int, part: int, name: str) -> int:
         msg = f"{name!r} not listed once; listed: {rows}"
         raise ItmCommandError(msg)
     return rows.index(name.strip())
+
+
+async def _save_restarting(
+    s: _Session, label: str, screen: int, ok: int, cancel: int
+) -> bool:
+    """Press an installer screen's OK, after which the iTM restarts."""
+    s.restarting = not s.client.dry_run
+    return await _press_ok(s, label, screen, ok, cancel)
 
 
 async def set_room_temperature(
@@ -882,32 +852,32 @@ async def set_room_temperature(
         True when sent, False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     rt = en.ROOM_TEMP
     label = f"room temperature of {point}"
     try:
         await _open_installer(s, password, en.IN_ROOM_TEMP, rt)
-        await _select(s, rt, en.RT_LIST, _row_named(s.state, rt, en.RT_LIST, point))
+        await s.select_row(rt, en.RT_LIST, _row_named(s.state, rt, en.RT_LIST, point))
         radio = en.RT_OWN if analog_point is None else en.RT_ANALOG
-        await _click(s, rt, radio, label)
+        await s.click(rt, radio, label)
         if analog_point is not None:
             await _open_below(s, rt, en.RT_ANALOG_BUTTON, en.ANALOG_SELECT)
             row = _row_named(s.state, en.ANALOG_SELECT, en.AS_LIST, analog_point)
-            await _select(s, en.ANALOG_SELECT, en.AS_LIST, row)
+            await s.select_row(en.ANALOG_SELECT, en.AS_LIST, row)
             reply = await s.write(
                 f"{label}: analog input {analog_point}", en.ANALOG_SELECT, en.AS_OK
             )
             if reply is None:
                 await _close(s, en.ANALOG_SELECT, en.AS_CANCEL)
             else:
-                await s._answer_confirm(en.ANALOG_SELECT, reply)
+                await s.answer_confirm(en.ANALOG_SELECT, reply)
             if en.ANALOG_SELECT in s.state.screens:
                 msg = f"{label}: the analog input selection did not close"
                 raise ItmCommandError(msg)
         reply = await s.write(f"apply {label}", rt, en.RT_APPLY)
         if reply is not None:
-            await s._answer_confirm(rt, reply)
-        return await _press_ok(s, label, rt, en.RT_OK, en.RT_CANCEL)
+            await s.answer_confirm(rt, reply)
+        return await _save_restarting(s, label, rt, en.RT_OK, en.RT_CANCEL)
     finally:
         await en.leave_installer(s)
 
@@ -920,7 +890,7 @@ async def set_collection_start(s: _Session, password: str, month: str) -> bool:
         True when sent, False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     cs = en.COLLECT_START
     try:
         await _open_installer(s, password, en.IN_COLLECT, cs)
@@ -930,10 +900,9 @@ async def set_collection_start(s: _Session, password: str, month: str) -> bool:
             raise ItmCommandError(msg)
         index = months.index(month.strip())
         if en.option(s.state, cs, en.CM_MONTH) != month.strip():
-            _ensure_enabled(s, cs, en.CM_MONTH, "collection start month")
+            s.refuse_disabled(cs, en.CM_MONTH, "collection start month")
             await s.send(cs, en.CM_MONTH, EventType.CLICK, DataType.INT, index)
-            s.state.select_locally(cs, en.CM_MONTH, index)
-        return await _press_ok(
+        return await _save_restarting(
             s, f"collection start month {month}", cs, en.CM_OK, en.CM_CANCEL
         )
     finally:
@@ -948,16 +917,18 @@ async def set_conversion(s: _Session, password: str, change: en.ConversionType) 
         True when sent, False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     cv = en.CONVERSION
     try:
         await _open_installer(s, password, en.IN_CONVERSION, cv)
         for key, (_, button) in en.CV_FIELDS.items():
             value = getattr(change, key)
             if value is not None:
-                _ensure_enabled(s, cv, button, f"conversion {key}")
+                s.refuse_disabled(cv, button, f"conversion {key}")
                 await s.answer_text(cv, button, value, f"conversion {key}")
-        return await _press_ok(s, "save energy conversion", cv, en.CV_OK, en.CV_CANCEL)
+        return await _save_restarting(
+            s, "save energy conversion", cv, en.CV_OK, en.CV_CANCEL
+        )
     finally:
         await en.leave_installer(s)
 
@@ -1235,16 +1206,26 @@ class EnergyMixin(ClientCore):
         allow_service_change: bool,
         allow_restart: bool,
     ) -> EnergyInstallerSettings | None:
-        self._writable()
-        check_service_change(
-            dry_run=self.dry_run,
-            allow_service_change=allow_service_change,
-            allow_restart=allow_restart,
+        self._require_opt_in(
+            allowed=allow_service_change,
+            flag="allow_service_change",
+            why="the energy navigator's installer settings change how it collects data",
         )
+        self._require_opt_in(
+            allowed=allow_restart,
+            flag="allow_restart",
+            why="saving the energy navigator's installer settings restarts the iTM",
+        )
+        session: _Session | None = None
         try:
-            await self._in_session(lambda s: _ignore(call(s)))
+            async with self._session() as s:
+                session = s
+                try:
+                    await call(s)
+                finally:
+                    await s.close_menu()
         except (SessionEnded, TimeoutError, aiohttp.ClientError) as err:
-            if self.dry_run:
+            if session is None or not session.restarting:
                 raise
             _LOGGER.info("the iTM restarts after saving: %s", err)
         if self.dry_run:
@@ -1253,18 +1234,25 @@ class EnergyMixin(ClientCore):
         return await self._in_session(lambda s: read_installer(s, password))
 
     async def _wait_until_back(self) -> None:
-        """Wait until the iTM answers a login again after its restart."""
+        """Wait until the iTM has gone down for its restart and answers again.
+
+        When it never goes down before the timeout, the read-back tells whether
+        the save took.
+        """
         deadline = time.monotonic() + RESTART_TIMEOUT
+        went_down = False
         while True:
             await asyncio.sleep(RESTART_POLL)
             try:
                 await self.fetch_info()
             except (ItmError, TimeoutError, aiohttp.ClientError) as err:
+                went_down = True
                 if time.monotonic() >= deadline:
                     msg = f"the iTM did not come back after its restart: {err}"
                     raise ItmCommandError(msg) from err
             else:
-                return
+                if went_down or time.monotonic() >= deadline:
+                    return
 
     async def set_energy_room_temperature(
         self,

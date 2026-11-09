@@ -39,14 +39,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ._screens import (
-    click,
     close,
     open_below,
 )
 from ._screens import graph as _graph
 from ._screens import part_text as _string
 from ._screens import radio as _checked
-from ._screens import select as select_row
 from ._screens import ticked as _checked_on
 from .exceptions import ItmCommandError
 from .menu import MB_ENERGY_NAVIGATOR, MenuScreen
@@ -764,7 +762,7 @@ async def _read_list_entries(
             return None
         entries = []
         for row, name in enumerate(list_names(s.state, screen)):
-            await select_row(s, screen, EL_LIST, row)
+            await s.select_row(screen, EL_LIST, row)
             if s.state.get(screen, EL_EDIT, "ENABLED") == 0:
                 entries.append(plain(name))
                 continue
@@ -861,7 +859,7 @@ async def read_rule_editor(s: _Session) -> tuple[RuleEditor, ...] | None:
             return None
         rules = []
         for row, name in enumerate(rules_from_screen(s.state)):
-            await select_row(s, RULES, RL_LIST, row)
+            await s.select_row(RULES, RL_LIST, row)
             if s.state.get(RULES, RL_EDIT, "ENABLED") == 0:
                 continue
             await open_below(s, RULES, RL_EDIT, RULE_EDITOR)
@@ -935,7 +933,7 @@ async def open_rule_day(s: _Session, day: str) -> bool:
     tab, radio, edit = day_parts(s.state, day)
     reply = await s.send(RULE_EDITOR, RE_TABS, EventType.TAB_SELECT, DataType.INT, tab)
     await s.wait_for_progress(reply)
-    await click(s, RULE_EDITOR, radio, f"day {day}")
+    await s.click(RULE_EDITOR, radio, f"day {day}")
     if s.state.get(RULE_EDITOR, edit, "ENABLED") == 0:
         return False
     await open_below(s, RULE_EDITOR, edit, RULE_SETTING)
@@ -946,7 +944,7 @@ async def read_rule_ranges(s: _Session) -> tuple[RuleRange, ...]:
     """Select each row of the open rule settings (3217) and read its values."""
     ranges = []
     for row in range(len(list_rows(s.state, RULE_SETTING, RS_LIST)[0])):
-        await select_row(s, RULE_SETTING, RS_LIST, row)
+        await s.select_row(RULE_SETTING, RS_LIST, row)
         ranges.append(rule_range_from_screen(s.state))
     return tuple(ranges)
 
@@ -965,7 +963,7 @@ async def open_rule(s: _Session, rule: str) -> None:
     if names.count(rule.strip()) != 1:
         msg = f"rule {rule!r} not listed once; the rules are {names}"
         raise ItmCommandError(msg)
-    await select_row(s, RULES, RL_LIST, names.index(rule.strip()))
+    await s.select_row(RULES, RL_LIST, names.index(rule.strip()))
     await open_below(s, RULES, RL_EDIT, RULE_EDITOR)
 
 
@@ -1024,7 +1022,7 @@ async def read_rule_settings(s: _Session) -> tuple[RuleDay, ...] | None:
             return None
         days = []
         for row, name in enumerate(rules_from_screen(s.state)):
-            await select_row(s, RULES, RL_LIST, row)
+            await s.select_row(RULES, RL_LIST, row)
             if s.state.get(RULES, RL_EDIT, "ENABLED") == 0:
                 continue
             await open_below(s, RULES, RL_EDIT, RULE_EDITOR)
@@ -1088,7 +1086,7 @@ async def read_room_points(s: _Session) -> tuple[RoomTemperaturePoint, ...]:
     """Select each row of the open 3221 and read its room temperature source."""
     points = []
     for row, cells in enumerate(list_rows(s.state, ROOM_TEMP, RT_LIST)[0]):
-        await select_row(s, ROOM_TEMP, RT_LIST, row)
+        await s.select_row(ROOM_TEMP, RT_LIST, row)
         points.append(room_point_from_screen(s.state, cells))
     return tuple(points)
 

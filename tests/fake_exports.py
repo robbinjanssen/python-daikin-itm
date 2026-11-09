@@ -313,7 +313,7 @@ class FakeExportsITM(FakeITM):  # pylint: disable=too-many-instance-attributes
             closed.append(("CLOSE", screen, [], []))
         return closed
 
-    # -- encoding: DATE dialogs and DLG_DOWNLOAD --------------------------------------
+    # -- encoding: DLG_DOWNLOAD -------------------------------------------------------
     @staticmethod
     def _reply(token: str | None, updates: list[Update]) -> str:
         w = Writer(token or "0" * 32)
@@ -321,17 +321,7 @@ class FakeExportsITM(FakeITM):  # pylint: disable=too-many-instance-attributes
         for kind, screen, data, parts in updates:
             w.short(SCREEN_UPDATE_CODE[kind])
             w.short(screen)
-            if kind == "DLG_OPEN" and data[1] == 9:  # DATE: N S + 9 H + h + 13 S
-                w.short(data[0])
-                w.short(data[1])
-                w.int(data[2])
-                w.string(data[3])
-                for n in data[4:13]:
-                    w.short(n)
-                w.short(0)
-                for text in [*data[13:], *[""] * 13][:13]:
-                    w.string(text)
-            elif kind == "DLG_DOWNLOAD":  # HH + 5 S
+            if kind == "DLG_DOWNLOAD":  # HH + 5 S
                 w.short(data[0])
                 w.short(data[1])
                 for text in data[2:7]:

@@ -65,7 +65,7 @@ class ChangeoverSessionMixin(SessionCore):
                 label, MenuScreen.CHANGEOVER, CO_ENABLE if enabled else CO_DISABLE
             )
             if reply is not None and reply.dialogs():
-                await self._answer_confirm(MenuScreen.CHANGEOVER, reply)
+                await self.answer_confirm(MenuScreen.CHANGEOVER, reply)
         finally:
             await self.close_screen(MenuScreen.CHANGEOVER)
 
@@ -131,7 +131,7 @@ class ChangeoverSessionMixin(SessionCore):
             if sent is None:  # dry run: cancel the name dialog
                 await self.send(MenuScreen.CHANGEOVER, dialog_id, EventType.CLICK2)
             elif sent.dialogs():
-                await self._answer_confirm(MenuScreen.CHANGEOVER, sent)
+                await self.answer_confirm(MenuScreen.CHANGEOVER, sent)
         finally:
             await self.close_screen(MenuScreen.CHANGEOVER)
 
@@ -203,7 +203,7 @@ class ChangeoverSessionMixin(SessionCore):
                 f"delete changeover group {name}", MenuScreen.CHANGEOVER, CO_DELETE
             )
             if reply is not None:
-                await self._answer_confirm(MenuScreen.CHANGEOVER, reply)
+                await self.answer_confirm(MenuScreen.CHANGEOVER, reply)
         finally:
             await self.close_screen(MenuScreen.CHANGEOVER)
 

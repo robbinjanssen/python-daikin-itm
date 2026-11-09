@@ -1,5 +1,3 @@
-# ruff: noqa: SLF001
-# pylint: disable=protected-access
 """Emergency stop programs: arm/disarm, add, copy, rename, delete, settings, release.
 
 Session-level flows on the emergency stop screens: the program list (200), the
@@ -41,7 +39,6 @@ from ._screens import answer_name as _answer_name
 from ._screens import cell_lists as _cells
 from ._screens import close as _leave
 from ._screens import row_named as _row
-from ._screens import select as _select
 from ._util import ignore as _ignore
 from .exceptions import ItmCommandError
 from .menu import (
@@ -114,7 +111,7 @@ def _names(state: UIState) -> list[str]:
 
 async def _select_program(s: _Session, name: str) -> None:
     """Select a program's row on the open program list (200)."""
-    await _select(s, MAIN, ES_LIST, _row(_names(s.state), name, "emergency stop"))
+    await s.select_row(MAIN, ES_LIST, _row(_names(s.state), name, "emergency stop"))
 
 
 def _radio_enabled(state: UIState) -> bool | None:
@@ -166,7 +163,7 @@ async def read_programs(s: _Session) -> list[EmergencyStopProgram]:
     try:
         out = []
         for i, program in enumerate(emergency_stop_from_screen(s.state)):
-            await _select(s, MAIN, ES_LIST, i)
+            await s.select_row(MAIN, ES_LIST, i)
             shown = _radio_enabled(s.state)
             out.append(
                 EmergencyStopProgram(
@@ -204,7 +201,7 @@ async def set_program_enabled(s: _Session, name: str, *, enabled: bool) -> bool:
         reply = await s.write(f"{verb} emergency stop program {name}", MAIN, part)
         if reply is None:
             return False
-        await s._answer_confirm(MAIN, reply)
+        await s.answer_confirm(MAIN, reply)
         return True
     finally:
         await s.close_screen(MAIN)
@@ -307,7 +304,7 @@ async def delete_program(s: _Session, name: str) -> bool:
         reply = await s.write(f"delete emergency stop program {name}", MAIN, ES_DELETE)
         if reply is None:
             return False
-        await s._answer_confirm(MAIN, reply)
+        await s.answer_confirm(MAIN, reply)
         return True
     finally:
         await s.close_screen(MAIN)
@@ -398,7 +395,7 @@ async def _pick_points(s: _Session, button: int, points: tuple[str, ...]) -> Non
     for point in _last_column(s.state, PICKER, PK_SELECTED):
         if point and point not in wanted:
             names = _last_column(s.state, PICKER, PK_SELECTED)
-            await _select(s, PICKER, PK_SELECTED, _row(names, point, "point"))
+            await s.select_row(PICKER, PK_SELECTED, _row(names, point, "point"))
             await s.click(PICKER, PK_REMOVE, "remove emergency stop point")
     for point in wanted:
         if point in _last_column(s.state, PICKER, PK_SELECTED):
@@ -409,7 +406,7 @@ async def _pick_points(s: _Session, button: int, points: tuple[str, ...]) -> Non
         except ItmCommandError as err:
             msg = f"{point!r} is not offered: {err}"
             raise ItmCommandError(msg) from err
-        await _select(s, PICKER, PK_AVAILABLE, row)
+        await s.select_row(PICKER, PK_AVAILABLE, row)
         await s.click(PICKER, PK_ADD, "add emergency stop point")
     got = [n for n in _last_column(s.state, PICKER, PK_SELECTED) if n]
     if set(got) != set(wanted):
@@ -468,7 +465,7 @@ async def set_program_settings(  # noqa: PLR0913  # pylint: disable=too-many-arg
         ):
             if value is not None:
                 index = _option(s.state, part, value, what)
-                await s._pick_option(SETTINGS, part, index, what)
+                await s.pick_option(SETTINGS, part, index, what)
         return await s.press_ok(
             f"save emergency stop program {name}", SETTINGS, ST_OK, ST_CANCEL
         )
@@ -527,14 +524,14 @@ async def release(s: _Session, name: str) -> bool:
             msg = "no emergency stop is active"
             raise ItmCommandError(msg)
         names = _last_column(s.state, RELEASE, RL_LIST)
-        await _select(s, RELEASE, RL_LIST, _row(names, name, "active emergency stop"))
+        await s.select_row(RELEASE, RL_LIST, _row(names, name, "active emergency stop"))
         if s.state.get(RELEASE, RL_RELEASE, "ENABLED") == 0:
             msg = f"{name}: the iTM has the release button disabled"
             raise ItmCommandError(msg)
         reply = await s.write(f"release emergency stop {name}", RELEASE, RL_RELEASE)
         if reply is None:
             return False
-        await s._answer_confirm(RELEASE, reply)
+        await s.answer_confirm(RELEASE, reply)
         return True
     finally:
         await _leave(s, RELEASE, RL_CANCEL)

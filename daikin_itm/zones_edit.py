@@ -17,10 +17,8 @@ from typing import TYPE_CHECKING, Any
 
 from ._bases import ClientCore
 from ._screens import answer_name as _answer_name
-from ._screens import click as _click
 from ._screens import raw_rows as _rows
 from ._screens import row_cells as _cells
-from ._screens import select as _select
 from ._util import ignore as _ignore
 from .exceptions import ItmCommandError
 from .menu import CLOSE_PART, MenuScreen
@@ -139,7 +137,7 @@ async def _open_zones(s: _Session) -> None:
 async def _select_zone(s: _Session, zone: str) -> list[str]:
     """Select a zone's row in the zone list; return its cells."""
     row = _find_row(s.state, ZONES, ZN_LIST, ZC_NAME, zone)
-    await _select(s, ZONES, ZN_LIST, row)
+    await s.select_row(ZONES, ZN_LIST, row)
     return [*_cells(_rows(s.state, ZONES, ZN_LIST)[row]), "", "", "", ""]
 
 
@@ -171,7 +169,7 @@ async def add_zone(s: _Session, name: str, *, parent: str | None = None) -> bool
                 raise ItmCommandError(msg)
             if parent is not None:
                 await _select_zone(s, parent)
-            reply = await _click(s, ZONES, ZN_ADD, "add zone")
+            reply = await s.click(ZONES, ZN_ADD, "add zone")
             return await _answer_name(s, ZONES, reply, name, f"add zone {name}")
     finally:
         await s.close_screen(ZONES)
@@ -206,7 +204,7 @@ async def delete_zone(s: _Session, name: str) -> bool:
             reply = await s.write(f"delete zone {name}", ZONES, ZN_DELETE)
             if reply is None:
                 return False
-            await s._answer_confirm(ZONES, reply)  # noqa: SLF001  # pylint: disable=protected-access
+            await s.answer_confirm(ZONES, reply)  # pylint: disable=protected-access
             return True
     finally:
         await s.close_screen(ZONES)
@@ -224,7 +222,7 @@ async def move_zone(s: _Session, name: str, parent: str) -> bool:
     try:
         async with _zone_errors(s):
             await _select_zone(s, name)
-            await _click(s, ZONES, ZN_MOVE, "move zone")
+            await s.click(ZONES, ZN_MOVE, "move zone")
             if MOVE not in s.state.screens:
                 msg = "the move screen did not open"
                 raise ItmCommandError(msg)
@@ -233,7 +231,7 @@ async def move_zone(s: _Session, name: str, parent: str) -> bool:
             except ItmCommandError as err:
                 msg = f"{name!r} can't move below {parent!r}: {err}"
                 raise ItmCommandError(msg) from err
-            await _select(s, MOVE, MV_LIST, row)
+            await s.select_row(MOVE, MV_LIST, row)
             return await s.press_ok(
                 f"move zone {name} to {parent}", MOVE, MV_OK, MV_CANCEL
             )
@@ -253,7 +251,7 @@ async def read_zone_members(s: _Session, zone: str) -> tuple[str, ...]:
     await _open_zones(s)
     try:
         await _select_zone(s, zone)
-        await _click(s, ZONES, ZN_MEMBERS, "zone members")
+        await s.click(ZONES, ZN_MEMBERS, "zone members")
         if MEMBERS not in s.state.screens:
             msg = "the member screen did not open"
             raise ItmCommandError(msg)
@@ -275,20 +273,19 @@ async def set_zone_members(s: _Session, zone: str, members: tuple[str, ...]) -> 
     try:
         async with _zone_errors(s):
             await _select_zone(s, zone)
-            await _click(s, ZONES, ZN_MEMBERS, "zone members")
+            await s.click(ZONES, ZN_MEMBERS, "zone members")
             if MEMBERS not in s.state.screens:
                 msg = "the member screen did not open"
                 raise ItmCommandError(msg)
             wanted = [m.strip() for m in members]
             for name in zone_members_from_screen(s.state):
                 if name not in wanted:
-                    await _select(
-                        s,
+                    await s.select_row(
                         MEMBERS,
                         MB_LIST,
                         _find_row(s.state, MEMBERS, MB_LIST, 1, name),
                     )
-                    await _click(s, MEMBERS, MB_REMOVE, "remove member")
+                    await s.click(MEMBERS, MB_REMOVE, "remove member")
             for name in wanted:
                 if name not in zone_members_from_screen(s.state):
                     try:
@@ -296,8 +293,8 @@ async def set_zone_members(s: _Session, zone: str, members: tuple[str, ...]) -> 
                     except ItmCommandError as err:
                         msg = f"{name!r} is not offered as a member: {err}"
                         raise ItmCommandError(msg) from err
-                    await _select(s, MEMBERS, MB_AVAILABLE, row)
-                    await _click(s, MEMBERS, MB_ADD, "add member")
+                    await s.select_row(MEMBERS, MB_AVAILABLE, row)
+                    await s.click(MEMBERS, MB_ADD, "add member")
             if set(zone_members_from_screen(s.state)) != set(wanted):
                 msg = f"{zone}: the members did not become {wanted}"
                 raise ItmCommandError(msg)
@@ -317,8 +314,8 @@ async def _jump(s: _Session, zone: str, name: str, position: int) -> None:
     afterwards; nothing is saved before 1601's OK.
     """
     row = _find_row(s.state, MEMBERS, MB_LIST, 1, name)
-    await _select(s, MEMBERS, MB_LIST, row)
-    await _click(s, MEMBERS, MB_JUMP, "jump member")
+    await s.select_row(MEMBERS, MB_LIST, row)
+    await s.click(MEMBERS, MB_JUMP, "jump member")
     if ORDER not in s.state.screens:
         msg = "the member order screen did not open"
         raise ItmCommandError(msg)
@@ -327,8 +324,8 @@ async def _jump(s: _Session, zone: str, name: str, position: int) -> None:
         if count != len(zone_members_from_screen(s.state)) - 1:
             msg = f"{zone}: the order screen lists {count} rows, not the other members"
             raise ItmCommandError(msg)
-        await _select(s, ORDER, OR_LIST, position - 1)
-        await _click(s, ORDER, OR_OK, "jump member to")
+        await s.select_row(ORDER, OR_LIST, position - 1)
+        await s.click(ORDER, OR_OK, "jump member to")
     finally:
         await _leave(s, ORDER, OR_CANCEL)
     if _find_row(s.state, MEMBERS, MB_LIST, 1, name) != position:
@@ -340,8 +337,8 @@ async def _move_up(s: _Session, zone: str, name: str, position: int) -> None:
     """Move a member up one row at a time (the up button) to a row."""
     row = _find_row(s.state, MEMBERS, MB_LIST, 1, name)
     while row > position:
-        await _select(s, MEMBERS, MB_LIST, row)
-        await _click(s, MEMBERS, MB_UP, "move member up")
+        await s.select_row(MEMBERS, MB_LIST, row)
+        await s.click(MEMBERS, MB_UP, "move member up")
         moved = _find_row(s.state, MEMBERS, MB_LIST, 1, name)
         if moved != row - 1:
             msg = f"{zone}: {name!r} did not move up"
@@ -368,7 +365,7 @@ async def set_zone_member_order(
     try:
         async with _zone_errors(s):
             await _select_zone(s, zone)
-            await _click(s, ZONES, ZN_MEMBERS, "zone members")
+            await s.click(ZONES, ZN_MEMBERS, "zone members")
             if MEMBERS not in s.state.screens:
                 msg = "the member screen did not open"
                 raise ItmCommandError(msg)
@@ -403,7 +400,7 @@ async def _pick_icon(s: _Session, icon: int) -> None:
         await _leave(s, ICONS, IC_CANCEL)
         msg = f"icon {icon} is not offered: {offered}"
         raise ItmCommandError(msg)
-    await _select(s, ICONS, IC_LIST, found[0])
+    await s.select_row(ICONS, IC_LIST, found[0])
     await s.send(ICONS, IC_OK)  # only returns the choice to the settings screen
     s.state.screens.pop(ICONS, None)
 
@@ -420,11 +417,11 @@ async def set_zone_icon(s: _Session, zone: str, icon: int) -> bool:
     try:
         async with _zone_errors(s):
             await _select_zone(s, zone)
-            await _click(s, ZONES, ZN_SETTINGS, "zone settings")
+            await s.click(ZONES, ZN_SETTINGS, "zone settings")
             if ZONE_SETTINGS not in s.state.screens:
                 msg = "the zone settings screen did not open"
                 raise ItmCommandError(msg)
-            await _click(s, ZONE_SETTINGS, ZA_ICON_BUTTON, "zone icon")
+            await s.click(ZONE_SETTINGS, ZA_ICON_BUTTON, "zone icon")
             await _pick_icon(s, icon)
             return await s.press_ok(
                 f"save icon {icon} of zone {zone}",
@@ -463,10 +460,10 @@ async def set_point_icon(s: _Session, point: str, icon: int) -> bool:
         raise ItmCommandError(msg)
     try:
         async with _zone_errors(s):
-            await _select(
-                s, POINTS, PT_LIST, _find_row(s.state, POINTS, PT_LIST, 1, point)
+            await s.select_row(
+                POINTS, PT_LIST, _find_row(s.state, POINTS, PT_LIST, 1, point)
             )
-            await _click(s, POINTS, PT_CHANGE, "point settings")
+            await s.click(POINTS, PT_CHANGE, "point settings")
             if POINT_SETTINGS not in s.state.screens:
                 msg = "the point settings screen did not open"
                 raise ItmCommandError(msg)
@@ -474,7 +471,7 @@ async def set_point_icon(s: _Session, point: str, icon: int) -> bool:
             if (why := _icon_allowed(current, icon)) is not None:
                 msg = f"{point}: {why}"
                 raise ItmCommandError(msg)
-            await _click(s, POINT_SETTINGS, PA_ICON_BUTTON, "point icon")
+            await s.click(POINT_SETTINGS, PA_ICON_BUTTON, "point icon")
             await _pick_icon(s, icon)
             return await s.press_ok(
                 f"save icon {icon} of point {point}",

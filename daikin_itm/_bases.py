@@ -50,6 +50,8 @@ class ClientCore:
 
         def _writable(self) -> None: ...
 
+        def _require_opt_in(self, *, allowed: bool, flag: str, why: str) -> None: ...
+
         def _experimental(self, what: str) -> None: ...
 
         async def fetch_info(self) -> ItmInfo:
@@ -87,7 +89,11 @@ class SessionCore:
         # pylint: disable=unused-argument
         state: UIState
         logged_in: bool
-        _client: ItmClient
+        restarting: bool
+
+        @property
+        def client(self) -> ItmClient:
+            """The client this session belongs to."""
 
         async def send(  # noqa: PLR0913, PLR0917  # pylint: disable=too-many-arguments
             self,
@@ -116,9 +122,11 @@ class SessionCore:
         async def press_ok(self, label: str, screen: int, ok: int, cancel: int) -> bool:
             """Press a screen's OK, or cancel in a dry run."""
 
-        async def _answer_confirm(self, screen: int, reply: Reply) -> None: ...
+        async def answer_confirm(self, screen: int, reply: Reply) -> None:
+            """Answer a confirm dialog a reply opened with Yes."""
 
-        def _writable(self) -> None: ...
+        def require_writable(self) -> None:
+            """Refuse a write on a read-only client."""
 
         async def open_menu_screen(self, button: int, screen: MenuScreen) -> bool:
             """Press a menu list button and tell whether its screen opened."""
@@ -129,13 +137,13 @@ class SessionCore:
         async def wait_for_progress(self, reply: Reply, *, attempts: int = 20) -> None:
             """Wait out a PROGRESS dialog a reply opened, like the browser does."""
 
-        async def _open_system_screen(
-            self, button: int, screen: MenuScreen
-        ) -> None: ...
+        async def open_system_screen(self, button: int, screen: MenuScreen) -> None:
+            """Open a system screen from the menu list."""
 
-        async def _select_listed(
+        async def select_listed(
             self, screen: int, part: int, column: int, name: str, what: str
-        ) -> None: ...
+        ) -> None:
+            """Select the list row showing a name."""
 
         async def click(self, screen: int, part: int, what: str) -> Reply:
             """Click a button, naming it when the iTM has it disabled."""

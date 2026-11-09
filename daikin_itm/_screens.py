@@ -1,5 +1,3 @@
-# ruff: noqa: SLF001
-# pylint: disable=protected-access
 """Screen helpers shared by the feature modules."""
 
 from __future__ import annotations
@@ -11,6 +9,8 @@ from .exceptions import ItmCommandError
 from .protocol import DataType, EventType
 
 if TYPE_CHECKING:
+    from datetime import date
+
     from .menu import MenuScreen
     from .protocol import Reply
     from .session import _Session
@@ -133,19 +133,44 @@ def row_holding(rows: list[tuple[str, ...]], name: str, what: str) -> int:
 # -- actions --------------------------------------------------------------------------
 
 
-def ensure_enabled(s: _Session, screen: int, part: int, what: str) -> None:
-    """Raise when the iTM reports a part disabled (clicking it hangs the iTM)."""
+async def set_checkbox(
+    s: _Session, screen: int, part: int, *, on: bool, what: str
+) -> bool:
+    """Tick or untick a checkbox when it differs; tell whether it was clicked."""
+    if ticked(s.state, screen, part) == on:
+        return False
     s.refuse_disabled(screen, part, what)
+    await s.send(screen, part, EventType.CLICK, DataType.INT, int(on))
+    s.state.set_check(screen, part, on=on)
+    return True
 
 
-async def click(s: _Session, screen: int, part: int, what: str) -> Reply:
-    """Click a part, never one the iTM reports disabled; a hidden one works."""
-    return await s.click(screen, part, what)
+async def answer_date(
+    s: _Session, screen: int, button: int, value: date, what: str
+) -> None:
+    """Press a date's "change" button and enter the date in the DATE dialog.
 
-
-async def select(s: _Session, screen: int, part: int, row: int) -> None:
-    """Select a list row, as the browser does (CLICK + INTARRAY)."""
-    await s.select_row(screen, part, row)
+    The dialog says the allowed range ([year, month 0-11, day] from and to); a date
+    outside it is refused before it is sent, and the dialog cancelled.
+    """
+    if s.state.get(screen, button, "ENABLED") == 0:
+        msg = f"{what}: the iTM has this input disabled"
+        raise ItmCommandError(msg)
+    reply = await s.send(screen, button)
+    dialogs = [
+        u for u in reply.screens if u.update == "DLG_OPEN" and u.data[1] == "DATE"
+    ]
+    if not dialogs:
+        msg = f"{what}: no date input opened: {reply.dialogs()}"
+        raise ItmCommandError(msg)
+    d = dialogs[0]
+    wanted = (value.year, value.month - 1, value.day)
+    low, high = tuple(d.data[7:10]), tuple(d.data[10:13])
+    if not low <= wanted <= high:
+        await s.send(d.screen, d.data[0], EventType.CLICK2)
+        msg = f"{what}: {value} outside the iTM's range"
+        raise ItmCommandError(msg)
+    await s.send(d.screen, d.data[0], EventType.CLICK, DataType.DATE, 3, array=wanted)
 
 
 async def select_rows(s: _Session, screen: int, part: int, rows: list[int]) -> None:
@@ -185,7 +210,7 @@ async def open_screen(
 
 async def open_below(s: _Session, screen: int, button: int, target: int) -> None:
     """Open a screen from a button of another one (behind PROGRESS, if any)."""
-    reply = await click(s, screen, button, f"screen {target}")
+    reply = await s.click(screen, button, f"screen {target}")
     await s.wait_for_progress(reply)
     if target not in s.state.screens:
         msg = f"screen {target} did not open: {reply.dialogs()}"
@@ -196,13 +221,13 @@ async def enter_number(
     s: _Session, screen: int, button: int, value: float, what: str
 ) -> None:
     """Enter a number through its Change button (never one shown disabled)."""
-    ensure_enabled(s, screen, button, what)
+    s.refuse_disabled(screen, button, what)
     await s.answer_number(button, value, what, screen=screen)
 
 
 async def press_ok(s: _Session, label: str, screen: int, ok: int, cancel: int) -> bool:
     """Press a screen's OK through ``s.press_ok``, never one shown disabled."""
-    ensure_enabled(s, screen, ok, label)
+    s.refuse_disabled(screen, ok, label)
     return await s.press_ok(label, screen, ok, cancel)
 
 
@@ -214,18 +239,18 @@ async def press(s: _Session, label: str, screen: int, part: int) -> bool:
         True when sent, False in a dry run.
 
     """
-    ensure_enabled(s, screen, part, label)
+    s.refuse_disabled(screen, part, label)
     reply = await s.write(label, screen, part)
     if reply is None:
         return False
-    await s._answer_confirm(screen, reply)
+    await s.answer_confirm(screen, reply)
     return True
 
 
 async def return_choice(s: _Session, screen: int, ok: int, what: str) -> None:
     """Press a sub-screen's OK that only returns its choice (assumed)."""
     reply = await s.send(screen, ok)
-    await s._answer_confirm(screen, reply)
+    await s.answer_confirm(screen, reply)
     if screen in s.state.screens:
         msg = f"{what}: the screen did not close"
         raise ItmCommandError(msg)
@@ -257,5 +282,5 @@ async def answer_name(
     if sent is None:
         await s.send(d.screen, d.data[0], EventType.CLICK2)
         return False
-    await s._answer_confirm(screen, sent)
+    await s.answer_confirm(screen, sent)
     return True

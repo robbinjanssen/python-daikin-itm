@@ -1,5 +1,3 @@
-# ruff: noqa: SLF001
-# pylint: disable=protected-access
 """Writes for web users and the logged-in user's own settings.
 
 The logged-in user's own settings are screen 1205 (password, language and region
@@ -22,7 +20,7 @@ from ._screens import radio as _radio
 from ._util import ignore as _ignore
 from .exceptions import ItmCommandError, LoginRejected, SessionEnded
 from .menu import CLOSE_PART, DATE_FORMATS, MenuScreen
-from .protocol import NO_TOKEN, DataType, EventType, ScreenID, login_payload
+from .protocol import DataType, EventType, ScreenID
 from .system import (
     LANGUAGE_NAMES,
     LANGUAGE_RADIOS,
@@ -110,27 +108,14 @@ async def open_own_settings(s: _Session, username: str, password: str) -> None:
         ItmCommandError: 1205 did not open (wrong credentials, or another session).
 
     """
-    await s.send(
-        event=EventType.INIT,
-        data_type=DataType.STRING,
-        string=s._client.web_version,
-    )
-    s.token = NO_TOKEN
-    s.logged_in = True
-    reply = await s.send(
-        ScreenID.LOGIN,
-        LOGIN_SETTINGS_BUTTON,
-        EventType.CLICK,
-        DataType.STRING,
-        string=login_payload(username, password),
-    )
+    await s.handshake()
+    reply = await s.press_login(username, password, LOGIN_SETTINGS_BUTTON)
     if OWN_SCREEN not in s.state.screens:
         dialogs = reply.dialogs()
         if any(
             u.screen == ScreenID.LOGIN and u.update == "DLG_OPEN" for u in reply.screens
         ):
-            s.logged_in = False
-            await s._store.save(None)
+            await s.forget_login()
             msg = (
                 f"the user's own settings did not open (wrong credentials?): {dialogs}"
             )
@@ -196,13 +181,13 @@ async def _enter_own_password(s: _Session, password: str) -> None:
         await s.send(d.screen, d.data[0], EventType.CLICK2, DataType.INT, 0)
         msg = f"the password must be {low}-{high} characters"
         raise ItmCommandError(msg)
-    if s._client.dry_run:
+    if s.client.dry_run:
         await s.send(d.screen, d.data[0], EventType.CLICK2, DataType.INT, 0)
-        s._client.planned.append(
+        s.client.planned.append(
             f"own password = ***: screen {d.screen} input {d.data[0]}"
         )
         return
-    await s._answer_password(reply, password)
+    await s.answer_password(reply, password)
 
 
 async def read_own_language(s: _Session) -> str | None:
@@ -262,7 +247,7 @@ async def set_own_settings(  # noqa: PLR0913  # pylint: disable=too-many-argumen
         ItmCommandError: A value the iTM doesn't offer, or the iTM refused.
 
     """
-    s._writable()
+    s.require_writable()
     o = OWN_SCREEN
     if date_format is not None and date_format not in DATE_FORMATS:
         msg = f"date format must be one of {DATE_FORMATS}"
@@ -274,7 +259,7 @@ async def set_own_settings(  # noqa: PLR0913  # pylint: disable=too-many-argumen
         msg = f"unknown language {language!r}; expected one of {list(LANGUAGE_RADIOS)}"
         raise ItmCommandError(msg)
     if date_format is not None:
-        await s._pick_option(
+        await s.pick_option(
             o, OWN_DATE_FORMAT, DATE_FORMATS.index(date_format), "date format"
         )
     if time_24h is not None:
@@ -292,7 +277,7 @@ async def set_own_settings(  # noqa: PLR0913  # pylint: disable=too-many-argumen
     except SessionEnded:
         # The iTM ends the session once the settings apply (or, in a dry run, when
         # 1205 is cancelled).
-        return not s._client.dry_run
+        return not s.client.dry_run
     await s.logout()  # the iTM kept the session: end it, like the browser's logout
     return saved
 
@@ -334,7 +319,7 @@ async def _open_user_screens(s: _Session, name: str) -> None:
     admin_msg = f"{name} is an administrator: allowed screens apply to normal users"
     if user.admin:
         raise ItmCommandError(admin_msg)
-    await s._select_listed(w, WU_LIST, 0, name, "web user")
+    await s.select_listed(w, WU_LIST, 0, name, "web user")
     await s.click(w, WU_CHANGE, "change web user")
     if u not in s.state.screens:
         msg = f"{name}: the user setup did not open"
@@ -392,7 +377,7 @@ async def set_web_user_screens(
         True when saved, False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     try:
         await _open_user_screens(s, name)
         wanted = [x.strip() for x in screens]
@@ -689,7 +674,7 @@ class UsersMixin(ClientCore):
 class UsersSessionMixin(SessionCore):
     """_Session's web user screen writes."""
 
-    async def _answer_password(
+    async def answer_password(
         self, reply: Reply, password: str, what: str = "password"
     ) -> None:
         """Enter the password in the dialog(s) a reply opened (new, then repeat).
@@ -710,9 +695,9 @@ class UsersSessionMixin(SessionCore):
                 await self.send(d.screen, d.data[0], EventType.CLICK2, DataType.INT, 0)
                 msg = f"the password must be {low}-{high} characters"
                 raise ItmCommandError(msg)
-            if self._client.dry_run:
+            if self.client.dry_run:
                 await self.send(d.screen, d.data[0], EventType.CLICK2, DataType.INT, 0)
-                self._client.planned.append(
+                self.client.planned.append(
                     f"{what} = ***: screen {d.screen} input {d.data[0]}"
                 )
                 return
@@ -743,7 +728,7 @@ class UsersSessionMixin(SessionCore):
             z, UZ_LIST, EventType.CLICK, DataType.INTARRAY, len(rows), array=tuple(rows)
         )
         reply = await self.send(z, UZ_OK)
-        await self._answer_confirm(z, reply)
+        await self.answer_confirm(z, reply)
         self.state.screens.pop(z, None)
 
     async def save_web_user(
@@ -757,7 +742,7 @@ class UsersSessionMixin(SessionCore):
     ) -> None:
         """Add a web user, or change one: name, password, type and zones, then OK."""
         s, u = MenuScreen.WEB_USERS, MenuScreen.USER_SETUP
-        await self._open_system_screen(MB_WEB_USERS, s)
+        await self.open_system_screen(MB_WEB_USERS, s)
         try:
             listed = row_index(self.state, s, WU_LIST, 0, name) is not None
             if new and listed:
@@ -766,7 +751,7 @@ class UsersSessionMixin(SessionCore):
             if new:
                 await self.click(s, WU_ADD, "add web user")
             else:
-                await self._select_listed(s, WU_LIST, 0, name, "web user")
+                await self.select_listed(s, WU_LIST, 0, name, "web user")
                 await self.click(s, WU_CHANGE, "change web user")
             if u not in self.state.screens:
                 msg = f"{name}: the user setup did not open"
@@ -775,9 +760,7 @@ class UsersSessionMixin(SessionCore):
                 await self.answer_text(u, US_NAME_BUTTON, name, "user name")
             if password is not None:
                 reply = await self.send(u, US_PASSWORD_BUTTON)
-                await self._answer_password(
-                    reply, password, f"web user {name} password"
-                )
+                await self.answer_password(reply, password, f"web user {name} password")
             if admin is not None:
                 await self.send(u, US_ADMIN if admin else US_USER)
             if zones is not None:
@@ -791,14 +774,14 @@ class UsersSessionMixin(SessionCore):
     async def delete_web_user(self, name: str) -> None:
         """Select a web user, press Delete and confirm."""
         s = MenuScreen.WEB_USERS
-        await self._open_system_screen(MB_WEB_USERS, s)
+        await self.open_system_screen(MB_WEB_USERS, s)
         try:
-            await self._select_listed(s, WU_LIST, 0, name, "web user")
+            await self.select_listed(s, WU_LIST, 0, name, "web user")
             if self.state.get(s, WU_DELETE, "ENABLED") == 0:
                 msg = f"the iTM does not allow deleting {name!r}"
                 raise ItmCommandError(msg)
             reply = await self.write(f"delete web user {name}", s, WU_DELETE)
             if reply is not None:
-                await self._answer_confirm(s, reply)
+                await self.answer_confirm(s, reply)
         finally:
             await self.close_screen(s)

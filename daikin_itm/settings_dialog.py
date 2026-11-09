@@ -95,9 +95,9 @@ class SettingsDialogMixin(SessionCore):
     async def close_settings(self, *, ok: bool) -> None:
         """Close the settings dialog with OK (and confirm) or Cancel."""
         if ok:
-            self._writable()
-            if self._client.dry_run:
-                self._client.planned.append(
+            self.require_writable()
+            if self.client.dry_run:
+                self.client.planned.append(
                     f"save settings: screen {ScreenID.SETTINGS} part {D_OK} event 1"
                 )
                 ok = False

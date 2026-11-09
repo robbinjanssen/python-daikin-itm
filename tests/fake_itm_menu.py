@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from .fake_itm_base import (
@@ -17,6 +17,8 @@ from .fake_itm_base import (
 )
 from .fake_itm_schedule import ScheduleMixin
 from .fake_itm_system import SystemMixin, SystemWrites
+
+HISTORY_DATE_ID = 20
 
 
 class MenuMixin(ScheduleMixin, SystemMixin):
@@ -361,8 +363,9 @@ class MenuMixin(ScheduleMixin, SystemMixin):
                 (1, "LIST_COLUMN", columns),
                 (8, "TEXT", self.history_day),
                 *[
-                    (p, "CHECK_STATE", 1 if p in self.history_classes else 0)
+                    (p, "CHECK_STATE", 1)
                     for p in (3, 4, 5, 6)
+                    if p in self.history_classes
                 ],
                 (15, "ENABLED", 0),
                 (16, "ENABLED", 0),
@@ -449,8 +452,8 @@ class MenuMixin(ScheduleMixin, SystemMixin):
             ],
         ]
 
-    def _history_event(self, ev: dict[str, Any]) -> list[Update]:
-        part, event, number = ev["part"], ev["event"], ev["number"]
+    def _history_event(self, ev: dict[str, Any]) -> list[Update]:  # noqa: PLR0911  # pylint: disable=too-many-return-statements
+        part, event, number, array = ev["part"], ev["event"], ev["number"], ev["array"]
         if event == 5:  # UPD_PROG: the list is loaded on the second request
             if self.history_loading:
                 self.history_loading = False
@@ -459,13 +462,17 @@ class MenuMixin(ScheduleMixin, SystemMixin):
         if part in {3, 4, 5, 6} and event == 1:
             (self.history_classes.add if number else self.history_classes.discard)(part)
             return [("UPDATE", 800, [], [(part, "CHECK_STATE", number)])]
-        if part in {9, 10}:
-            # Like the real iTM: the day buttons change the date only; the list
-            # follows with Refresh (12).
+        if part == 11:
             shown = datetime.strptime(self.history_day, "%d/%m/%Y")  # noqa: DTZ007
-            shown += timedelta(days=1 if part == 10 else -1)
-            self.history_day = shown.strftime("%d/%m/%Y")
-            return [("UPDATE", 800, [], [(8, "TEXT", self.history_day)])]
+            current = (shown.year, shown.month - 1, shown.day)
+            data = [HISTORY_DATE_ID, 9, 6, "day", *current, 2000, 0, 1, 2037, 11, 31]
+            return [("DLG_OPEN", 800, [*data, "OK", "Cancel"], [])]
+        if part == HISTORY_DATE_ID:
+            if event == 1:
+                year, month, day = array[:3]
+                self.history_day = f"{day:02d}/{month + 1:02d}/{year}"
+            updates: list[Any] = [("DLG_CLOSE", 800, [part, 9], [])]
+            return [*updates, ("UPDATE", 800, [], [(8, "TEXT", self.history_day)])]
         if part in {12, 15, 16}:
             if part == 12:
                 self.history_loaded_day = self.history_day

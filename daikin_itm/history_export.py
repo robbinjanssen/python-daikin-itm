@@ -19,7 +19,7 @@ import zlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from .exceptions import ItmError
+from .exceptions import HistoryExportError
 
 HISTORY_MEMBER = "t_history.dat"
 CONFIG_MEMBER = "conv.conf"
@@ -47,10 +47,6 @@ CLASSES = {0: "management", 2: "status", 4: "settings"}
 # Values per event (field 10).
 POWER_VALUES = {0: "off", 1: "on", 2: "setback_low"}
 FAN_SPEED_VALUES = {1: "medium", 100: "auto"}
-
-
-class HistoryExportError(ItmError):
-    """The history export could not be read."""
 
 
 @dataclass(frozen=True)

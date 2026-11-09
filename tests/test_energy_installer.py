@@ -32,7 +32,8 @@ SAVES = {(3221, 9), (3223, 3), (3224, 14)}
 
 @pytest.fixture(autouse=True)
 def _no_restart_wait(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ee, "RESTART_POLL", 0)
+    monkeypatch.setattr(ee, "RESTART_POLL", 0.01)
+    monkeypatch.setattr(ee, "RESTART_TIMEOUT", 0.3)
 
 
 @pytest.fixture
@@ -187,6 +188,46 @@ async def test_read_back_after_the_restart(
     )
     assert month == "Apr"
     assert restarts == {"left": 0, "refused": 0}
+
+
+async def test_restart_wait_needs_the_itm_to_go_down(
+    itm: FakeEnergyMoreITM, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A poll answered before the iTM went down doesn't end the wait."""
+    c = client(itm)
+    original = c.fetch_info
+    polls: list[int] = []
+
+    async def going_down_late() -> Any:
+        polls.append(len(polls))
+        if len(polls) == 2:
+            raise TimeoutError
+        return await original()
+
+    monkeypatch.setattr(c, "fetch_info", going_down_late)
+    assert await c.set_energy_collection_start(
+        PASSWORD, "Apr", allow_service_change=True, allow_restart=True
+    )
+    assert len(polls) == 3
+
+
+async def test_error_before_the_save_is_raised(
+    itm: FakeEnergyMoreITM, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A network error before OK is an error, not the iTM restarting."""
+    original = itm.handle
+
+    def broken(body: str) -> str:
+        if len(itm.requests) > 3 and not itm.saved:
+            raise TimeoutError
+        return original(body)
+
+    monkeypatch.setattr(itm, "handle", broken)
+    with pytest.raises(TimeoutError):
+        await client(itm).set_energy_collection_start(
+            PASSWORD, "Apr", allow_service_change=True, allow_restart=True
+        )
+    assert itm.saved == []
 
 
 async def test_collection_start_and_conversion(itm: FakeEnergyMoreITM) -> None:

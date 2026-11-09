@@ -199,14 +199,14 @@ async def test_cancelled_event_list_drops_its_changes(itm: FakeScheduleITM) -> N
     """An error after a change inside the editor saves nothing of it."""
     c = FakeClient(itm)
     async with c._session() as s:
-        await s._select_program(PROGRAM)
+        await s.select_program(PROGRAM)
         await s.send(100, 11)
         await s.send(104, 1, 8, 1, 1)
         await s.send(104, 54)  # Wednesday
         await s.send(104, 73)
         await s.send(107, 4, 1, 8, 1, array=(0,))
         reply = await s.send(107, 7)
-        await s._answer_confirm(107, reply)
+        await s.answer_confirm(107, reply)
         # Cancel: the deletion is dropped
         await s.close_screen(MenuScreen.SCHEDULE_EVENTS)
         await s.close_editor()
@@ -237,7 +237,7 @@ async def test_rename_special_day(itm: FakeScheduleITM) -> None:
     assert itm.special_names[PROGRAM][1] == "Holiday"
     c = FakeClient(itm)
     async with c._session() as s:
-        await s._select_program(PROGRAM)
+        await s.select_program(PROGRAM)
         await s.send(100, 11)
         assert special_day_names(s.state)[:2] == ("Ex1", "Holiday")
         await s.close_editor()

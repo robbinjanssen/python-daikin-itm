@@ -42,6 +42,9 @@ async def test_trace_file_records_and_passes_on(tmp_path: Path) -> None:
     path = tmp_path / "trace.jsonl"
     trace = TraceFile(path)
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    path.chmod(0o644)
+    TraceFile(path)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
     async def post(_body: str) -> str:
         return "B" * 32 + "0001"

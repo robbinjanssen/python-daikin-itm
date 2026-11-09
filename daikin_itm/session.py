@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any
 
 import aiohttp
 
+from ._screens import answer_date as _answer_date
+from ._screens import set_checkbox as _set_checkbox
 from .changeover import ChangeoverSessionMixin
 from .exceptions import (
     ItmCommandError,
@@ -31,8 +33,7 @@ from .menu import (
     CO_SETTINGS_BUTTON,
     H_CLASS_MANAGEMENT,
     H_DATE,
-    H_DAY_NEXT,
-    H_DAY_PREVIOUS,
+    H_DAY_CHANGE,
     H_PAGE_OLDER,
     H_REFRESH,
     MB_CHANGEOVER,
@@ -207,6 +208,17 @@ class _Session(
         self.token = NO_TOKEN
         self.state = UIState()
         self.logged_in = False
+        self.restarting = False
+
+    @property
+    def client(self) -> ItmClient:
+        """The client this session belongs to (its settings and plan)."""
+        return self._client
+
+    async def forget_login(self) -> None:
+        """Mark the session logged out and drop its saved token."""
+        self.logged_in = False
+        await self._store.save(None)
 
     async def send(  # noqa: PLR0913, PLR0917  # pylint: disable=too-many-arguments
         # The arguments mirror the fields of the wire format.
@@ -280,6 +292,17 @@ class _Session(
 
     async def login(self, username: str, password: str) -> None:
         """Log in; raises LoginRejected when the iTM refuses."""
+        await self.handshake()
+        reply = await self.press_login(username, password, LOGIN_BUTTON)
+        if any(
+            s.screen == ScreenID.LOGIN and s.update == "DLG_OPEN" for s in reply.screens
+        ):
+            await self.forget_login()
+            msg = "login rejected (wrong credentials, or another web session is active)"
+            raise LoginRejected(msg)
+
+    async def handshake(self) -> None:
+        """Open the login screen, adopting a new web UI version after an update."""
         version = self._client.web_version
         try:
             await self.send(
@@ -301,22 +324,18 @@ class _Session(
             await self.send(
                 event=EventType.INIT, data_type=DataType.STRING, string=e.version
             )
+
+    async def press_login(self, username: str, password: str, button: int) -> Reply:
+        """Press a login screen button with the credentials, as the browser does."""
         self.token = NO_TOKEN
         self.logged_in = True  # from here on every reply token is persisted
-        reply = await self.send(
+        return await self.send(
             ScreenID.LOGIN,
-            LOGIN_BUTTON,
+            button,
             EventType.CLICK,
             DataType.STRING,
             string=login_payload(username, password),
         )
-        if any(
-            s.screen == ScreenID.LOGIN and s.update == "DLG_OPEN" for s in reply.screens
-        ):
-            self.logged_in = False
-            await self._store.save(None)
-            msg = "login rejected (wrong credentials, or another web session is active)"
-            raise LoginRejected(msg)
 
     async def logout(self) -> None:
         """Log out, keeping the token unless the iTM confirms the logout."""
@@ -404,7 +423,7 @@ class _Session(
             self.state.screens.get(ScreenID.STDLIST, {}).pop((L_LIST, "PNTLIST"), None)
 
     # -- operation panel ----------------------------------------------------------
-    def _writable(self) -> None:
+    def require_writable(self) -> None:
         if self._client.read_only:
             msg = "the client is read-only"
             raise ReadOnlyError(msg)
@@ -415,7 +434,7 @@ class _Session(
         With confirm, a confirm dialog the pick opens is answered Yes: the iTM asks
         before it puts a unit in setback ("setback low?").
         """
-        self._writable()
+        self.require_writable()
         if self._client.dry_run:
             # A panel pick is committed by the TIMER that follows; plan both.
             self._client.planned.append(
@@ -426,14 +445,14 @@ class _Session(
             ScreenID.OPERATION, part, EventType.CLICK, DataType.INT, index
         )
         if confirm and all(d[1] == "CONFIRM" for d in reply.dialogs()):
-            await self._answer_confirm(ScreenID.OPERATION, reply)
+            await self.answer_confirm(ScreenID.OPERATION, reply)
         elif reply.dialogs():
             msg = f"iTM opened a dialog: {reply.dialogs()}"
             raise ItmCommandError(msg)
 
     async def commit(self, delay: float) -> None:
         """Commit operation panel changes like the browser does."""
-        self._writable()
+        self.require_writable()
         if self._client.dry_run:
             self._client.planned.append(
                 f"commit: screen {ScreenID.OPERATION} event {EventType.TIMER}"
@@ -798,7 +817,7 @@ class _Session(
             The reply, or None in a dry run (the request is recorded instead).
 
         """
-        self._writable()
+        self.require_writable()
         if event == EventType.CLICK and screen != ScreenID.SETTINGS:
             self.refuse_disabled(screen, part, label)
         if self._client.dry_run:
@@ -833,13 +852,13 @@ class _Session(
             await self.send(screen, cancel)
             self.state.screens.pop(screen, None)
             return False
-        await self._answer_confirm(screen, reply)
+        await self.answer_confirm(screen, reply)
         if screen in self.state.screens:
             msg = f"{label}: the screen did not close"
             raise ItmCommandError(msg)
         return True
 
-    async def _answer_confirm(self, screen: int, reply: Reply) -> None:
+    async def answer_confirm(self, screen: int, reply: Reply) -> None:
         """Answer Yes to a confirm dialog; raise on an error dialog."""
         for dialog in reply.dialogs():
             if dialog[1] == "CONFIRM":
@@ -922,7 +941,7 @@ class _Session(
             screen, part, EventType.CLICK, DataType.INTARRAY, 1, array=(row,)
         )
 
-    async def _select_listed(
+    async def select_listed(
         self, screen: int, part: int, column: int, name: str, what: str
     ) -> None:
         """Select the list row whose column shows name; raise when it isn't there."""
@@ -1014,20 +1033,13 @@ class _Session(
             reply = await self.send(MenuScreen.MENULIST, MB_HISTORY)
         try:
             await self.wait_for_progress(reply)
-            # The class filters are display settings of the screen; set the
-            # management one (logins) as asked, whatever it was.
-            shown = self.state.get(
-                MenuScreen.HISTORY, H_CLASS_MANAGEMENT, "CHECK_STATE"
-            )
-            wanted = 1 if include_management else 0
-            if shown is not None and shown != wanted:
-                await self.send(
-                    MenuScreen.HISTORY,
-                    H_CLASS_MANAGEMENT,
-                    EventType.CLICK,
-                    DataType.INT,
-                    wanted,
-                )
+            if await _set_checkbox(
+                self,
+                MenuScreen.HISTORY,
+                H_CLASS_MANAGEMENT,
+                on=include_management,
+                what="management history",
+            ):
                 await self.wait_for_progress(
                     await self.send(MenuScreen.HISTORY, H_REFRESH)
                 )
@@ -1057,10 +1069,8 @@ class _Session(
             raise ItmCommandError(msg)
         if day == shown:
             return
-        step = H_DAY_NEXT if day > shown else H_DAY_PREVIOUS
-        for _ in range(abs((day - shown).days)):
-            await self.send(MenuScreen.HISTORY, step)
-        # The day buttons only change the date shown; Refresh loads that day's list.
+        await _answer_date(self, MenuScreen.HISTORY, H_DAY_CHANGE, day, "history day")
+        # The date input only changes the date shown; Refresh loads that day's list.
         await self.wait_for_progress(await self.send(MenuScreen.HISTORY, H_REFRESH))
 
     async def read_optional_functions(self) -> dict[str, OptionalFunction]:

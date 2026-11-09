@@ -1,5 +1,3 @@
-# ruff: noqa: SLF001
-# pylint: disable=protected-access
 """Interlock programs (900-906): list, enable, add, rename, copy, delete, setup.
 
 Seen on a real iTM with the dealer option switched off (read only): 900 lists
@@ -42,8 +40,6 @@ from ._screens import answer_name as _answer_name
 from ._screens import cells as _cells
 from ._screens import checked_index as _checked_part
 from ._screens import clean as _clean
-from ._screens import click as _click
-from ._screens import ensure_enabled as _enabled
 from ._screens import leave as _leave
 from ._screens import open_screen as _open
 from ._screens import part_text as _text
@@ -52,7 +48,6 @@ from ._screens import radio as _radio
 from ._screens import return_choice as _return_choice
 from ._screens import row_holding as _row_holding
 from ._screens import row_named as _row
-from ._screens import select as _select
 from ._screens import ticked as _ticked
 from ._util import check_wrong as _check_wrong
 from ._util import ignore as _discard
@@ -430,8 +425,8 @@ async def _pick_rows(  # noqa: PLR0913  # pylint: disable=too-many-arguments,too
         extra = [i for i, r in enumerate(rows) if any(r) and not set(r) & set(names)]
         if not extra:
             break
-        await _select(s, screen, chosen, extra[0])
-        _enabled(s, screen, remove, f"remove {what}")
+        await s.select_row(screen, chosen, extra[0])
+        s.refuse_disabled(screen, remove, f"remove {what}")
         await s.send(screen, remove)
         if len(_cells(s.state, screen, chosen)) == len(rows):
             msg = f"{what}: the iTM did not remove {' '.join(rows[extra[0]])!r}"
@@ -445,8 +440,8 @@ async def _pick_rows(  # noqa: PLR0913  # pylint: disable=too-many-arguments,too
         except ItmCommandError as err:
             msg = f"{name!r} is not offered: {err}"
             raise ItmCommandError(msg) from err
-        await _select(s, screen, available, row)
-        _enabled(s, screen, add, f"add {what}")
+        await s.select_row(screen, available, row)
+        s.refuse_disabled(screen, add, f"add {what}")
         await s.send(screen, add)
     got = _cells(s.state, screen, chosen)
     missing = [n for n in names if not any(n in r for r in got)]
@@ -457,7 +452,7 @@ async def _pick_rows(  # noqa: PLR0913  # pylint: disable=too-many-arguments,too
 
 async def _choose(s: _Session, screen: int, part: int, index: int, what: str) -> None:
     """Pick a combo option or set a checkbox (1 ticked), unless it is disabled."""
-    _enabled(s, screen, part, what)
+    s.refuse_disabled(screen, part, what)
     await s.send(screen, part, EventType.CLICK, DataType.INT, index)
 
 
@@ -477,7 +472,7 @@ async def _enter(
     """Enter a number with a "change" button, unless value is None."""
     if value is None:
         return
-    _enabled(s, screen, button, what)
+    s.refuse_disabled(screen, button, what)
     await s.answer_number(button, value, what, screen=screen)
 
 
@@ -485,7 +480,7 @@ async def _open_below(
     s: _Session, screen: int, button: int, sub: int, what: str
 ) -> None:
     """Open a sub-screen with a button of the screen above it."""
-    _enabled(s, screen, button, what)
+    s.refuse_disabled(screen, button, what)
     await s.send(screen, button)
     if sub not in s.state.screens:
         msg = f"the {what} screen did not open"
@@ -530,7 +525,9 @@ def _interlock_names(state: UIState) -> list[str]:
 
 
 async def _select_interlock(s: _Session, name: str) -> None:
-    await _select(s, INTERLOCK, I_LIST, _row(_interlock_names(s.state), name, IL_WHAT))
+    await s.select_row(
+        INTERLOCK, I_LIST, _row(_interlock_names(s.state), name, IL_WHAT)
+    )
 
 
 def _interlock_enabled(s: _Session, name: str) -> bool:
@@ -559,7 +556,7 @@ async def read_interlocks(s: _Session) -> list[InterlockProgram]:
     try:
         out = []
         for i, program in enumerate(interlocks_from_screen(s.state)):
-            await _select(s, INTERLOCK, I_LIST, i)
+            await s.select_row(INTERLOCK, I_LIST, i)
             shown = _radio(s.state, INTERLOCK, I_ENABLE, I_DISABLE)
             out.append(program if shown is None else replace(program, enabled=shown))
         return out
@@ -575,7 +572,7 @@ async def set_interlock_enabled(s: _Session, name: str, *, enabled: bool) -> boo
         True when sent (or already so), False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     await _open_interlock(s)
     try:
         await _select_interlock(s, name)
@@ -596,11 +593,11 @@ async def create_interlock(s: _Session, name: str) -> bool:
         True when sent, False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     await _open_interlock(s)
     try:
         _interlock_new(s, name)
-        _enabled(s, INTERLOCK, I_CREATE, f"add {IL_WHAT}")
+        s.refuse_disabled(INTERLOCK, I_CREATE, f"add {IL_WHAT}")
         reply = await s.send(INTERLOCK, I_CREATE)
         return await _answer_name(s, INTERLOCK, reply, name, f"create {IL_WHAT} {name}")
     finally:
@@ -608,14 +605,14 @@ async def create_interlock(s: _Session, name: str) -> bool:
 
 
 async def _named_copy(s: _Session, name: str, new_name: str, *, copy: bool) -> bool:
-    s._writable()
+    s.require_writable()
     await _open_interlock(s)
     try:
         _interlock_new(s, new_name)
         await _select_interlock(s, name)
         verb = "copy" if copy else "rename"
         part = I_COPY if copy else I_RENAME
-        _enabled(s, INTERLOCK, part, f"{verb} {IL_WHAT} {name}")
+        s.refuse_disabled(INTERLOCK, part, f"{verb} {IL_WHAT} {name}")
         reply = await s.send(INTERLOCK, part)
         label = f"{verb} {IL_WHAT} {name} to {new_name}"
         return await _answer_name(s, INTERLOCK, reply, new_name, label)
@@ -653,7 +650,7 @@ async def delete_interlock(s: _Session, name: str) -> bool:
         True when sent, False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     await _open_interlock(s)
     try:
         await _select_interlock(s, name)
@@ -675,7 +672,7 @@ async def _open_setup(s: _Session, name: str, *, reading: bool) -> None:
     if not reading and _interlock_enabled(s, name):
         msg = f"{name}: disable the {IL_WHAT} before changing its setup"
         raise ItmCommandError(msg)
-    _enabled(s, INTERLOCK, I_EDIT, f"edit {IL_WHAT} {name}")
+    s.refuse_disabled(INTERLOCK, I_EDIT, f"edit {IL_WHAT} {name}")
     reply = await s.send(INTERLOCK, I_EDIT)
     for dialog in reply.dialogs():
         if dialog[1] == "CONFIRM":
@@ -693,7 +690,7 @@ async def _tab(s: _Session, tab: int) -> None:
 
 
 async def _open_from_setup(s: _Session, button: int, screen: int, what: str) -> None:
-    _enabled(s, INTERLOCK_SETUP, button, what)
+    s.refuse_disabled(INTERLOCK_SETUP, button, what)
     await s.send(INTERLOCK_SETUP, button)
     if screen not in s.state.screens:
         msg = f"the {what} screen did not open"
@@ -770,7 +767,7 @@ async def _read_conditions(s: _Session) -> tuple[InterlockCondition, ...]:
     for row, cells in enumerate(_cells(s.state, INTERLOCK_INPUTS, N_INPUTS)):
         if not any(cells):
             continue
-        await _select(s, INTERLOCK_INPUTS, N_INPUTS, row)
+        await s.select_row(INTERLOCK_INPUTS, N_INPUTS, row)
         if not _usable_button(s, INTERLOCK_INPUTS, N_CONDITION_BUTTON):
             continue
         what = "interlock condition"
@@ -803,7 +800,7 @@ async def _read_actions(s: _Session) -> tuple[InterlockAction, ...]:
     for row, cells in enumerate(_cells(s.state, INTERLOCK_OUTPUTS, O_EVENTS)):
         if not any(cells):
             continue
-        await _select(s, INTERLOCK_OUTPUTS, O_EVENTS, row)
+        await s.select_row(INTERLOCK_OUTPUTS, O_EVENTS, row)
         if not _usable_button(s, INTERLOCK_OUTPUTS, O_ACTION_BUTTON):
             continue
         await _open_below(
@@ -820,17 +817,17 @@ async def _set_analog(s: _Session, spec: InterlockConditionSpec, what: str) -> N
     await _tab_of(s, c, C_TAB, C_TAB_ANALOG)
     if spec.comparison is not None:
         part = _labelled(s.state, c, C_COMPARE, spec.comparison, f"{what} comparison")
-        await _click(s, c, part, f"{what} comparison")
+        await s.click(c, part, f"{what} comparison")
     if spec.constant is not None:
-        await _click(s, c, C_CONSTANT_RADIO, f"{what} constant")
+        await s.click(c, C_CONSTANT_RADIO, f"{what} constant")
         await _enter(s, c, C_CONSTANT_BUTTON, spec.constant, f"{what} constant")
     if spec.reference_point is not None:
         point = f"{what} management point"
-        await _click(s, c, C_POINT_RADIO, point)
+        await s.click(c, C_POINT_RADIO, point)
         await _open_below(s, c, C_POINT_BUTTON, INTERLOCK_POINTS, point)
         rows = _cells(s.state, INTERLOCK_POINTS, MP_LIST)
         row = _row_holding(rows, spec.reference_point, "management point")
-        await _select(s, INTERLOCK_POINTS, MP_LIST, row)
+        await s.select_row(INTERLOCK_POINTS, MP_LIST, row)
         await _return_choice(s, INTERLOCK_POINTS, MP_OK, point)
     await _enter(s, c, C_OFFSET_BUTTON, spec.offset, f"{what} offset")
     await _enter(s, c, C_HYSTERESIS_BUTTON, spec.hysteresis, f"{what} hysteresis")
@@ -841,13 +838,13 @@ async def _set_condition(s: _Session, spec: InterlockConditionSpec) -> None:
     what = f"condition of {spec.point}"
     rows = _cells(s.state, INTERLOCK_INPUTS, N_INPUTS)
     row = _row_holding(rows, spec.point, "interlock input")
-    await _select(s, INTERLOCK_INPUTS, N_INPUTS, row)
+    await s.select_row(INTERLOCK_INPUTS, N_INPUTS, row)
     c = INTERLOCK_CONDITION
     await _open_below(s, INTERLOCK_INPUTS, N_CONDITION_BUTTON, c, what)
     if spec.state is not None:
         await _tab_of(s, c, C_TAB, C_TAB_STATE)
         part = _labelled(s.state, c, C_STATES, spec.state, f"{what} state")
-        await _click(s, c, part, f"{what} state")
+        await s.click(c, part, f"{what} state")
     for value, tab, combo, label, modes in (
         (spec.mode, C_TAB_MODE, C_MODE, "mode", True),
         (spec.multistate, C_TAB_MULTISTATE, C_MULTISTATE, "multistate", False),
@@ -867,13 +864,13 @@ async def _set_action(s: _Session, spec: InterlockActionSpec) -> None:
     what = f"action of {spec.point}"
     rows = _cells(s.state, INTERLOCK_OUTPUTS, O_EVENTS)
     row = _row_holding(rows, spec.point, "interlock output")
-    await _select(s, INTERLOCK_OUTPUTS, O_EVENTS, row)
+    await s.select_row(INTERLOCK_OUTPUTS, O_EVENTS, row)
     a = INTERLOCK_ACTION
     await _open_below(s, INTERLOCK_OUTPUTS, O_ACTION_BUTTON, a, what)
     if spec.power is not None:
         await _tab_of(s, a, A_TAB, A_TAB_POWER)
         await _tick(s, a, EVT_POWER[0], f"{what} power")
-        await _click(s, a, POWER_RADIOS[spec.power], f"{what} power {spec.power}")
+        await s.click(a, POWER_RADIOS[spec.power], f"{what} power {spec.power}")
     locks = (
         (EVT_LOCK_START_STOP, spec.lock_start_stop, "start/stop lock"),
         (EVT_LOCK_MODE, spec.lock_mode, "mode lock"),
@@ -886,7 +883,7 @@ async def _set_action(s: _Session, spec: InterlockActionSpec) -> None:
             continue
         await _tick(s, a, checkbox, f"{what} {label}")
         order = LOCK_ORDER if len(radios) == len(LOCK_ORDER) else _TWO_WAY
-        await _click(s, a, radios[order.index(lock)], f"{what} {label} {lock}")
+        await s.click(a, radios[order.index(lock)], f"{what} {label} {lock}")
     if spec.mode is not None or spec.setpoint is not None:
         await _tab_of(s, a, A_TAB, A_TAB_SETTINGS)
     if spec.mode is not None:
@@ -897,7 +894,7 @@ async def _set_action(s: _Session, spec: InterlockActionSpec) -> None:
         await _choose(s, a, EVT_MODE_COMBO, index, f"{what} mode")
     if spec.setpoint is not None:
         await _tick(s, a, EVT_SETPOINT, f"{what} setpoint")
-        await _click(s, a, EVT_SETPOINT_FIXED, f"{what} setpoint")
+        await s.click(a, EVT_SETPOINT_FIXED, f"{what} setpoint")
         await _enter(s, a, EVT_SETPOINT_BUTTON, spec.setpoint, f"{what} setpoint")
     await _return_choice(s, a, A_OK, what)
 
@@ -913,7 +910,7 @@ async def _set_output(s: _Session, tab: int, spec: InterlockOutputSpec) -> None:
             msg = f"{what}: condition {spec.condition!r} is not offered: {options}"
             raise ItmCommandError(msg)
         index = folded.index(spec.condition.strip().casefold())
-        await s._pick_option(INTERLOCK_SETUP, condition, index, f"{what} condition")
+        await s.pick_option(INTERLOCK_SETUP, condition, index, f"{what} condition")
     if spec.outputs is not None or spec.actions:
         await _open_from_setup(s, button, INTERLOCK_OUTPUTS, what)
         if spec.outputs is not None:
@@ -929,7 +926,7 @@ async def _set_output(s: _Session, tab: int, spec: InterlockOutputSpec) -> None:
             await _set_action(s, action)
         await _return_choice(s, INTERLOCK_OUTPUTS, O_OK, what)
     if spec.interval is not None:
-        _enabled(s, INTERLOCK_SETUP, change, f"{what} interval")
+        s.refuse_disabled(INTERLOCK_SETUP, change, f"{what} interval")
         await s.answer_number(
             change, spec.interval, f"{what} interval", screen=INTERLOCK_SETUP
         )
@@ -959,7 +956,7 @@ async def set_interlock_setup(
         True when saved, False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     if len(outputs) > len(P_OUTPUT_TABS):
         msg = f"an interlock program has {len(P_OUTPUT_TABS)} output tabs"
         raise ItmCommandError(msg)

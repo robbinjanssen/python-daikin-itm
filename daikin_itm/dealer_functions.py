@@ -1,4 +1,3 @@
-# ruff: noqa: SLF001
 # pylint: disable=protected-access,too-many-lines
 """Dealer-option functions: temperature limit, sliding temperature, HMO.
 
@@ -44,7 +43,6 @@ from ._bases import ClientCore
 from ._screens import activation as _activation
 from ._screens import answer_name as _answer_name
 from ._screens import cells as _cells
-from ._screens import ensure_enabled as _enabled
 from ._screens import leave as _leave
 from ._screens import open_screen as _open
 from ._screens import part_text as _text
@@ -53,7 +51,6 @@ from ._screens import radio as _radio
 from ._screens import return_choice as _return_choice
 from ._screens import row_holding as _row_holding
 from ._screens import row_named as _row
-from ._screens import select as _select
 from ._util import check_wrong as _check_wrong
 from ._util import ignore as _discard
 from .exceptions import ItmCommandError
@@ -272,7 +269,7 @@ def _new_name_free(s: _Session, g: _Groups, name: str, new_name: str | None) -> 
 
 
 async def _select_group(s: _Session, g: _Groups, name: str) -> None:
-    await _select(s, g.main, G_LIST, _row(_group_names(s.state, g), name, g.what))
+    await s.select_row(g.main, G_LIST, _row(_group_names(s.state, g), name, g.what))
 
 
 def _group_enabled(s: _Session, g: _Groups, name: str) -> bool:
@@ -289,7 +286,7 @@ def _group_enabled(s: _Session, g: _Groups, name: str) -> bool:
 
 
 async def _open_sub(s: _Session, g: _Groups, button: int, screen: int) -> None:
-    _enabled(s, g.main, button, g.what)
+    s.refuse_disabled(g.main, button, g.what)
     await s.send(g.main, button)
     if screen not in s.state.screens:
         msg = f"{g.what}: screen {screen} did not open"
@@ -298,7 +295,7 @@ async def _open_sub(s: _Session, g: _Groups, button: int, screen: int) -> None:
 
 async def _read_group_details(s: _Session, g: _Groups, row: int) -> dict[str, Any]:
     """Select a group and read its members and settings screens."""
-    await _select(s, g.main, G_LIST, row)
+    await s.select_row(g.main, G_LIST, row)
     await _open_sub(s, g, G_MEMBERS, g.members)
     members = members_from_screen(s.state, g.members)
     await _leave(s, g.members, M_CANCEL)
@@ -376,13 +373,13 @@ async def create_group(s: _Session, g: _Groups, name: str) -> bool:
         True when sent, False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     await _open(s, g.button, g.main, g.what)
     try:
         if name.strip() in _group_names(s.state, g):
             msg = f"{g.what} {name!r} exists already"
             raise ItmCommandError(msg)
-        _enabled(s, g.main, G_CREATE, f"add {g.what}")
+        s.refuse_disabled(g.main, G_CREATE, f"add {g.what}")
         reply = await s.send(g.main, G_CREATE)
         return await _answer_name(s, g.main, reply, name, f"create {g.what} {name}")
     finally:
@@ -397,7 +394,7 @@ async def delete_group(s: _Session, g: _Groups, name: str) -> bool:
         True when sent, False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     await _open(s, g.button, g.main, g.what)
     try:
         await _select_group(s, g, name)
@@ -419,7 +416,7 @@ async def set_group_enabled(
         True when sent (or already so), False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     await _open(s, g.button, g.main, g.what)
     try:
         await _select_group(s, g, name)
@@ -442,7 +439,7 @@ async def set_group_members(
         True when saved, False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     await _open(s, g.button, g.main, g.what)
     try:
         await _select_group(s, g, name)
@@ -451,8 +448,10 @@ async def set_group_members(
         for member in members_from_screen(s.state, g.members):
             if member not in wanted:
                 current = list(members_from_screen(s.state, g.members))
-                await _select(s, g.members, M_MEMBERS, _row(current, member, "member"))
-                _enabled(s, g.members, M_REMOVE, f"remove from {g.what}")
+                await s.select_row(
+                    g.members, M_MEMBERS, _row(current, member, "member")
+                )
+                s.refuse_disabled(g.members, M_REMOVE, f"remove from {g.what}")
                 await s.send(g.members, M_REMOVE)
         for member in wanted:
             if member in members_from_screen(s.state, g.members):
@@ -463,8 +462,8 @@ async def set_group_members(
             except ItmCommandError as err:
                 msg = f"{name}: {member!r} is not offered: {err}"
                 raise ItmCommandError(msg) from err
-            await _select(s, g.members, M_AVAILABLE, row)
-            _enabled(s, g.members, M_ADD, f"add to {g.what}")
+            await s.select_row(g.members, M_AVAILABLE, row)
+            s.refuse_disabled(g.members, M_ADD, f"add to {g.what}")
             await s.send(g.members, M_ADD)
         got = list(members_from_screen(s.state, g.members))
         if got != wanted:
@@ -483,7 +482,7 @@ async def _number(  # noqa: PLR0913  # pylint: disable=too-many-arguments
 ) -> None:
     if value is None:
         return
-    _enabled(s, screen, button, f"{g.what} {what}")
+    s.refuse_disabled(screen, button, f"{g.what} {what}")
     await s.answer_number(button, value, f"{g.what} {what}", screen=screen)
 
 
@@ -510,7 +509,7 @@ async def set_temperature_limit_settings(
         True when saved, False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     g = TEMP_LIMIT
     await _open(s, g.button, g.main, g.what)
     try:
@@ -519,7 +518,7 @@ async def set_temperature_limit_settings(
         await _open_sub(s, g, G_SETTINGS, g.settings)
         a = g.settings
         if new_name is not None:
-            _enabled(s, a, TA_NAME_BUTTON, f"{g.what} name")
+            s.refuse_disabled(a, TA_NAME_BUTTON, f"{g.what} name")
             await s.answer_text(a, TA_NAME_BUTTON, new_name, f"{g.what} name")
         await _number(s, a, TA_LOWER_BUTTON, lower, "lower limit", g=g)
         await _number(s, a, TA_UPPER_BUTTON, upper, "upper limit", g=g)
@@ -530,7 +529,7 @@ async def set_temperature_limit_settings(
 
 
 async def _open_inputs(s: _Session) -> None:
-    _enabled(s, SLIDING_SETTINGS, SA_POINT_BUTTON, "outdoor temperature point")
+    s.refuse_disabled(SLIDING_SETTINGS, SA_POINT_BUTTON, "outdoor temperature point")
     await s.send(SLIDING_SETTINGS, SA_POINT_BUTTON)
     if SLIDING_INPUTS not in s.state.screens:
         msg = "the outdoor temperature point picker did not open"
@@ -589,7 +588,7 @@ async def set_sliding_settings(  # noqa: PLR0913  # pylint: disable=too-many-arg
         True when saved, False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     g = SLIDING
     await _open(s, g.button, g.main, g.what)
     try:
@@ -598,13 +597,13 @@ async def set_sliding_settings(  # noqa: PLR0913  # pylint: disable=too-many-arg
         await _open_sub(s, g, G_SETTINGS, g.settings)
         a = g.settings
         if new_name is not None:
-            _enabled(s, a, SA_NAME_BUTTON, f"{g.what} name")
+            s.refuse_disabled(a, SA_NAME_BUTTON, f"{g.what} name")
             await s.answer_text(a, SA_NAME_BUTTON, new_name, f"{g.what} name")
         if outdoor_point is not None:
             await _open_inputs(s)
             rows = _cells(s.state, SLIDING_INPUTS, AI_LIST)
             row = _row_holding(rows, outdoor_point, "analog input")
-            await _select(s, SLIDING_INPUTS, AI_LIST, row)
+            await s.select_row(SLIDING_INPUTS, AI_LIST, row)
             await _return_choice(s, SLIDING_INPUTS, AI_OK, "outdoor temperature point")
         for values, parts, what in (
             (outdoor_range, SA_OUTDOOR, "outdoor temperature"),
@@ -651,13 +650,13 @@ async def set_heating_optimisation(
         True when sent (or already so), False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     await _open(s, MB_HEATING_OPTIMISATION, HMO, HMO_WHAT)
     try:
         sent = True
         for name in dict.fromkeys(n.strip() for n in names):
             units = [u.name for u in heating_optimisation_from_screen(s.state)]
-            await _select(s, HMO, H_LIST, _row(units, name, "unit"))
+            await s.select_row(HMO, H_LIST, _row(units, name, "unit"))
             shown = _radio(s.state, HMO, H_ENABLE, H_DISABLE)
             if shown is None:
                 listed = heating_optimisation_from_screen(s.state)
@@ -680,7 +679,7 @@ async def set_heating_optimisation_all(s: _Session, *, enabled: bool) -> bool:
         True when sent (or already so), False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     await _open(s, MB_HEATING_OPTIMISATION, HMO, HMO_WHAT)
     try:
         units = heating_optimisation_from_screen(s.state)

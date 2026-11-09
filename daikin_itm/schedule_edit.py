@@ -1,5 +1,3 @@
-# ruff: noqa: SLF001
-# pylint: disable=protected-access
 """Change what a schedule program does: its events, period, special days, calendar.
 
 These functions drive a program's editor (screen 104) in an open session; the
@@ -27,8 +25,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ._bases import ClientCore, SessionCore
-from ._screens import select as _select_row
 from ._screens import select_rows as _select_rows
+from ._screens import set_checkbox as _set_checkbox
+from ._screens import ticked as _ticked
 from .exceptions import ItmCommandError
 from .lang import mode_from_label
 from .menu import (
@@ -251,7 +250,7 @@ async def _tab(s: _Session, tab: int) -> None:
 async def _confirm(s: _Session, screen: int, reply: Reply, what: str) -> None:
     """Answer a confirm with Yes; raise on an error or info dialog."""
     try:
-        await s._answer_confirm(screen, reply)
+        await s.answer_confirm(screen, reply)
     except ItmCommandError as err:
         msg = f"{what}: {err}"
         raise ItmCommandError(msg) from err
@@ -269,8 +268,8 @@ def _parse_day(day: Day) -> tuple[bool, int]:
 
 async def open_editor(s: _Session, program: str) -> None:
     """Select a program in the program list and open its editor."""
-    s._writable()
-    await s._select_program(program)
+    s.require_writable()
+    await s.select_program(program)
     await s.send(MenuScreen.SCHEDULE, SCH_EDIT_BUTTON)
     if EDITOR not in s.state.screens:
         msg = f"{program}: the schedule editor did not open"
@@ -347,7 +346,7 @@ async def _select_event(s: _Session, time: str, target: str, button: int) -> Non
         shown = [(e.time, e.target) for e in day_events_from_screen(s.state)]
         msg = f"no event at {time} for {target!r}; the day has {shown}"
         raise ItmCommandError(msg)
-    await _select_row(s, EVENTS, EV_LIST, event.row)
+    await s.select_row(EVENTS, EV_LIST, event.row)
     if not _usable(s.state, EVENTS, button):
         msg = f"the iTM does not offer the event at {time} for {target!r}"
         raise ItmCommandError(msg)
@@ -412,7 +411,7 @@ async def set_event_target(s: _Session, target: str, *, zone: bool) -> None:
         kind = "zone" if zone else "point"
         msg = f"event target: no {kind} named {target!r}"
         raise ItmCommandError(msg)
-    await _select_row(s, PICKER, part, row)
+    await s.select_row(PICKER, part, row)
     reply = await s.send(PICKER, PK_OK)
     if reply.dialogs() or PICKER in s.state.screens:
         msg = f"event target: the iTM did not take {target!r}: {reply.dialogs()}"
@@ -421,9 +420,12 @@ async def set_event_target(s: _Session, target: str, *, zone: bool) -> None:
 
 async def _tick(s: _Session, checkbox: int, *, on: bool, what: str) -> None:
     """Tick or untick a setting's checkbox, unless it already is."""
-    ticked = s.state.get(EVENT, checkbox, "CHECK_STATE") == 1
-    if ticked != on:
-        await _pick(s, EVENT, checkbox, int(on), what)
+    if _ticked(s.state, EVENT, checkbox) == on:
+        return
+    if not _usable(s.state, EVENT, checkbox):
+        msg = f"{what}: the iTM does not offer this here"
+        raise ItmCommandError(msg)
+    await _set_checkbox(s, EVENT, checkbox, on=on, what=what)
 
 
 def _mode_index(state: UIState, mode: str) -> int | None:
@@ -766,7 +768,7 @@ async def delete_calendar_rule(s: _Session, program: str, rule: CalendarRule) ->
         if wanted not in rows:
             msg = f"{program}: no calendar rule {wanted}; the calendar has {rows}"
             raise ItmCommandError(msg)
-        await _select_row(s, EDITOR, SE_CAL_LIST, rows.index(wanted))
+        await s.select_row(EDITOR, SE_CAL_LIST, rows.index(wanted))
         reply = await _click(s, EDITOR, SE_CAL_DELETE, "delete calendar rule")
         await _confirm(s, EDITOR, reply, "delete calendar rule")
         if len(_calendar_rows(s.state)) != len(rows) - 1:
@@ -807,7 +809,7 @@ async def copy_program(
         True when saved, False in a dry run.
 
     """
-    await s._select_program(program)
+    await s.select_program(program)
     names = [p.name for p in schedules_from_screen(s.state)]
     if name in names:
         await s.close_screen(MenuScreen.SCHEDULE)
@@ -961,7 +963,7 @@ async def copy_calendar(s: _Session, program: str, targets: tuple[str, ...]) -> 
     if program in targets:
         msg = f"{program}: a calendar can't be copied onto its own program"
         raise ItmCommandError(msg)
-    await s._select_program(program)
+    await s.select_program(program)
     try:
         await _click(s, MenuScreen.SCHEDULE, SCH_CALENDAR_COPY, "calendar copy")
         if CALENDAR_COPY not in s.state.screens:
@@ -1364,7 +1366,8 @@ class ScheduleMixin(ClientCore):
 class ScheduleSessionMixin(SessionCore):
     """_Session's schedule screen reads and writes."""
 
-    async def _select_program(self, name: str) -> None:
+    async def select_program(self, name: str) -> None:
+        """Open the schedule list and select a program in it."""
         await self.open_menu_screen(MB_SCHEDULE, MenuScreen.SCHEDULE)
         names = [p.name for p in schedules_from_screen(self.state)]
         if name not in names:
@@ -1380,7 +1383,7 @@ class ScheduleSessionMixin(SessionCore):
 
     async def read_schedule_day(self, name: str, *, days_ahead: int = 0) -> ScheduleDay:
         """Read what a program does on a day, from its day overview."""
-        await self._select_program(name)
+        await self.select_program(name)
         try:
             await self.send(MenuScreen.SCHEDULE, SCH_DAY_BUTTON)
             if MenuScreen.SCHEDULE_DAY not in self.state.screens:
@@ -1449,7 +1452,7 @@ class ScheduleSessionMixin(SessionCore):
 
     async def set_schedule_enabled(self, name: str, *, enabled: bool) -> None:
         """Open a program's editor, pick enabled or disabled, OK (and confirm)."""
-        await self._select_program(name)
+        await self.select_program(name)
         try:
             await self.send(MenuScreen.SCHEDULE, SCH_EDIT_BUTTON)
             e = MenuScreen.SCHEDULE_EDITOR
@@ -1463,7 +1466,7 @@ class ScheduleSessionMixin(SessionCore):
             verb = "enable" if enabled else "disable"
             reply = await self.write(f"{verb} schedule {name}", e, SE_OK)
             if reply is not None:
-                await self._answer_confirm(e, reply)
+                await self.answer_confirm(e, reply)
                 if e in self.state.screens:
                     msg = f"{name}: the editor did not close after OK"
                     raise ItmCommandError(msg)
@@ -1504,7 +1507,7 @@ class ScheduleSessionMixin(SessionCore):
                 raise ItmCommandError(msg)
             saved = await self.write(f"create schedule {name}", e, SE_OK)
             if saved is not None:
-                await self._answer_confirm(e, saved)
+                await self.answer_confirm(e, saved)
                 if e in self.state.screens:
                     msg = f"{name}: the editor did not close after OK"
                     raise ItmCommandError(msg)
@@ -1514,7 +1517,7 @@ class ScheduleSessionMixin(SessionCore):
 
     async def delete_schedule(self, name: str) -> None:
         """Select a program, press Delete and confirm."""
-        await self._select_program(name)
+        await self.select_program(name)
         try:
             # A disabled button hangs the iTM's web server when clicked.
             if self.state.get(MenuScreen.SCHEDULE, SCH_DELETE_BUTTON, "ENABLED") == 0:
@@ -1524,7 +1527,7 @@ class ScheduleSessionMixin(SessionCore):
                 f"delete schedule {name}", MenuScreen.SCHEDULE, SCH_DELETE_BUTTON
             )
             if reply is not None:
-                await self._answer_confirm(MenuScreen.SCHEDULE, reply)
+                await self.answer_confirm(MenuScreen.SCHEDULE, reply)
         finally:
             await self.close_screen(MenuScreen.SCHEDULE)
 
@@ -1537,7 +1540,7 @@ class ScheduleSessionMixin(SessionCore):
         With events, every weekday's and special day's event list is opened; with
         details, each event's own settings screen too (two requests per event).
         """
-        await self._select_program(name)
+        await self.select_program(name)
         try:
             await self.send(MenuScreen.SCHEDULE, SCH_EDIT_BUTTON)
             if MenuScreen.SCHEDULE_EDITOR not in self.state.screens:

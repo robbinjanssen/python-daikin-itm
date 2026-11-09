@@ -1,5 +1,3 @@
-# ruff: noqa: SLF001
-# pylint: disable=protected-access
 """PPD (power proportional distribution) and the iTM's file exports.
 
 PPD: the PPD screen is a calculation, not a settings screen. It has no OK: the period
@@ -32,8 +30,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ._bases import ClientCore
+from ._screens import answer_date
 from ._screens import checkbox as _checkbox
-from ._screens import click as _click
 from ._screens import close as _close
 from ._util import ignore as _ignore
 from .exceptions import ItmCommandError
@@ -146,34 +144,6 @@ def ppd_advanced_from_screen(state: UIState) -> PpdAdvanced:
 # -- inputs ---------------------------------------------------------------------------
 
 
-async def answer_date(
-    s: _Session, screen: int, button: int, value: date, what: str
-) -> None:
-    """Press a date's "change" button and enter the date in the DATE dialog.
-
-    The dialog says the allowed range ([year, month 0-11, day] from and to); a date
-    outside it is refused before it is sent, and the dialog cancelled.
-    """
-    if s.state.get(screen, button, "ENABLED") == 0:
-        msg = f"{what}: the iTM has this input disabled"
-        raise ItmCommandError(msg)
-    reply = await s.send(screen, button)
-    dialogs = [
-        u for u in reply.screens if u.update == "DLG_OPEN" and u.data[1] == "DATE"
-    ]
-    if not dialogs:
-        msg = f"{what}: no date input opened: {reply.dialogs()}"
-        raise ItmCommandError(msg)
-    d = dialogs[0]
-    wanted = (value.year, value.month - 1, value.day)
-    low, high = tuple(d.data[7:10]), tuple(d.data[10:13])
-    if not low <= wanted <= high:
-        await s.send(d.screen, d.data[0], EventType.CLICK2)
-        msg = f"{what}: {value} outside the iTM's range"
-        raise ItmCommandError(msg)
-    await s.send(d.screen, d.data[0], EventType.CLICK, DataType.DATE, 3, array=wanted)
-
-
 # -- downloads ------------------------------------------------------------------------
 
 
@@ -184,7 +154,7 @@ async def _poll_for_download(s: _Session, *, attempts: int) -> str | None:
         found = [u for u in reply.screens if u.update == "DLG_DOWNLOAD"]
         if found:
             return str(found[0].data[2])
-        await asyncio.sleep(s._client.progress_interval)
+        await asyncio.sleep(s.client.progress_interval)
     return None
 
 
@@ -207,7 +177,7 @@ async def download(  # pylint: disable=too-many-locals
             file could not be fetched.
 
     """
-    reply = await _click(s, screen, button, "export")
+    reply = await s.click(screen, button, "export")
     # The history output asks first ("history output, is this correct?"): Yes.
     confirms = [
         u for u in reply.screens if u.update == "DLG_OPEN" and u.data[1] == "CONFIRM"
@@ -241,7 +211,7 @@ async def download(  # pylint: disable=too-many-locals
             break
         if asyncio.get_running_loop().time() >= deadline:
             break
-        await asyncio.sleep(s._client.progress_interval)
+        await asyncio.sleep(s.client.progress_interval)
         reply = await s.send(dlg_screen, dlg_id, EventType.UPD_PROG, DataType.INT, job)
     if uri is None:
         if not finished:
@@ -290,7 +260,7 @@ async def read_ppd(
     if calculation_day is not None and (start is not None or end is not None):
         msg = "PPD: give a period (start/end) or a calculation day, not both"
         raise ItmCommandError(msg)
-    await s._open_system_screen(MB_PPD, MenuScreen.PPD)
+    await s.open_system_screen(MB_PPD, MenuScreen.PPD)
     try:
         if start is not None or end is not None:
             await s.send(PPD_SCREEN, PD_PERIOD_RADIO)
@@ -303,7 +273,7 @@ async def read_ppd(
             await s.answer_number(
                 PD_DAY_BUTTON, calculation_day, "PPD calculation day", screen=PPD_SCREEN
             )
-        reply = await _click(s, PPD_SCREEN, PD_EXECUTE, "PPD calculation")
+        reply = await s.click(PPD_SCREEN, PD_EXECUTE, "PPD calculation")
         await s.wait_for_progress(reply)
         return ppd_from_screen(s.state)
     finally:
@@ -312,11 +282,11 @@ async def read_ppd(
 
 async def _open_ppd_advanced(s: _Session) -> None:
     """Open the PPD advanced screen (the iTM first warns about exclusions)."""
-    await s._open_system_screen(MB_PPD, MenuScreen.PPD)
-    reply = await _click(s, PPD_SCREEN, PD_ADVANCED, "PPD advanced")
+    await s.open_system_screen(MB_PPD, MenuScreen.PPD)
+    reply = await s.click(PPD_SCREEN, PD_ADVANCED, "PPD advanced")
     # The warning ("exclusion periods are left out of the calculation; continue?")
     # only leads on to the screen; nothing is saved by answering it.
-    await s._answer_confirm(PPD_SCREEN, reply)
+    await s.answer_confirm(PPD_SCREEN, reply)
     if PPD_ADVANCED not in s.state.screens:
         msg = "the PPD advanced settings did not open"
         raise ItmCommandError(msg)
@@ -397,7 +367,7 @@ async def export_history(s: _Session, start: date, end: date, fetch: Fetch) -> D
         msg = "the history did not open"
         raise ItmCommandError(msg)
     try:
-        await _click(s, HISTORY, HS_CSV, "history CSV")
+        await s.click(HISTORY, HS_CSV, "history CSV")
         if HISTORY_OUTPUT not in s.state.screens:
             msg = "the history output screen did not open"
             raise ItmCommandError(msg)
@@ -411,7 +381,7 @@ async def export_history(s: _Session, start: date, end: date, fetch: Fetch) -> D
 
 async def export_energy_data(s: _Session, period: str, fetch: Fetch) -> Download:
     """Export the energy navigator's data of a period (as its combo lists it)."""
-    await s._open_system_screen(MB_ENERGY_EXPORT, MenuScreen.ENERGY_EXPORT)
+    await s.open_system_screen(MB_ENERGY_EXPORT, MenuScreen.ENERGY_EXPORT)
     x = MenuScreen.ENERGY_EXPORT
     try:
         options = [
@@ -430,7 +400,7 @@ async def export_point_list(
     s: _Session, start: date, end: date, fetch: Fetch
 ) -> Download:
     """Export the energy navigator's management point list of a period."""
-    await s._open_system_screen(MB_ENERGY_EXPORT, MenuScreen.ENERGY_EXPORT)
+    await s.open_system_screen(MB_ENERGY_EXPORT, MenuScreen.ENERGY_EXPORT)
     x = MenuScreen.ENERGY_EXPORT
     try:
         await s.send(x, EX_TAB, EventType.TAB_SELECT, DataType.INT, 1)

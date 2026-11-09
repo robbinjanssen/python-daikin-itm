@@ -61,6 +61,14 @@ async def test_fetch_and_set_own_settings(itm: FakeUsersITM) -> None:
     assert itm.session is None
 
 
+async def test_own_settings_follow_a_new_web_version(itm: FakeUsersITM) -> None:
+    """After a firmware update the own-settings login adopts the new version too."""
+    itm.web_version = "Ver1.40.00"
+    c = FakeClient(itm)
+    assert (await c.fetch_own_settings()).language == "en"
+    assert c.web_version == "Ver1.40.00"
+
+
 async def test_own_language(itm: FakeUsersITM) -> None:
     """The language screen opened from 1205, also read back there as a code."""
     c = FakeClient(itm, allow_experimental=False)

@@ -29,7 +29,6 @@ from typing import TYPE_CHECKING, Any
 
 from ._bases import ClientCore
 from ._screens import clean as _clean
-from ._screens import click as _click
 from .exceptions import ItmCommandError
 from .models import P_NAME, PointKind, point_kind
 from .protocol import DataType, EventType, ScreenID
@@ -146,7 +145,7 @@ async def leave_layout(s: _Session) -> None:
     """Show the standard view again with the main menu bar's toggle (part 1)."""
     if LAYOUT_VIEW not in s.state.screens:
         return
-    await _click(s, MAINMENU, MM_STANDARD_VIEW, "show the standard view")
+    await s.click(MAINMENU, MM_STANDARD_VIEW, "show the standard view")
     # The layout view stays in the merged state; a later read in this session
     # must not mistake it for a fresh one.
     s.state.screens.pop(LAYOUT_VIEW, None)
@@ -170,7 +169,7 @@ async def read_layout(s: _Session, *, names: bool = False) -> Layout:
             read.
 
     """
-    await _click(s, MAINMENU, MM_LAYOUT_VIEW, "show the layout view")
+    await s.click(MAINMENU, MM_LAYOUT_VIEW, "show the layout view")
     try:
         if LAYOUT_VIEW not in s.state.screens:
             msg = "the layout view did not open"

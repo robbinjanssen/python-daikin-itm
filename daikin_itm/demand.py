@@ -1,4 +1,3 @@
-# ruff: noqa: SLF001
 # pylint: disable=protected-access,too-many-lines
 """Demand (power limit) control and energy saving: readers and writes.
 
@@ -51,16 +50,13 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from ._bases import ClientCore
-from ._screens import click as _click
 from ._screens import close as _close
-from ._screens import ensure_enabled as _ensure_enabled
 from ._screens import enter_number as _number
 from ._screens import graph as _graph
 from ._screens import open_below as _open_below
 from ._screens import press_ok as _ok
 from ._screens import radio as _radio
 from ._screens import row_named as _row
-from ._screens import select as _select
 from ._util import T as _T
 from ._util import ignore as _ignore
 from .energy_navigator import ShownValue
@@ -429,8 +425,8 @@ async def _pick(s: _Session, screen: int, part: int, value: str, what: str) -> N
     index = _option_index(s, screen, part, value, what)
     if s.state.get(screen, part, "SINGLE_SELIDX") == index:
         return
-    _ensure_enabled(s, screen, part, what)
-    await s._pick_option(screen, part, index, what)
+    s.refuse_disabled(screen, part, what)
+    await s.pick_option(screen, part, index, what)
 
 
 def _close_to(shown: ShownValue | None, wanted: float) -> bool:
@@ -572,7 +568,7 @@ async def read_setup(s: _Session) -> DemandSetup:
     try:
         controls = []
         for i, cells in enumerate(_rows(s.state, SETUP, SU_LIST)):
-            await _select(s, SETUP, SU_LIST, i)
+            await s.select_row(SETUP, SU_LIST, i)
             controls.append(
                 DemandControlRow(
                     name=cells[0] if cells else "",
@@ -591,7 +587,7 @@ async def read_setup(s: _Session) -> DemandSetup:
 
 async def _open_control(s: _Session, control: str) -> int:
     """Modify the control selected on the setup (3301); return the screen opened."""
-    reply = await _click(s, SETUP, SU_MODIFY, f"modify {control}")
+    reply = await s.click(SETUP, SU_MODIFY, f"modify {control}")
     for screen in LAYOUTS:
         if screen in s.state.screens:
             return screen
@@ -606,7 +602,7 @@ async def _walk(
     await _open_below(s, MAIN, MN_SETUP, SETUP)
     try:
         for row, control in enumerate(_names(s.state, SETUP, SU_LIST, last=False)):
-            await _select(s, SETUP, SU_LIST, row)
+            await s.select_row(SETUP, SU_LIST, row)
             if s.state.get(SETUP, SU_MODIFY, "ENABLED") == 0:
                 continue  # never click a disabled Modify
             screen = await _open_control(s, control)
@@ -615,7 +611,7 @@ async def _walk(
                 if not groups:
                     await visit(screen, control, None)
                 for i, group in enumerate(groups):
-                    await _select(s, screen, LS_GROUPS, i)
+                    await s.select_row(screen, LS_GROUPS, i)
                     await visit(screen, control, group)
             finally:
                 await _close(s, screen, LAYOUTS[screen].cancel)
@@ -823,7 +819,7 @@ async def set_forced_level(s: _Session, level: str) -> bool:
         index = _option_index(s, SETUP, SU_FORCED, level, "forced level")
         if s.state.get(SETUP, SU_FORCED, "SINGLE_SELIDX") == index:
             return True
-        _ensure_enabled(s, SETUP, SU_FORCED, "forced level")
+        s.refuse_disabled(SETUP, SU_FORCED, "forced level")
         reply = await s.write(
             f"set forced level {level}",
             SETUP,
@@ -834,7 +830,7 @@ async def set_forced_level(s: _Session, level: str) -> bool:
         )
         if reply is None:
             return False
-        await s._answer_confirm(SETUP, reply)
+        await s.answer_confirm(SETUP, reply)
         return True
     finally:
         await _leave_all(s)
@@ -861,11 +857,11 @@ async def _open_setup_for(s: _Session, control: str, group: str | None) -> int:
     await _require_main(s)
     await _open_below(s, MAIN, MN_SETUP, SETUP)
     row = _row(_names(s.state, SETUP, SU_LIST, last=False), control, "control")
-    await _select(s, SETUP, SU_LIST, row)
+    await s.select_row(SETUP, SU_LIST, row)
     screen = await _open_control(s, control)
     if group is not None:
         names = _names(s.state, screen, LS_GROUPS)
-        await _select(s, screen, LS_GROUPS, _row(names, group, "group"))
+        await s.select_row(screen, LS_GROUPS, _row(names, group, "group"))
     return screen
 
 
@@ -970,8 +966,8 @@ async def _pick_members(s: _Session, members: tuple[str, ...]) -> None:
     for member in _names(s.state, GROUP, GP_MEMBERS):
         if member and member not in wanted:
             names = _names(s.state, GROUP, GP_MEMBERS)
-            await _select(s, GROUP, GP_MEMBERS, _row(names, member, "member"))
-            await _click(s, GROUP, GP_REMOVE, "remove demand group member")
+            await s.select_row(GROUP, GP_MEMBERS, _row(names, member, "member"))
+            await s.click(GROUP, GP_REMOVE, "remove demand group member")
     for member in wanted:
         if member in _names(s.state, GROUP, GP_MEMBERS):
             continue
@@ -981,8 +977,8 @@ async def _pick_members(s: _Session, members: tuple[str, ...]) -> None:
         except ItmCommandError as err:
             msg = f"{member!r} is not offered: {err}"
             raise ItmCommandError(msg) from err
-        await _select(s, GROUP, GP_AVAILABLE, row)
-        await _click(s, GROUP, GP_ADD, "add demand group member")
+        await s.select_row(GROUP, GP_AVAILABLE, row)
+        await s.click(GROUP, GP_ADD, "add demand group member")
     got = [n for n in _names(s.state, GROUP, GP_MEMBERS) if n]
     if set(got) != set(wanted):
         msg = f"the members would be {got}, not {wanted}"
@@ -1010,11 +1006,11 @@ async def set_group(s: _Session, change: GroupChange) -> bool:
         if change.resume is not None:
             await _pick(s, GROUP, GP_RESUME, change.resume, "resume")
         label = f"save demand group {change.group} of {change.control}"
-        _ensure_enabled(s, GROUP, GP_OK, label)
+        s.refuse_disabled(GROUP, GP_OK, label)
         reply = await s.write(label, GROUP, GP_OK)
         if reply is None:
             return False
-        await s._answer_confirm(GROUP, reply)
+        await s.answer_confirm(GROUP, reply)
         s.state.screens.pop(GROUP, None)
         layout = LAYOUTS[screen]
         return await _ok(s, label, screen, layout.ok, layout.cancel)
@@ -1112,11 +1108,11 @@ async def set_suspended(s: _Session, *, suspended: bool) -> bool:
         if not await _open_suspend(s):
             msg = "the energy saving suspend screen did not open"
             raise ItmCommandError(msg)
-        _ensure_enabled(s, SUSPEND, SS_BUTTON, f"{verb} energy saving")
+        s.refuse_disabled(SUSPEND, SS_BUTTON, f"{verb} energy saving")
         reply = await s.write(f"{verb} energy saving", SUSPEND, SS_BUTTON)
         if reply is None:
             return False
-        await s._answer_confirm(SUSPEND, reply)
+        await s.answer_confirm(SUSPEND, reply)
         return True
     finally:
         await _close(s, SUSPEND, SS_CANCEL)
@@ -1168,11 +1164,11 @@ async def disable_energy_saving(s: _Session) -> bool:
         if not await _open_service(s, MB_ENERGY_SAVING_STATUS, (SERVICE_STATUS,)):
             msg = "the energy saving status screen did not open"
             raise ItmCommandError(msg)
-        _ensure_enabled(s, SERVICE_STATUS, EST_DISABLE, "disable energy saving")
+        s.refuse_disabled(SERVICE_STATUS, EST_DISABLE, "disable energy saving")
         reply = await s.write("disable energy saving", SERVICE_STATUS, EST_DISABLE)
         if reply is None:
             return False
-        await s._answer_confirm(SERVICE_STATUS, reply)
+        await s.answer_confirm(SERVICE_STATUS, reply)
         return True
     finally:
         await _close(s, SERVICE_STATUS, EST_CANCEL)
@@ -1232,13 +1228,13 @@ async def _set_port(  # noqa: PLR0913  # pylint: disable=too-many-arguments
         return await s.write(f"clear {what}", screen, delete) is not None
     await _open_below(s, screen, button, PORT_PICKER)
     names = ports_from_screen(s.state)
-    await _select(s, PORT_PICKER, PP_LIST, _row(list(names), port, "port"))
-    _ensure_enabled(s, PORT_PICKER, PP_OK, what)
+    await s.select_row(PORT_PICKER, PP_LIST, _row(list(names), port, "port"))
+    s.refuse_disabled(PORT_PICKER, PP_OK, what)
     reply = await s.write(f"pick {what} {port}", PORT_PICKER, PP_OK)
     if reply is None:
         await _close(s, PORT_PICKER, PP_CANCEL)
         return False
-    await s._answer_confirm(PORT_PICKER, reply)
+    await s.answer_confirm(PORT_PICKER, reply)
     s.state.screens.pop(PORT_PICKER, None)
     return True
 
@@ -1279,7 +1275,7 @@ async def set_pulse_setup(s: _Session, change: PulseChange) -> bool:
                 await _number(s, PULSE_SETUP, button, value, what)
         if change.sync_external is not None:
             radio = PS_SYNC_EXTERNAL if change.sync_external else PS_SYNC_PERIOD
-            await _click(s, PULSE_SETUP, radio, "synchronisation method")
+            await s.click(PULSE_SETUP, radio, "synchronisation method")
         return await _ok(s, "save demand pulse setup", PULSE_SETUP, PS_OK, PS_CANCEL)
     finally:
         await _leave_service(s)

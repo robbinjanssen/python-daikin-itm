@@ -48,6 +48,10 @@ class ExperimentalError(ItmError):
     """
 
 
+class HistoryExportError(ItmError):
+    """The history export could not be read."""
+
+
 class ItmCommandError(ItmError):
     """The iTM answered a command with a dialog, or the UI was not as expected."""
 

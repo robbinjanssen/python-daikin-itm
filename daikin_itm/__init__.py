@@ -50,6 +50,7 @@ from .energy_navigator import (
 )
 from .exceptions import (
     ExperimentalError,
+    HistoryExportError,
     ItmCommandError,
     ItmError,
     LoginRejected,
@@ -62,7 +63,6 @@ from .exceptions import (
 )
 from .history_export import (
     HistoryExport,
-    HistoryExportError,
     HistoryRecord,
     parse_history_export,
 )

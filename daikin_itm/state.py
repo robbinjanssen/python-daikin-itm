@@ -38,10 +38,7 @@ class UIState:
                     parts[p.part, p.type] = p.value
 
     def select_locally(self, screen: int, part: int, index: int) -> None:
-        """Mirror a combobox/spinbox selection or a checkbox click, as the browser does.
-
-        The iTM doesn't always echo a checkbox's new state, so a part without a
-        selection index takes the number as its CHECK_STATE.
+        """Mirror a combobox/spinbox selection like the browser updates its control.
 
         Args:
         ----
@@ -51,12 +48,14 @@ class UIState:
 
         """
         parts = self.screens.get(screen)
-        if parts is None:
-            return
-        if (part, "SINGLE_SELIDX") in parts:
+        if parts is not None and (part, "SINGLE_SELIDX") in parts:
             parts[part, "SINGLE_SELIDX"] = index
-        else:
-            parts[part, "CHECK_STATE"] = index
+
+    def set_check(self, screen: int, part: int, *, on: bool) -> None:
+        """Keep a checkbox's state after ticking it: the iTM doesn't echo it."""
+        parts = self.screens.get(screen)
+        if parts is not None:
+            parts[part, "CHECK_STATE"] = int(on)
 
     def get(self, screen: int, part: int, ptype: str, default: Any = None) -> Any:
         """Return the last known value of a part.

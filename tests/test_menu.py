@@ -280,6 +280,11 @@ async def test_fetch_history(itm: FakeITM) -> None:
     # The list follows the day only after a Refresh, as on the real iTM.
     assert itm.history_loaded_day == "31/12/2024"
 
+    itm.requests.clear()
+    two_years_back = await FakeClient(itm).fetch_history(day=date(2023, 1, 1))
+    assert two_years_back[0].day == "01/01/2023"
+    assert len(itm.requests) < 20
+
 
 async def test_fetch_history_pages(itm: FakeITM) -> None:
     """Older pages come from "<", and only while the iTM enables it."""

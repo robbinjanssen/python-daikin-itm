@@ -579,6 +579,20 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
             msg = "the client is read-only"
             raise ReadOnlyError(msg)
 
+    def _require_opt_in(self, *, allowed: bool, flag: str, why: str) -> None:
+        """Refuse a risky write unless its opt-in is passed (a dry run is allowed).
+
+        Raises
+        ------
+            ReadOnlyError: The client is read-only.
+            ItmCommandError: The opt-in is off and this is no dry run.
+
+        """
+        self._writable()
+        if not self.dry_run and not allowed:
+            msg = f"{why}; use a dry run, or pass {flag}=True"
+            raise ItmCommandError(msg)
+
     def _experimental(self, what: str) -> None:
         """Refuse a write not validated on a real iTM yet, unless allowed.
 

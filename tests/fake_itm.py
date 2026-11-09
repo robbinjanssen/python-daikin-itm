@@ -248,6 +248,16 @@ def _encode_data(  # noqa: PLR0912, PLR0915  # pylint: disable=too-many-branches
     elif kind == "DLG_CLOSE":
         w.short(data[0])
         w.short(data[1])
+    elif kind == "DLG_OPEN" and data[1] == 9:  # DATE: N S + 9 H + h + 13 S
+        w.short(data[0])
+        w.short(data[1])
+        w.int(data[2])
+        w.string(data[3])
+        for n in data[4:13]:
+            w.short(n)
+        w.short(0)
+        for text in [*data[13:], *[""] * 13][:13]:
+            w.string(text)
     elif kind == "DLG_OPEN" and data[1] == 4:  # CHARINPUT, see _DIALOG_LAYOUTS
         w.short(data[0])
         w.short(data[1])

@@ -62,7 +62,10 @@ class TraceFile:
         """
         self.path = Path(path)
         fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-        os.close(fd)
+        try:
+            os.fchmod(fd, 0o600)
+        finally:
+            os.close(fd)
 
     def write(self, entry: dict[str, Any]) -> None:
         """Append one entry."""

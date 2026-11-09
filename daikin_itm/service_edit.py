@@ -1,5 +1,3 @@
-# ruff: noqa: SLF001
-# pylint: disable=protected-access
 """Leakage check, layout setup, R32 output ports and the password setting.
 
 Session-level flows on the installer's service screens (behind the service login,
@@ -53,14 +51,13 @@ from typing import TYPE_CHECKING, Any
 
 from . import exports
 from ._bases import ClientCore
+from ._screens import answer_date
 from ._screens import cell_lists as _rows
-from ._screens import click as _click
 from ._screens import close as _leave
 from ._screens import part_text_or_blank as _text
 from ._screens import radio as _radio
-from ._screens import select as _select
 from ._screens import select_rows as _select_rows
-from .exceptions import ItmCommandError, ReadOnlyError
+from .exceptions import ItmCommandError
 from .menu import CLOSE_PART, MenuScreen
 from .protocol import DataType, EventType
 from .service import MB_R32
@@ -254,7 +251,7 @@ async def _write_enabled(
 async def _open_menu_button(s: _Session, button: int, screen: int, what: str) -> None:
     """Press a menu list button (hidden ones too) and check its screen opened."""
     await s.open_menu()
-    reply = await _click(s, MENULIST, button, what)
+    reply = await s.click(MENULIST, button, what)
     _refuse_dialogs(reply, what)
     if screen not in s.state.screens:
         msg = f"{what}: the screen did not open: {reply.dialogs()}"
@@ -262,7 +259,7 @@ async def _open_menu_button(s: _Session, button: int, screen: int, what: str) ->
 
 
 async def _open_sub(s: _Session, screen: int, button: int, sub: int, what: str) -> None:
-    reply = await _click(s, screen, button, what)
+    reply = await s.click(screen, button, what)
     _refuse_dialogs(reply, what)
     if sub not in s.state.screens:
         msg = f"{what}: the screen did not open: {reply.dialogs()}"
@@ -299,7 +296,7 @@ async def _open_leakage(s: _Session, password: str) -> None:
 async def _select_outdoor(s: _Session, outdoor: str) -> None:
     """Select an outdoor unit (by name or address) on the open 3100."""
     rows = _rows(s.state, LEAKAGE, LK_LIST)
-    await _select(s, LEAKAGE, LK_LIST, _one(rows, outdoor, "outdoor unit"))
+    await s.select_row(LEAKAGE, LK_LIST, _one(rows, outdoor, "outdoor unit"))
 
 
 async def read_outdoor_units(
@@ -387,7 +384,7 @@ async def read_leakage_check(
         schedules: dict[str, LeakageCheckSchedule] = {}
         if details:
             for i, unit in enumerate(units):
-                await _select(s, LEAKAGE, LK_LIST, i)
+                await s.select_row(LEAKAGE, LK_LIST, i)
                 key = unit.name or unit.address
                 registrations[key] = await _read_sub(
                     s,
@@ -476,12 +473,12 @@ async def _pick_units(  # pylint: disable=too-many-locals
     adding = [i for i, row in enumerate(available) if _name(row) in names]
     if adding:
         await _select_rows(s, screen, available_part, adding)
-        await _click(s, screen, add, f"{what}: add")
+        await s.click(screen, add, f"{what}: add")
     chosen = _rows(s.state, screen, chosen_part)
     removing = [i for i, row in enumerate(chosen) if _name(row) not in names]
     if removing:
         await _select_rows(s, screen, chosen_part, removing)
-        await _click(s, screen, remove, f"{what}: remove")
+        await s.click(screen, remove, f"{what}: remove")
     got = {_name(r) for r in _rows(s.state, screen, chosen_part)}
     if got != names:
         msg = f"{what}: the list would be {sorted(got)}, not {sorted(names)}"
@@ -498,7 +495,7 @@ async def set_registration(
         True when saved, False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     try:
         await _open_leakage(s, password)
         await _select_outdoor(s, outdoor)
@@ -551,7 +548,7 @@ async def answer_hourmin(
     The dialog says its range; a time outside it is refused before it is sent.
     """
     hour, minute = parse_time(at)
-    reply = await _click(s, screen, button, what)
+    reply = await s.click(screen, button, what)
     dialogs = [
         u for u in reply.screens if u.update == "DLG_OPEN" and u.data[1] == "HOURMIN"
     ]
@@ -597,7 +594,7 @@ async def set_schedule_program(  # noqa: PLR0913  # pylint: disable=too-many-arg
         True when saved, False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     if not 1 <= program <= len(SC_PROGRAMS):
         msg = f"a leakage check program is 1-{len(SC_PROGRAMS)}, not {program}"
         raise ItmCommandError(msg)
@@ -621,9 +618,9 @@ async def set_schedule_program(  # noqa: PLR0913  # pylint: disable=too-many-arg
             ]
             wanted = activation.strip().casefold()
             index = options.index(wanted) if wanted in options else None
-            await s._pick_option(SCHEDULE, combo, index, f"{what} {activation!r}")
+            await s.pick_option(SCHEDULE, combo, index, f"{what} {activation!r}")
         if day is not None:
-            await exports.answer_date(s, SCHEDULE, date_button, day, f"{what} date")
+            await answer_date(s, SCHEDULE, date_button, day, f"{what} date")
         if at is not None:
             await answer_hourmin(s, SCHEDULE, time_button, at, f"{what} time")
         return await s.press_ok(
@@ -644,7 +641,7 @@ async def copy_schedule(
         True when saved, False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     if not targets:
         msg = "name at least one outdoor unit to copy to"
         raise ItmCommandError(msg)
@@ -674,7 +671,7 @@ async def run_check(s: _Session, password: str, outdoor: str, *, start: bool) ->
         True when sent, False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     verb = "start" if start else "stop"
     try:
         await _open_leakage(s, password)
@@ -687,7 +684,7 @@ async def run_check(s: _Session, password: str, outdoor: str, *, start: bool) ->
         )
         if reply is None:
             return False
-        await s._answer_confirm(LEAKAGE, reply)
+        await s.answer_confirm(LEAKAGE, reply)
         return True
     finally:
         await _leave(s, LEAKAGE, LK_CLOSE)
@@ -709,7 +706,7 @@ async def export_results(s: _Session, password: str, fetch: exports.Fetch) -> Do
         if s.state.get(LEAKAGE, LK_CSV, "ENABLED") == 0 and _rows(
             s.state, LEAKAGE, LK_LIST
         ):
-            await _select(s, LEAKAGE, LK_LIST, 0)
+            await s.select_row(LEAKAGE, LK_LIST, 0)
         if s.state.get(LEAKAGE, LK_CSV, "ENABLED") == 0:
             msg = "leakage check results: the iTM has no outdoor unit to export"
             raise ItmCommandError(msg)
@@ -781,7 +778,7 @@ async def layout_setup_job(s: _Session, password: str) -> bool:
         True when sent, False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     await s.service_login(password)
     reply = await _write_enabled(s, "run the layout setup", MENULIST, MB_LAYOUT)
     if reply is None:
@@ -852,7 +849,7 @@ async def set_r32_port(
         True when sent, False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     if port not in {1, 2}:
         msg = f"an R32 output port is 1 or 2, not {port}"
         raise ItmCommandError(msg)
@@ -864,7 +861,7 @@ async def set_r32_port(
             )
             if reply is None:
                 return False
-            await s._answer_confirm(R32, reply)
+            await s.answer_confirm(R32, reply)
             return True
         await _open_sub(s, R32, R32_CHANGE[port - 1], PORTS, "R32 output port setup")
         rows = _port_rows(s.state)
@@ -875,7 +872,7 @@ async def set_r32_port(
             offered = [_port_text(r) for r in rows]
             msg = f"R32 output port {value!r} not offered once; offered: {offered}"
             raise ItmCommandError(msg)
-        await _select(s, PORTS, PT_LIST, found[0])
+        await s.select_row(PORTS, PT_LIST, found[0])
         if s.state.get(PORTS, PT_OK, "ENABLED") == 0:
             msg = "R32 output port setup: the iTM has OK disabled"
             raise ItmCommandError(msg)
@@ -943,7 +940,7 @@ async def _enter_password(s: _Session, reply: Reply, password: str, kind: str) -
         await _cancel_password(s, d)
         msg = f"the {kind} password must be {low}-{high} characters"
         raise ItmCommandError(msg)
-    await s._answer_password(reply, password)
+    await s.answer_password(reply, password)
 
 
 async def _switch_password(
@@ -983,25 +980,25 @@ async def _change_password(s: _Session, kind: str, password: str) -> None:
     """Press a password's change button and enter it (dry run: plan ``***``)."""
     _, _, change = PW_PARTS[kind]
     disabled = s.state.get(PASSWORDS, change, "ENABLED") == 0
-    if s._client.dry_run and disabled:
+    if s.client.dry_run and disabled:
         # Not offered before the planned enable has happened: plan it only.
-        s._client.planned.append(
+        s.client.planned.append(
             f"{kind} password = ***: screen {PASSWORDS} button {change}"
         )
         return
-    reply = await _click(s, PASSWORDS, change, f"{kind} password")
+    reply = await s.click(PASSWORDS, change, f"{kind} password")
     d = _password_dialog(reply)
     if d is None:
         _refuse_dialogs(reply, f"{kind} password")
         msg = f"{kind} password: no password input opened: {reply.dialogs()}"
         raise ItmCommandError(msg)
-    if s._client.dry_run:
+    if s.client.dry_run:
         low, high = d.data[3], d.data[4]
         await _cancel_password(s, d)
         if not low <= len(password) <= high:
             msg = f"the {kind} password must be {low}-{high} characters"
             raise ItmCommandError(msg)
-        s._client.planned.append(
+        s.client.planned.append(
             f"{kind} password = ***: screen {d.screen} input {d.data[0]}"
         )
         return
@@ -1029,7 +1026,7 @@ async def set_password(
         True when sent, False in a dry run.
 
     """
-    s._writable()
+    s.require_writable()
     if kind not in PW_PARTS:
         msg = f"a password is one of {list(PW_PARTS)}, not {kind!r}"
         raise ItmCommandError(msg)
@@ -1049,7 +1046,7 @@ async def set_password(
             )
         if password is not None and not entered:
             await _change_password(s, kind, password)
-        return not s._client.dry_run
+        return not s.client.dry_run
     finally:
         await _leave(s, PASSWORDS, PW_CLOSE)
 
@@ -1060,17 +1057,8 @@ async def set_password(
 class ServiceEditMixin(ClientCore):
     """ItmClient's leakage check, layout setup, R32 port and password methods."""
 
-    def _service_write_allowed(self, *, allowed: bool, flag: str, why: str) -> None:
-        """Refuse a write on a read-only client, or without its explicit allowance."""
-        if self.read_only:
-            msg = "the client is read-only"
-            raise ReadOnlyError(msg)
-        if not self.dry_run and not allowed:
-            msg = f"{why}; use a dry run, or pass {flag}=True"
-            raise ItmCommandError(msg)
-
     def _service_guard(self, *, allowed: bool) -> None:
-        self._service_write_allowed(
+        self._require_opt_in(
             allowed=allowed,
             flag="allow_service_change",
             why="this changes the installer's service settings",
@@ -1301,7 +1289,7 @@ class ServiceEditMixin(ClientCore):
     async def _leakage_check_run(
         self, password: str, outdoor: str, *, start: bool, allowed: bool
     ) -> LeakageOutdoorUnit | None:
-        self._service_write_allowed(
+        self._require_opt_in(
             allowed=allowed,
             flag="allow_leakage_check",
             why=(
@@ -1505,7 +1493,7 @@ class ServiceEditMixin(ClientCore):
 
         """
         self._experimental("change a password setting")
-        self._service_write_allowed(
+        self._require_opt_in(
             allowed=allow_password_change,
             flag="allow_password_change",
             why="a password change can lock people out of the iTM's touch panel",
