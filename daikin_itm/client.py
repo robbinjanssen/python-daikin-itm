@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import hashlib
+import functools
+import ipaddress
 import json
 import logging
 import os
@@ -19,61 +20,95 @@ import tempfile
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, Self, TypeVar
+from typing import TYPE_CHECKING, Any, Protocol, Self
 
 import aiohttp
 
+from . import users_edit
+from ._util import run_to_completion as _run_to_completion
+from .changeover import ChangeoverMixin
+from .dealer_functions import DealerFunctionsMixin
+from .demand import DemandMixin
+from .emergency import EmergencyMixin
+from .energy_edit import EnergyMixin
 from .exceptions import (
+    ExperimentalError,
     ItmCommandError,
     ItmError,
     LoginRejected,
     ProtocolError,
+    ReadOnlyError,
     SessionEnded,
     SetpointOutOfRange,
     VersionMismatch,
     ZoneNotFound,
 )
+from .exports import ExportsMixin
+from .interlock import InterlockMixin
+from .layout import LayoutMixin
+from .menu import (
+    ChangeoverGroup,
+    EmergencyStopProgram,
+    History,
+    ItmConfig,
+    ItmIndicators,
+    ItmInfo,
+    OptionalFunction,
+    ScheduleDay,
+    ScheduleProgram,
+    ScheduleSummary,
+    SetbackSettings,
+)
 from .models import (
-    D_CANCEL,
-    D_FAN_CHECK,
-    D_FAN_ICON,
-    D_FAN_UP,
-    D_MODE,
-    D_MODE_CHECK,
-    D_OK,
-    D_POWER_CHECK,
-    D_POWER_START,
-    D_POWER_STOP,
-    DT_CLOSE,
-    FAN_ICONS,
+    AIRFLOW_DIRECTIONS,
+    DIALOG_SETTING_KEYS,
     FAN_SPEEDS,
-    P_DETAILS_BUTTON,
-    P_NAME,
+    P_POWER,
     P_SETPOINT,
-    P_SETTINGS_BUTTON,
+    AnalogPoint,
     Capabilities,
+    ErrorInformation,
+    PointKind,
+    PowerState,
+    RemoteLock,
+    TempLimit,
     Unit,
+    UnitSettings,
     capabilities_from_dialog,
-    details_from_screen,
+    settings_from_dialog,
     unit_from_panel,
 )
-from .protocol import (
-    MAX_REPLY_CHARS,
-    NO_TOKEN,
-    WEB_VERSION,
-    DataType,
-    EventType,
-    ScreenID,
-    encode_event,
-    is_token,
-    parse_reply,
+from .point_registry import PointRegistryMixin
+from .protocol import MAX_REPLY_CHARS, NO_TOKEN, WEB_VERSION, ScreenID
+from .schedule_edit import ScheduleMixin
+from .service_edit import ServiceEditMixin
+from .session import ICON_ID_ZONE, _Session
+from .session import zone_name as _zone_name
+from .system import (
+    NW_TEXT_FIELDS,
+    HardwareSettings,
+    NetworkSettings,
+    ScreensaverMode,
+    ScreensaverSettings,
+    SystemSettings,
 )
-from .state import UIState
+from .system_edit import SystemMixin
+from .users_edit import UsersMixin
+from .zones_edit import ZonesMixin
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
+    from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
+    from datetime import date
 
-    from .protocol import Reply
+    from ._util import T as _T
+    from .service import ServiceSettings
+
+
+# An export (history, energy data) is a CSV file; refuse anything far larger.
+MAX_EXPORT_BYTES = 32 * 1024 * 1024
+
+# What a zone holds: indoor and ventilation units, and analog inputs.
+Point = Unit | AnalogPoint
 
 __all__ = [
     "DEFAULT_ZONE_PATH",
@@ -83,6 +118,7 @@ __all__ = [
     "ItmError",
     "LoginRejected",
     "MemorySessionStore",
+    "Point",
     "SessionEnded",
     "SessionStore",
     "VersionMismatch",
@@ -91,16 +127,13 @@ __all__ = [
 
 _LOGGER = logging.getLogger(__name__)
 
-# Icon view (screen 1) part IDs (ScMainStdIcon.initScreen in script.js).
-ICON_BTN_TOP, ICON_BTN_DOWN, ICON_BTN_UP, ICON_PANEL = 1, 2, 3, 6
-ICON_ID_ZONE = 1000
-LOGIN_BUTTON = 4
+# How fetch_units reads the units: one operation panel per unit ("icons"), or the
+# list view that shows every unit of the zone at once ("list").
+UNIT_VIEWS = ("icons", "list")
 
 # The top level of the icon view. Most iTMs group the units in zones; pass the path
 # of zone names to them, see list_zones().
 DEFAULT_ZONE_PATH: tuple[str, ...] = ()
-
-_T = TypeVar("_T")
 
 
 class SessionStore(Protocol):
@@ -186,363 +219,107 @@ class FileSessionStore:
             raise
 
 
-async def _run_to_completion(coro: Coroutine[Any, Any, _T]) -> _T:
-    """Run cleanup to the end even if the caller is cancelled meanwhile.
-
-    Each request is bounded by the HTTP timeout, so this ends. The cancellation is
-    passed on once the cleanup is done. A plain asyncio.shield would return at once
-    on cancellation and leave the cleanup running unsupervised.
-
-    Args:
-    ----
-        coro: The cleanup to run.
-
-    Returns:
-    -------
-        What the cleanup returned.
-
-    Raises:
-    ------
-        asyncio.CancelledError: The caller was cancelled while the cleanup ran.
-
-    """
-    task = asyncio.ensure_future(coro)
-    cancelled = False
-    while True:
-        try:
-            result = await asyncio.shield(task)
-        except asyncio.CancelledError:
-            if task.cancelled():  # the cleanup itself was cancelled, not just us
-                raise
-            cancelled = True
-            continue
-        except BaseException as e:
-            if cancelled:
-                raise asyncio.CancelledError from e
-            raise
-        if cancelled:
-            raise asyncio.CancelledError
-        return result
+def _power_is(unit: Unit, *, on: bool) -> bool:
+    """Tell whether a unit is started (on) or stopped; setback is neither."""
+    setback = unit.power_state in {
+        PowerState.SETBACK,
+        PowerState.SETBACK_LOW,
+        PowerState.SETBACK_HIGH,
+    }
+    return unit.running == on and not setback
 
 
-class _Session:
-    """One logged-in conversation with the iTM. Only created by ItmClient."""
-
-    def __init__(
-        self,
-        client: ItmClient,
-        post: Callable[[str], Awaitable[str]],
-        store: SessionStore,
-    ) -> None:
-        self._client = client
-        self._post = post
-        self._store = store
-        self.token = NO_TOKEN
-        self.state = UIState()
-        self.logged_in = False
-
-    async def send(  # noqa: PLR0913, PLR0917  # pylint: disable=too-many-arguments
-        # The arguments mirror the fields of the wire format.
-        self,
-        screen: int = -1,
-        part: int = -1,
-        event: int = EventType.CLICK,
-        data_type: int = DataType.NONE,
-        number: int = -1,
-        string: str = "",
-    ) -> Reply:
-        """Send a GUI event and merge the reply into the UI state."""
-        body = encode_event(
-            self.token, screen, part, event, data_type, number, string=string
-        )
-        request = asyncio.ensure_future(self._post(body))
-        try:
-            text = await asyncio.shield(request)
-        except asyncio.CancelledError:
-            # The iTM may already have processed this request and moved on to a new
-            # token. Let it finish so the token stays known and the caller's cleanup
-            # can still log out, then re-raise.
-            with contextlib.suppress(Exception):
-                await self._take_token(await request)
-            raise
-        await self._take_token(text)
-        reply = parse_reply(text)
-        if event == EventType.CLICK and data_type == DataType.INT:
-            self.state.select_locally(screen, part, number)
-        self.state.apply(reply.screens)
-        for s in reply.screens:
-            if s.update == "LOGOUT":
-                self.logged_in = False
-                await self._store.save(None)
-                if s.data and s.data[0] == 2 and len(s.data) > 1:
-                    raise VersionMismatch(s.data[1])
-                msg = f"iTM ended the session: {s.data}"
-                raise SessionEnded(msg)
-        return reply
-
-    async def _take_token(self, text: str) -> None:
-        # Taken before parsing, so a parser problem can never lose the session.
-        # Something that is not a token (an HTML error page, a truncated reply) must
-        # not replace the last good one.
-        if not is_token(text[:32]):
-            msg = f"not an iTM reply: {text[:80]!r}"
-            raise ProtocolError(msg)
-        self.token = text[:32]
-        if self.logged_in:
-            await self._store.save(self.token)
-
-    async def login(self, username: str, password: str) -> None:
-        """Log in; raises LoginRejected when the iTM refuses."""
-        version = self._client.web_version
-        try:
-            await self.send(
-                event=EventType.INIT, data_type=DataType.STRING, string=version
+def _settings_mismatch(result: UnitSettings, changes: dict[str, Any]) -> dict[str, Any]:
+    """Return the asked changes the read-back settings don't show."""
+    shown = {
+        "start_stop_lock": result.remote_locks.start_stop,
+        "mode_lock": result.remote_locks.mode,
+        "setpoint_lock": result.remote_locks.setpoint,
+        "overtime": result.overtime,
+        "airflow_direction": result.airflow_direction,
+        "ventilation_mode": result.ventilation_mode,
+        "ventilation_amount": result.ventilation_amount,
+        # A reset shows as the dialog no longer offering it.
+        "reset_filter_sign": not result.filter_sign_resettable,
+        "reset_dust_alarm": not result.dust_alarm_resettable,
+        "force_dust_alarm_reset": not result.dust_alarm_resettable,
+    }
+    wrong: dict[str, Any] = {}
+    for key, value in changes.items():
+        have = shown.get(key)
+        if key in {"ventilation_mode", "ventilation_amount"}:
+            if str(have or "").strip().casefold() != str(value).strip().casefold():
+                wrong[key] = have
+        elif key in shown and have != value:
+            wrong[key] = have
+        elif key in {"cool_limit", "heat_limit"}:
+            got = getattr(result, key)
+            if got.enabled != value.enabled or (
+                value.enabled
+                and any(
+                    want is not None and have != want
+                    for want, have in (
+                        (value.minimum, got.minimum),
+                        (value.maximum, got.maximum),
+                    )
+                )
+            ):
+                wrong[key] = got
+        elif key in DIALOG_SETTING_KEYS:
+            have = getattr(result, key)
+            same = (
+                str(have or "").strip().casefold() == str(value).strip().casefold()
+                if isinstance(value, str)
+                else have == value
             )
-        except VersionMismatch as e:
-            # After a firmware update the iTM wants its new version string; it tells
-            # us which. The protocol may have changed too, so say so loudly, but
-            # carry on.
-            _LOGGER.warning(
-                "iTM web UI version changed from %s to %s; "
-                "this client was built against %s",
-                version,
-                e.version,
-                WEB_VERSION,
-            )
-            self._client.web_version = e.version
-            self.token = NO_TOKEN
-            await self.send(
-                event=EventType.INIT, data_type=DataType.STRING, string=e.version
-            )
-        self.token = NO_TOKEN
-        digest = hashlib.sha256(password.encode()).hexdigest() if password else ""
-        self.logged_in = True  # from here on every reply token is persisted
-        reply = await self.send(
-            ScreenID.LOGIN,
-            LOGIN_BUTTON,
-            EventType.CLICK,
-            DataType.STRING,
-            string=f"{len(username):04d}{username}{digest}",
-        )
-        if any(
-            s.screen == ScreenID.LOGIN and s.update == "DLG_OPEN" for s in reply.screens
-        ):
-            self.logged_in = False
-            await self._store.save(None)
-            msg = "login rejected (wrong credentials, or another web session is active)"
-            raise LoginRejected(msg)
-
-    async def logout(self) -> None:
-        """Log out, keeping the token unless the iTM confirms the logout."""
-        if not self.logged_in:
-            return
-        self.logged_in = False
-        try:
-            await self.send(event=EventType.LOGOUT)
-        except SessionEnded as err:
-            # The iTM says the session is gone (e.g. it had already timed out).
-            _LOGGER.debug("session already ended: %s", err)
-        except (ItmError, aiohttp.ClientError, TimeoutError):
-            # Not confirmed (no answer, an HTTP error, or a reply that can't be
-            # read): the session may still be active, so keep the latest token for
-            # the next login to release.
-            await self._store.save(self.token)
-            raise
-        await self._store.save(None)
-
-    # -- icon view navigation -----------------------------------------------------
-    def icons(self) -> list[tuple[str, int, int]]:
-        """Return (name, icon ID, state) of every icon in the current zone."""
-        panel = self.state.get(ScreenID.STDICON, ICON_PANEL, "ICONPANEL")
-        return [(i[0], i[1], i[2]) for i in panel["icons"]] if panel else []
-
-    async def select_icon(self, index: int) -> None:
-        """Select an icon of the current zone."""
-        await self.send(
-            ScreenID.STDICON, ICON_PANEL, EventType.CLICK, DataType.INT, index
-        )
-
-    async def select_by_name(self, name: str) -> None:
-        """Select an icon by name and check the operation panel shows it."""
-        names = [i[0] for i in self.icons()]
-        if name not in names:
-            msg = f"{name!r} not found here; available: {names}"
-            raise ItmCommandError(msg)
-        await self.select_icon(names.index(name))
-        shown = self.state.get(ScreenID.OPERATION, P_NAME, "LABEL")
-        if shown != name:
-            msg = f"operation panel shows {shown!r} instead of {name!r}"
-            raise ItmCommandError(msg)
-
-    async def open_zone(self, path: tuple[str, ...]) -> None:
-        """Go down into a zone path, starting at the top level."""
-        # Every session starts at the top level of the icon view, so the path is
-        # absolute.
-        for zone in path:
-            names = [i[0] for i in self.icons()]
-            if zone not in names:
-                raise ZoneNotFound(zone, names)
-            await self.select_by_name(zone)
-            await self.send(ScreenID.STDICON, ICON_BTN_DOWN)
-
-    async def read_units(self) -> dict[str, Unit]:
-        """Read every unit in the current zone."""
-        units = {}
-        for i, (name, icon_id, _) in enumerate(self.icons()):
-            if icon_id == ICON_ID_ZONE:
-                continue
-            await self.select_icon(i)
-            unit = unit_from_panel(self.state)
-            if unit.name != name:
-                msg = f"operation panel shows {unit.name!r} instead of {name!r}"
-                raise ItmCommandError(msg)
-            units[name] = unit
-        return units
-
-    # -- operation panel ----------------------------------------------------------
-    async def choose(self, part: int, index: int) -> None:
-        """Pick an option of an operation panel control."""
-        reply = await self.send(
-            ScreenID.OPERATION, part, EventType.CLICK, DataType.INT, index
-        )
-        if reply.dialogs():
-            msg = f"iTM opened a dialog: {reply.dialogs()}"
-            raise ItmCommandError(msg)
-
-    async def commit(self, delay: float) -> None:
-        """Commit operation panel changes like the browser does."""
-        # The browser waits SEND_TIMER_INTERVAL (3s) after the last change, then
-        # sends a TIMER event.
-        await asyncio.sleep(delay)
-        await self.send(ScreenID.OPERATION, -1, EventType.TIMER)
-
-    # -- settings dialog (screen 7): tick what to change, set it, press OK ---------
-    async def open_settings(self) -> None:
-        """Open the selected unit's settings dialog."""
-        reply = await self.send(ScreenID.OPERATION, P_SETTINGS_BUTTON)
-        if not any(
-            s.screen == ScreenID.SETTINGS and s.update == "OPEN" for s in reply.screens
-        ):
-            msg = f"settings dialog did not open: {reply.dialogs()}"
-            raise ItmCommandError(msg)
-
-    async def dialog_click(self, part: int, number: int | None = None) -> None:
-        """Click a settings dialog control, optionally picking an option."""
-        if number is None:
-            reply = await self.send(ScreenID.SETTINGS, part)
-        else:
-            reply = await self.send(
-                ScreenID.SETTINGS, part, EventType.CLICK, DataType.INT, number
-            )
-        if reply.dialogs():
-            msg = f"iTM opened a dialog: {reply.dialogs()}"
-            raise ItmCommandError(msg)
-
-    async def close_settings(self, *, ok: bool) -> None:
-        """Close the settings dialog with OK (and confirm) or Cancel."""
-        reply = await self.send(ScreenID.SETTINGS, D_OK if ok else D_CANCEL)
-        # OK asks "Instelling uitvoeren?" (apply settings?). The browser answers "Ja"
-        # with a CLICK on the dialog's ID (onClickDialog1) and "Nee" with CLICK2
-        # (onClickDialog2).
-        opened = [s for s in reply.screens if s.update == "DLG_OPEN"]
-        confirms = [(s.screen, s.data[0]) for s in opened if s.data[1] == "CONFIRM"]
-        others = [s.data for s in opened if s.data[1] != "CONFIRM"]
-        if others:
-            msg = f"iTM refused the settings: {others}"
-            raise ItmCommandError(msg)
-        if ok and confirms:
-            screen, dialog_id = confirms[0]
-            reply = await self.send(screen, dialog_id, EventType.CLICK)
-            if reply.dialogs():
-                msg = f"iTM refused the settings: {reply.dialogs()}"
-                raise ItmCommandError(msg)
-        if not self.settings_open or any(
-            s.screen == ScreenID.SETTINGS and s.update == "CLOSE" for s in reply.screens
-        ):
-            return
-        msg = "settings dialog did not close"
-        raise ItmCommandError(msg)
-
-    async def set_dialog_power(self, *, power: bool) -> None:
-        """Tick power in the settings dialog and pick start or stop."""
-        await self.dialog_click(D_POWER_CHECK, 1)
-        await self.dialog_click(D_POWER_START if power else D_POWER_STOP)
-
-    async def set_dialog_mode(self, caps: Capabilities, mode: str) -> None:
-        """Tick the operation mode in the settings dialog and pick one."""
-        if mode not in caps.mode_labels:
-            msg = f"{caps.name}: mode {mode!r} not offered; available: {caps.modes}"
-            raise ItmCommandError(msg)
-        labels = self.state.get(ScreenID.SETTINGS, D_MODE, "COMBO_STRS")
-        await self.dialog_click(D_MODE_CHECK, 1)
-        await self.dialog_click(D_MODE, labels.index(caps.mode_labels[mode]))
-
-    async def set_dialog_fan_speed(self, caps: Capabilities, fan_speed: str) -> None:
-        """Tick the fan speed in the settings dialog and cycle to the wanted one."""
-        if not caps.fan_speed:
-            msg = f"{caps.name}: fan speed cannot be changed on this unit"
-            raise ItmCommandError(msg)
-        await self.dialog_click(D_FAN_CHECK, 1)
-        # The up button cycles low -> medium -> high -> auto -> low; the iTM reports
-        # the new icon.
-        for _ in range(len(FAN_ICONS) + 1):
-            icon = self.state.get(ScreenID.SETTINGS, D_FAN_ICON, "ICONID")
-            if FAN_ICONS.get(icon) == fan_speed:
-                return
-            await self.dialog_click(D_FAN_UP)
-        msg = f"{caps.name}: could not select fan speed {fan_speed!r}"
-        raise ItmCommandError(msg)
-
-    async def change_settings(
-        self,
-        unit: str,
-        *,
-        power: bool | None,
-        mode: str | None,
-        fan_speed: str | None,
-    ) -> None:
-        """Change the selected unit through its settings dialog.
-
-        The dialog is cancelled when anything goes wrong.
-        """
-        await self.open_settings()
-        try:
-            caps = capabilities_from_dialog(unit, self.state)
-            if power is not None:
-                await self.set_dialog_power(power=power)
-            if mode is not None:
-                await self.set_dialog_mode(caps, mode)
-            if fan_speed is not None:
-                await self.set_dialog_fan_speed(caps, fan_speed)
-            await self.close_settings(ok=True)
-        except BaseException:
-            if self.settings_open and self.logged_in:
-                with contextlib.suppress(Exception):
-                    await _run_to_completion(self.close_settings(ok=False))
-            raise
-
-    async def read_details(self) -> dict[str, Any]:
-        """Read the selected unit's identity from its Details screen."""
-        reply = await self.send(ScreenID.OPERATION, P_DETAILS_BUTTON)
-        if not any(
-            s.screen == ScreenID.DETAILS and s.update == "OPEN" for s in reply.screens
-        ):
-            msg = f"details screen did not open: {reply.dialogs()}"
-            raise ItmCommandError(msg)
-        details = details_from_screen(self.state)
-        await self.send(ScreenID.DETAILS, DT_CLOSE)
-        return details
-
-    @property
-    def settings_open(self) -> bool:
-        """Whether the settings dialog is open."""
-        return ScreenID.SETTINGS in self.state.screens
+            if not same:
+                wrong[key] = have
+    return wrong
 
 
-class ItmClient:
+# set_unit_settings arguments not validated on a real iTM yet (the developing iTM's
+# units don't offer them); they need allow_experimental.
+_EXPERIMENTAL_UNIT_SETTINGS = frozenset(
+    {
+        "ventilation_mode",
+        "ventilation_amount",
+        "reset_filter_sign",
+        "reset_dust_alarm",
+        "force_dust_alarm_reset",
+        "low_noise",
+        "outdoor_low_noise",
+        "capacity",
+        "reheat",
+        "leaving_water_cool",
+        "leaving_water_heat",
+        "storage_water",
+        "output_repeat",
+        "output_repeat_interval",
+        "analog_output",
+        "multistate_output",
+    }
+)
+
+
+class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public-methods
+    DealerFunctionsMixin,
+    InterlockMixin,
+    ServiceEditMixin,
+    ExportsMixin,
+    EmergencyMixin,
+    SystemMixin,
+    UsersMixin,
+    ScheduleMixin,
+    EnergyMixin,
+    ZonesMixin,
+    DemandMixin,
+    LayoutMixin,
+    PointRegistryMixin,
+    ChangeoverMixin,
+):
     """Client for the web interface of a Daikin intelligent Touch Manager."""
 
-    def __init__(  # noqa: PLR0913  # pylint: disable=too-many-arguments
+    def __init__(  # noqa: PLR0913  # pylint: disable=too-many-arguments,too-many-locals
         # Keyword-only tuning arguments, part of the public API.
         self,
         host: str,
@@ -557,6 +334,9 @@ class ItmClient:
         confirm_timeout: float = 30.0,
         confirm_interval: float = 2.0,
         timeout: float = 30.0,
+        read_only: bool = False,
+        dry_run: bool = False,
+        allow_experimental: bool = False,
     ) -> None:
         """Initialize the client.
 
@@ -573,12 +353,20 @@ class ItmClient:
             confirm_timeout: Seconds to wait for a change to show on the unit.
             confirm_interval: Seconds between the reads that confirm a change.
             timeout: Timeout of a single request, in seconds.
+            read_only: Refuse every write (ReadOnlyError) before anything is sent,
+                for exploring or monitoring an iTM without any risk of changing it.
+            dry_run: Let writes do their picks but record the request that would
+                make the change in `planned` instead of sending it, then cancel.
+            allow_experimental: Allow the writes not validated on a real iTM yet
+                (tested against the simulated iTM only); without it they raise
+                ExperimentalError before anything is sent, except in a dry run.
 
         """
         # The iTM's web UI is plain HTTP by default, which exposes the (replayable)
         # login hash on the network; use https:// where the iTM offers it.
         base = host.rstrip("/") if "://" in host else "http://" + host
         self._url = base + "/cmd/"
+        self._base = base
         self._username, self._password = username, password
         self._http = session
         self._owns_http = session is None
@@ -592,6 +380,17 @@ class ItmClient:
         self.confirm_timeout = confirm_timeout
         self.confirm_interval = confirm_interval
         self._timeout = aiohttp.ClientTimeout(total=timeout)
+        self.read_only = read_only
+        # With dry_run, a write does everything up to the request that would make
+        # the change, records that request in `planned` instead of sending it, and
+        # cancels. Nothing on the iTM changes; the write methods return None.
+        self.dry_run = dry_run
+        # Writes not validated on a real iTM yet refuse unless this is set (a dry
+        # run is always allowed); see _experimental.
+        self.allow_experimental = allow_experimental
+        self.planned: list[str] = []
+        # Seconds between progress requests while the iTM loads a long list.
+        self.progress_interval = 0.5
         # Updated automatically if the iTM reports another one.
         self.web_version = WEB_VERSION
         self._lock = asyncio.Lock()  # one session at a time, also within this process
@@ -599,7 +398,7 @@ class ItmClient:
         self._unit_locks: dict[str, asyncio.Lock] = {}
         # Unconfirmed changes (written with confirm=False) by unit: what was changed
         # and how to recognize it.
-        self._unconfirmed: dict[str, tuple[str, Callable[[Unit], bool]]] = {}
+        self._unconfirmed: dict[str, Callable[[], Awaitable[object]]] = {}
 
     async def close(self) -> None:
         """Close the aiohttp session if the client created it."""
@@ -640,6 +439,20 @@ class ItmClient:
                     msg = f"reply larger than {MAX_REPLY_CHARS} bytes"
                     raise ProtocolError(msg)
             return data.decode("utf-8", errors="replace")
+
+    async def _get_bytes(self, path: str) -> bytes:
+        """GET a file the iTM exported (under /sdlfs/WebExport/), capped in size."""
+        if self._http is None:
+            self._http = aiohttp.ClientSession()
+        async with self._http.get(self._base + path, timeout=self._timeout) as resp:
+            resp.raise_for_status()
+            data = bytearray()
+            async for chunk in resp.content.iter_chunked(65536):
+                data += chunk
+                if len(data) > MAX_EXPORT_BYTES:
+                    msg = f"export larger than {MAX_EXPORT_BYTES} bytes"
+                    raise ProtocolError(msg)
+            return bytes(data)
 
     async def _request(self, body: str) -> str:
         # Looks _post up on every request, so a replaced _post (tests) is used.
@@ -690,18 +503,121 @@ class ItmClient:
                 # can't start while this logout is still on its way.
                 await _run_to_completion(s.logout())
 
+    @asynccontextmanager
+    async def _own_session(self) -> AsyncIterator[_Session]:
+        """Log in through the login screen's "User Settings" into 1205 (own settings).
+
+        Leaving 1205 ends the session (or, if the iTM keeps it, a logout does).
+        """
+        async with self._lock:
+            await self.release_saved_session()
+            s = self._new_session()
+            try:
+                await users_edit.open_own_settings(s, self._username, self._password)
+                yield s
+            finally:
+                await _run_to_completion(users_edit.leave_own_settings(s))
+
     # -- public API ---------------------------------------------------------------
-    async def fetch_units(self) -> dict[str, Unit]:
+    async def fetch_units(self, *, view: str = "icons") -> dict[str, Unit]:
         """Read every unit in the configured zone, in one short session.
 
-        Returns
+        Args:
+        ----
+            view: "icons" reads each unit's operation panel (one request per unit)
+                and gives the full state. "list" reads the zone's list view instead:
+                one request for every unit, with the setpoint limits, wall remote
+                locks, error code and R32 alarm as well, but without the on/off
+                options and the setpoint range (see Unit).
+
+        Returns:
         -------
             The units by name.
+
+        Raises:
+        ------
+            ValueError: An unknown view.
+
+        """
+        if view not in UNIT_VIEWS:
+            msg = f"unknown view {view!r}, expected one of {UNIT_VIEWS}"
+            raise ValueError(msg)
+        async with self._session() as s:
+            await s.open_zone(self.zone_path)
+            if view == "list":
+                return await s.read_units_from_list()
+            return await s.read_units()
+
+    async def fetch_unit_settings(self, name: str) -> UnitSettings:
+        """Read a unit's settings and status that only its dialogs show.
+
+        The thermostat status and R32 alarm come from the Details screen, the wall
+        remote locks, setpoint limits and overtime timer from the settings dialog
+        (cancelled). Four requests besides the navigation, so not for every poll.
+
+        Args:
+        ----
+            name: The unit's name.
+
+        Returns:
+        -------
+            The unit's settings.
 
         """
         async with self._session() as s:
             await s.open_zone(self.zone_path)
-            return await s.read_units()
+            await s.select_by_name(name)
+            status = await s.read_detail_status()
+            await s.open_settings()
+            try:
+                return settings_from_dialog(name, s.state, status)
+            finally:
+                await s.close_settings(ok=False)
+
+    def _writable(self) -> None:
+        if self.read_only:
+            msg = "the client is read-only"
+            raise ReadOnlyError(msg)
+
+    def _require_opt_in(self, *, allowed: bool, flag: str, why: str) -> None:
+        """Refuse a risky write unless its opt-in is passed (a dry run is allowed).
+
+        Raises
+        ------
+            ReadOnlyError: The client is read-only.
+            ItmCommandError: The opt-in is off and this is no dry run.
+
+        """
+        self._writable()
+        if not self.dry_run and not allowed:
+            msg = f"{why}; use a dry run, or pass {flag}=True"
+            raise ItmCommandError(msg)
+
+    def _experimental(self, what: str) -> None:
+        """Refuse a write not validated on a real iTM yet, unless allowed.
+
+        Called at the top of every such write, before anything is sent. A
+        read-only client refuses first (ReadOnlyError); a dry run is always
+        allowed, so its plan can be seen without the opt-in.
+
+        Args:
+        ----
+            what: What the write does, e.g. "start a leakage check".
+
+        Raises:
+        ------
+            ReadOnlyError: The client is read-only.
+            ExperimentalError: allow_experimental is off and this is no dry run.
+
+        """
+        self._writable()
+        if self.dry_run or self.allow_experimental:
+            return
+        msg = (
+            f"{what}: not validated on a real iTM yet; pass allow_experimental=True "
+            "(or --experimental) to use it"
+        )
+        raise ExperimentalError(msg)
 
     async def fetch_unit(self, name: str) -> Unit:
         """Read a single unit (cheaper than fetch_units).
@@ -719,6 +635,840 @@ class ItmClient:
             await s.open_zone(self.zone_path)
             await s.select_by_name(name)
             return unit_from_panel(s.state)
+
+    async def fetch_points(self, *, details: bool = False) -> dict[str, Point]:
+        """Read every point in the configured zone, whatever its kind.
+
+        Like fetch_units, but analog inputs come back as AnalogPoint instead of a
+        Unit with nothing in it. Indoor and ventilation units are Units; see
+        Unit.kind.
+
+        Args:
+        ----
+            details: Also read each analog point's Details screen (what it watches
+                and its limits; one request more per analog point).
+
+        Returns:
+        -------
+            The points by name.
+
+        """
+        async with self._session() as s:
+            await s.open_zone(self.zone_path)
+            return await s.read_points(details=details)
+
+    async def fetch_indicators(self) -> ItmIndicators:
+        """Read the main menu bar's indicators and clock, in a session of its own.
+
+        Returns
+        -------
+            Whether energy saving, an error and the emergency stop are active.
+
+        """
+        async with self._session() as s:
+            return s.indicators()
+
+    async def fetch_info(self) -> ItmInfo:
+        """Read the iTM's firmware version, regional settings and clock.
+
+        Returns
+        -------
+            The info; ``clock_offset`` tells how far the iTM's clock is off.
+
+        """
+        async with self._session() as s:
+            try:
+                return await s.read_info()
+            finally:
+                await s.close_menu()
+
+    async def fetch_changeover_groups(
+        self, *, details: bool = False
+    ) -> list[ChangeoverGroup]:
+        """Read the auto changeover groups.
+
+        Args:
+        ----
+            details: Also read each group's members, differential and reference
+                method (four requests more per group).
+
+        Returns:
+        -------
+            The groups, in the iTM's order.
+
+        """
+        async with self._session() as s:
+            try:
+                return await s.read_changeover_groups(details=details)
+            finally:
+                await s.close_menu()
+
+    async def fetch_setback(self) -> SetbackSettings:
+        """Read the setback offsets and recovery temperatures."""
+        async with self._session() as s:
+            try:
+                return await s.read_setback()
+            finally:
+                await s.close_menu()
+
+    async def fetch_overtime_duration(self) -> int | None:
+        """Read the overtime timer's duration in minutes (None when not shown)."""
+        async with self._session() as s:
+            try:
+                return await s.read_overtime()
+            finally:
+                await s.close_menu()
+
+    async def fetch_emergency_stop(self) -> list[EmergencyStopProgram]:
+        """Read the emergency stop programs and whether they are armed."""
+        async with self._session() as s:
+            try:
+                return await s.read_emergency_stop()
+            finally:
+                await s.close_menu()
+
+    async def fetch_schedules(self) -> list[ScheduleSummary]:
+        """Read the schedule programs: name, enabled and period."""
+        async with self._session() as s:
+            try:
+                return await s.read_schedules()
+            finally:
+                await s.close_menu()
+
+    async def set_setback(  # noqa: PLR0913  # pylint: disable=too-many-arguments
+        self,
+        *,
+        high_up: int | None = None,
+        high_back: int | None = None,
+        low_up: int | None = None,
+        low_back: int | None = None,
+        recovery_cool: int | None = None,
+        recovery_heat: int | None = None,
+    ) -> SetbackSettings | None:
+        """Change the setback offsets and/or recovery temperatures (°C).
+
+        Args:
+        ----
+            high_up: Setback high, the relative setpoint shift.
+            high_back: Setback high, the relative setback setpoint.
+            low_up: Setback low, the relative setpoint shift.
+            low_back: Setback low, the relative setback setpoint.
+            recovery_cool: The recovery temperature for cooling.
+            recovery_heat: The recovery temperature for heating.
+
+        Returns:
+        -------
+            The settings as read back in a fresh session, or None in a dry run.
+
+        """
+        self._writable()
+        changes = {
+            k: v
+            for k, v in {
+                "high_up": high_up,
+                "high_back": high_back,
+                "low_up": low_up,
+                "low_back": low_back,
+                "recovery_cool": recovery_cool,
+                "recovery_heat": recovery_heat,
+            }.items()
+            if v is not None
+        }
+        if not changes:
+            return None if self.dry_run else await self.fetch_setback()
+        async with self._session() as s:
+            try:
+                await s.set_setback(changes)
+            finally:
+                await s.close_menu()
+        if self.dry_run:
+            return None
+        result = await self.fetch_setback()
+        wrong = {
+            k: getattr(result, k) for k, v in changes.items() if getattr(result, k) != v
+        }
+        if wrong:
+            msg = f"setback: the iTM did not take {wrong}"
+            raise ItmCommandError(msg)
+        return result
+
+    async def set_overtime_duration(self, minutes: int) -> int | None:
+        """Change the overtime timer's duration.
+
+        Args:
+        ----
+            minutes: One of the durations the iTM offers (30 to 180, step 30).
+
+        Returns:
+        -------
+            The duration as read back in a fresh session, or None in a dry run.
+
+        """
+        self._writable()
+        async with self._session() as s:
+            try:
+                await s.set_overtime(minutes)
+            finally:
+                await s.close_menu()
+        if self.dry_run:
+            return None
+        result = await self.fetch_overtime_duration()
+        if result != minutes:
+            msg = f"overtime: the iTM shows {result} min, not {minutes}"
+            raise ItmCommandError(msg)
+        return result
+
+    async def set_schedule_enabled(
+        self, name: str, *, enabled: bool
+    ) -> ScheduleSummary | None:
+        """Enable or disable a schedule program.
+
+        Args:
+        ----
+            name: The program's name.
+            enabled: Enable or disable it.
+
+        Returns:
+        -------
+            The program as read back in a fresh session, or None in a dry run.
+
+        """
+        self._writable()
+        async with self._session() as s:
+            try:
+                await s.set_schedule_enabled(name, enabled=enabled)
+            finally:
+                await s.close_menu()
+        if self.dry_run:
+            return None
+        program = next(
+            (p for p in await self.fetch_schedules() if p.name == name), None
+        )
+        if program is None or program.enabled != enabled:
+            msg = f"{name}: the iTM did not {'enable' if enabled else 'disable'} it"
+            raise ItmCommandError(msg)
+        return program
+
+    async def create_schedule(self, name: str) -> ScheduleSummary | None:
+        """Create an empty, disabled schedule program.
+
+        Args:
+        ----
+            name: The new program's name.
+
+        Returns:
+        -------
+            The program as read back in a fresh session, or None in a dry run.
+
+        """
+        self._writable()
+        async with self._session() as s:
+            try:
+                await s.create_schedule(name)
+            finally:
+                await s.close_menu()
+        if self.dry_run:
+            return None
+        program = next(
+            (p for p in await self.fetch_schedules() if p.name == name), None
+        )
+        if program is None:
+            msg = f"{name}: the iTM did not create the program"
+            raise ItmCommandError(msg)
+        return program
+
+    async def delete_schedule(self, name: str) -> None:
+        """Delete a schedule program.
+
+        Args:
+        ----
+            name: The program's name.
+
+        Raises:
+        ------
+            ItmCommandError: The program is not there, or still there after.
+
+        """
+        self._writable()
+        async with self._session() as s:
+            try:
+                await s.delete_schedule(name)
+            finally:
+                await s.close_menu()
+        if not self.dry_run and any(
+            p.name == name for p in await self.fetch_schedules()
+        ):
+            msg = f"{name}: the iTM did not delete the program"
+            raise ItmCommandError(msg)
+
+    async def set_unit_settings(  # noqa: PLR0913  # pylint: disable=too-many-arguments,too-many-locals
+        self,
+        unit: str,
+        *,
+        start_stop_lock: RemoteLock | None = None,
+        mode_lock: RemoteLock | None = None,
+        setpoint_lock: RemoteLock | None = None,
+        overtime: bool | None = None,
+        cool_limit: TempLimit | None = None,
+        heat_limit: TempLimit | None = None,
+        airflow_direction: str | None = None,
+        ventilation_mode: str | None = None,
+        ventilation_amount: str | None = None,
+        reset_filter_sign: bool = False,
+        reset_dust_alarm: bool = False,
+        force_dust_alarm_reset: bool = False,
+        low_noise: str | None = None,
+        outdoor_low_noise: str | None = None,
+        capacity: int | None = None,
+        reheat: bool | None = None,
+        leaving_water_cool: float | None = None,
+        leaving_water_heat: float | None = None,
+        storage_water: float | None = None,
+        output_repeat: bool | None = None,
+        output_repeat_interval: int | None = None,
+        analog_output: float | None = None,
+        multistate_output: str | None = None,
+    ) -> UnitSettings | None:
+        """Change a unit's remote locks, overtime timer, limits and airflow direction.
+
+        Through the unit's settings dialog, like apply(); the result is read back
+        with fetch_unit_settings.
+
+        Args:
+        ----
+            unit: The unit's name.
+            start_stop_lock: allowed / stop_only / forbidden.
+            mode_lock: allowed / forbidden.
+            setpoint_lock: allowed / forbidden.
+            overtime: Switch the unit's overtime timer on or off.
+            cool_limit: Enable a cooling setpoint limit (with min/max) or disable it.
+            heat_limit: Enable a heating setpoint limit (with min/max) or disable it.
+            airflow_direction: position_0 (horizontal) .. position_4 (down), or
+                swing; only on units that offer it (see AIRFLOW_DIRECTIONS).
+            ventilation_mode: A ventilation unit's mode, as one of the labels in
+                UnitSettings.ventilation_modes.
+            ventilation_amount: Its air volume, one of ventilation_amounts.
+            reset_filter_sign: Reset the filter sign (offered while it shows).
+            reset_dust_alarm: Reset the dust alarm (offered while it shows).
+            force_dust_alarm_reset: Force the dust alarm reset.
+            low_noise: Low noise, one of UnitSettings.low_noise_options.
+            outdoor_low_noise: The outdoor unit's low noise, one of its options.
+            capacity: The outdoor unit's capacity limit in %, one of
+                capacity_options.
+            reheat: Reheat on or off.
+            leaving_water_cool: Leaving water setpoint for cooling.
+            leaving_water_heat: Leaving water setpoint for heating.
+            storage_water: Storage water setpoint.
+            output_repeat: A digital output's repeat mode on or off.
+            output_repeat_interval: Its interval in minutes, one of
+                output_repeat_interval_options.
+            analog_output: An analog output's value.
+            multistate_output: A multistate output's state, one of its options.
+
+        The last eleven are offered only by some units (see DIALOG_SETTINGS); one the
+        unit doesn't offer is refused before anything in the dialog is clicked.
+
+        Returns:
+        -------
+            The unit's settings as read back, or None in a dry run or when nothing
+            was asked.
+
+        """
+        changes: dict[str, Any] = {
+            "start_stop_lock": start_stop_lock,
+            "mode_lock": mode_lock,
+            "setpoint_lock": setpoint_lock,
+            "overtime": overtime,
+            "cool_limit": cool_limit,
+            "heat_limit": heat_limit,
+            "airflow_direction": airflow_direction,
+            "ventilation_mode": ventilation_mode,
+            "ventilation_amount": ventilation_amount,
+            "reset_filter_sign": reset_filter_sign or None,
+            "reset_dust_alarm": reset_dust_alarm or None,
+            "force_dust_alarm_reset": force_dust_alarm_reset or None,
+            "low_noise": low_noise,
+            "outdoor_low_noise": outdoor_low_noise,
+            "capacity": capacity,
+            "reheat": reheat,
+            "leaving_water_cool": leaving_water_cool,
+            "leaving_water_heat": leaving_water_heat,
+            "storage_water": storage_water,
+            "output_repeat": output_repeat,
+            "output_repeat_interval": output_repeat_interval,
+            "analog_output": analog_output,
+            "multistate_output": multistate_output,
+        }
+        changes = {k: v for k, v in changes.items() if v is not None}
+        if (
+            airflow_direction is not None
+            and airflow_direction not in AIRFLOW_DIRECTIONS
+        ):
+            msg = f"airflow direction must be one of {AIRFLOW_DIRECTIONS}"
+            raise ItmCommandError(msg)
+        if not changes:
+            return None
+        self._writable()
+        experimental = sorted(changes.keys() & _EXPERIMENTAL_UNIT_SETTINGS)
+        if experimental:
+            self._experimental(f"{unit}: set {', '.join(experimental)}")
+        async with self._unit_lock(unit):
+            await self._settle(unit)
+            async with self._write(unit) as s:
+                await s.change_unit_settings(changes)
+        if self.dry_run:
+            return None
+        # Like the other unit writes, the change takes a few seconds to reach the
+        # unit over the Daikin bus: read again until it shows.
+        deadline = time.monotonic() + self.confirm_timeout
+        while True:
+            await asyncio.sleep(self.confirm_interval)
+            result = await self.fetch_unit_settings(unit)
+            wrong = _settings_mismatch(result, changes)
+            if not wrong:
+                return result
+            if time.monotonic() >= deadline:
+                msg = f"{unit}: the iTM did not take {wrong}"
+                raise ItmCommandError(msg)
+
+    async def set_power_state(
+        self, unit: str, state: PowerState, *, confirm: bool = True
+    ) -> Unit | None:
+        """Put a unit on, off, or in setback low/high, through the operation panel.
+
+        Args:
+        ----
+            unit: The unit's name.
+            state: on / off / setback_low / setback_high.
+            confirm: Wait until the change shows on the unit.
+
+        Returns:
+        -------
+            The unit as read back, or None when not confirmed or in a dry run.
+
+        Raises:
+        ------
+            ItmCommandError: The unit doesn't offer that state.
+
+        """
+        self._writable()
+        async with self._unit_lock(unit):
+            await self._settle(unit)
+            async with self._write(unit) as s:
+                current = unit_from_panel(s.state)
+                options = s.state.get(ScreenID.OPERATION, P_POWER, "COMBO_STRS") or []
+                order = {
+                    2: (PowerState.ON, PowerState.OFF),
+                    4: (
+                        PowerState.ON,
+                        PowerState.SETBACK_LOW,
+                        PowerState.SETBACK_HIGH,
+                        PowerState.OFF,
+                    ),
+                }.get(len(options), ())
+                if state not in order:
+                    msg = f"{unit}: {state} not offered (options {options})"
+                    raise ItmCommandError(msg)
+                if current.power_state == state:
+                    return current
+                await s.choose(P_POWER, order.index(state), confirm=True)
+                await s.commit(self.commit_delay)
+            return await self._finish(
+                unit,
+                f"power {state}",
+                lambda u: u.power_state == state,
+                confirm=confirm,
+            )
+
+    async def fetch_schedule(
+        self, name: str, *, events: bool = True, details: bool = False
+    ) -> ScheduleProgram:
+        """Read a schedule program through its editor.
+
+        Properties, weekly and special day patterns, the calendar and, with events,
+        every weekday's and special day's events as the editor lists them, their
+        settings parsed from the text. The editor is left with Cancel; nothing is
+        saved.
+
+        Args:
+        ----
+            name: The program's name, see fetch_schedules.
+            events: Read the event lists (two requests per day with events).
+            details: Also open each event's own settings screen (two requests per
+                event, so many for a program with many events), for the
+                settings the text doesn't carry: fan speed, overtime, relative
+                setpoints.
+
+        Returns:
+        -------
+            The program.
+
+        """
+        async with self._session() as s:
+            try:
+                return await s.read_schedule(name, events=events, details=details)
+            finally:
+                await s.close_menu()
+
+    async def fetch_schedule_day(
+        self, name: str, *, days_ahead: int = 0
+    ) -> ScheduleDay:
+        """Read what a program does on a day (today, or days ahead): three requests.
+
+        Args:
+        ----
+            name: The program's name.
+            days_ahead: 0 for the iTM's current day, 1 for tomorrow, and so on.
+
+        Returns:
+        -------
+            The day's events, as the overview lists them.
+
+        """
+        async with self._session() as s:
+            try:
+                return await s.read_schedule_day(name, days_ahead=days_ahead)
+            finally:
+                await s.close_menu()
+
+    async def fetch_history(
+        self,
+        *,
+        day: date | None = None,
+        include_management: bool = False,
+        pages: int = 1,
+    ) -> list[History]:
+        """Read the iTM's history (who changed what, when).
+
+        Args:
+        ----
+            day: The day to read; the iTM's current day when omitted.
+            include_management: Also list logins and logouts (the "management"
+                class), which are most of the history.
+            pages: How many pages of 100 entries to read, newest first.
+
+        Returns:
+        -------
+            The pages read.
+
+        """
+        async with self._session() as s:
+            try:
+                await s.open_menu()
+                return await s.read_history(
+                    day=day, include_management=include_management, pages=pages
+                )
+            finally:
+                await s.close_menu()
+
+    async def fetch_optional_functions(self) -> dict[str, OptionalFunction]:
+        """Probe the functions the menu hides and list what they hold (experimental).
+
+        Returns
+        -------
+            By function name: whether its screen opened and the rows it listed.
+
+        """
+        async with self._session() as s:
+            try:
+                return await s.read_optional_functions()
+            finally:
+                await s.close_menu()
+
+    async def fetch_system(self, only: Iterable[str] | None = None) -> SystemSettings:
+        """Read the system settings screens, in one session.
+
+        Zones, management points, maintenance, network, e-mail, web users, the
+        touch panel's hardware and screensaver, confirm dialogs, remote management,
+        PPD and the energy navigator. About thirty requests.
+
+        Args:
+        ----
+            only: The SystemSettings fields to read; the others stay None.
+
+        Returns:
+        -------
+            The settings; None for each screen that did not open.
+
+        """
+        wanted = None if only is None else frozenset(only)
+        async with self._session() as s:
+            try:
+                return await s.read_system(wanted)
+            finally:
+                await s.close_menu()
+
+    async def set_hardware(
+        self,
+        *,
+        backlight: int | None = None,
+        buzzer_volume: int | None = None,
+        buzzer_minutes: int | None = None,
+        buzzer_continuous: bool = False,
+        key_click_volume: int | None = None,
+    ) -> HardwareSettings | None:
+        """Change the touch panel's backlight, buzzer and key click settings.
+
+        Args:
+        ----
+            backlight: Level 1-8.
+            buzzer_volume: 0-5.
+            buzzer_minutes: How long the buzzer sounds: 1, 3 or 5.
+            buzzer_continuous: Let the buzzer sound until it is stopped.
+            key_click_volume: 0-5.
+
+        Returns:
+        -------
+            The settings as read back in a fresh session, or None in a dry run.
+
+        """
+        changes: dict[str, Any] = {
+            k: v
+            for k, v in (
+                ("backlight", backlight),
+                ("buzzer_volume", buzzer_volume),
+                ("buzzer_minutes", buzzer_minutes),
+                ("key_click_volume", key_click_volume),
+            )
+            if v is not None
+        }
+        if buzzer_continuous:
+            changes["buzzer_minutes"] = None
+        if not changes:
+            msg = "nothing to change"
+            raise ItmCommandError(msg)
+        self._writable()
+        async with self._session() as s:
+            try:
+                await s.set_hardware(changes)
+            finally:
+                await s.close_menu()
+        if self.dry_run:
+            return None
+        result = (await self.fetch_system(["hardware"])).hardware
+        wrong = {
+            k: v
+            for k, v in changes.items()
+            if result is None or getattr(result, k) != v
+        }
+        if wrong:
+            msg = f"the iTM did not take {wrong}: {result}"
+            raise ItmCommandError(msg)
+        return result
+
+    async def set_screensaver(
+        self,
+        *,
+        mode: ScreensaverMode | None = None,
+        delay_minutes: int | None = None,
+        off_on_error: bool | None = None,
+    ) -> ScreensaverSettings | None:
+        """Change the touch panel's screensaver.
+
+        Args:
+        ----
+            mode: What the panel does after the delay.
+            delay_minutes: The delay, within the range the iTM's input allows.
+            off_on_error: End the screensaver when an error occurs.
+
+        Returns:
+        -------
+            The settings as read back in a fresh session, or None in a dry run.
+
+        """
+        changes: dict[str, Any] = {
+            k: v
+            for k, v in (
+                ("mode", mode),
+                ("delay_minutes", delay_minutes),
+                ("off_on_error", off_on_error),
+            )
+            if v is not None
+        }
+        if not changes:
+            msg = "nothing to change"
+            raise ItmCommandError(msg)
+        self._writable()
+        async with self._session() as s:
+            try:
+                await s.set_screensaver(changes)
+            finally:
+                await s.close_menu()
+        if self.dry_run:
+            return None
+        result = (await self.fetch_system(["screensaver"])).screensaver
+        wrong = {
+            k: v
+            for k, v in changes.items()
+            if result is None or getattr(result, k) != v
+        }
+        if wrong:
+            msg = f"the iTM did not take {wrong}: {result}"
+            raise ItmCommandError(msg)
+        return result
+
+    async def _in_session(self, call: Callable[[_Session], Awaitable[_T]]) -> _T:
+        """Run one session call and close the menu after it."""
+        async with self._session() as s:
+            try:
+                return await call(s)
+            finally:
+                await s.close_menu()
+
+    async def _system_write(self, call: Callable[[_Session], Awaitable[None]]) -> None:
+        self._writable()
+        await self._in_session(call)
+
+    async def set_network(  # noqa: PLR0913  # pylint: disable=too-many-arguments
+        self,
+        *,
+        controller_name: str | None = None,
+        hostname: str | None = None,
+        ip_address: str | None = None,
+        subnet_mask: str | None = None,
+        gateway: str | None = None,
+        dns_primary: str | None = None,
+        dns_secondary: str | None = None,
+        allow_network_change: bool = False,
+    ) -> NetworkSettings | None:
+        """Change the iTM's own network settings.
+
+        A wrong address, mask or gateway takes the iTM off the network, and only
+        someone at the device can put it back. So unless allow_network_change is
+        True, only a dry run is allowed; a dry run opens each input to check it and
+        cancels it, without entering anything.
+
+        Args:
+        ----
+            controller_name: The controller's name.
+            hostname: Its host name.
+            ip_address: Its IPv4 address.
+            subnet_mask: The subnet mask.
+            gateway: The default gateway.
+            dns_primary: The primary DNS server.
+            dns_secondary: The secondary DNS server.
+            allow_network_change: Really change it (not just a dry run).
+
+        Returns:
+        -------
+            The settings as read back (the iTM may be unreachable after a change of
+            address), or None in a dry run.
+
+        """
+        self._experimental("change the network settings")
+        changes = {
+            k: v
+            for k, v in (
+                ("controller_name", controller_name),
+                ("hostname", hostname),
+                ("ip_address", ip_address),
+                ("subnet_mask", subnet_mask),
+                ("gateway", gateway),
+                ("dns_primary", dns_primary),
+                ("dns_secondary", dns_secondary),
+            )
+            if v is not None
+        }
+        if not changes:
+            msg = "nothing to change"
+            raise ItmCommandError(msg)
+        for key, value in changes.items():
+            if key not in NW_TEXT_FIELDS:
+                try:
+                    ipaddress.IPv4Address(value)
+                except ValueError as err:
+                    msg = f"{key}: {value!r} is not an IPv4 address"
+                    raise ItmCommandError(msg) from err
+        if not self.dry_run and not allow_network_change:
+            msg = (
+                "a network change can strand the iTM; use a dry run, or pass "
+                "allow_network_change=True"
+            )
+            raise ItmCommandError(msg)
+        await self._system_write(lambda s: s.set_network(changes))
+        if self.dry_run:
+            return None
+        return (await self.fetch_system(["network"])).network
+
+    async def fetch_service_settings(self, password: str) -> ServiceSettings:
+        """Read the installer's service screens, after a service login.
+
+        Read only: time zone, changeover option per unit, contact, R32 alarm
+        settings, central monitoring, the number of licence keys, dealer options and
+        the energy save mode. The service password is the installer's (not a web
+        user's); it is sent once and never stored or logged.
+
+        Args:
+        ----
+            password: The service password.
+
+        Returns:
+        -------
+            The settings; None for each screen that did not open.
+
+        """
+
+        async def read(s: _Session) -> ServiceSettings:
+            await s.service_login(password)
+            return await s.read_service()
+
+        return await self._in_session(read)
+
+    async def fetch_config(self, *, system: bool = False) -> ItmConfig:
+        """Read everything configuration-like in one session.
+
+        The indicators and clock, version and region, the schedule programs, the
+        auto changeover groups (without details), setback, overtime and the
+        emergency stop programs; with system, the system settings of fetch_system
+        too. About twenty requests (fifty with system); meant for an hourly read,
+        not every poll.
+
+        Args:
+        ----
+            system: Also read the system settings screens.
+
+        Returns:
+        -------
+            The configuration.
+
+        """
+        async with self._session() as s:
+            try:
+                indicators = s.indicators()
+                info = await s.read_info()
+                schedules = tuple(await s.read_schedules())
+                groups = tuple(await s.read_changeover_groups())
+                setback = await s.read_setback()
+                overtime = await s.read_overtime()
+                emergency_programs = tuple(await s.read_emergency_stop())
+                settings = await s.read_system() if system else None
+            finally:
+                await s.close_menu()
+        return ItmConfig(
+            indicators=indicators,
+            info=info,
+            schedules=schedules,
+            changeover_groups=groups,
+            setback=setback,
+            overtime_minutes=overtime,
+            emergency_stop=emergency_programs,
+            system=settings,
+        )
+
+    async def fetch_error_information(self) -> ErrorInformation | None:
+        """Read the error information the iTM shows while a unit has an error.
+
+        The main menu bar shows an error indicator then; this opens it, reads the
+        list and closes it. Not seen on a device yet, so the rows are passed
+        through as listed.
+
+        Returns
+        -------
+            The errors, or None when the iTM shows no error.
+
+        """
+        async with self._session() as s:
+            return await s.read_error_information()
 
     async def _confirm(
         self, unit: str, what: str, check: Callable[[Unit], bool]
@@ -744,22 +1494,268 @@ class ItmClient:
         that never shows is logged, not raised: it belongs to an earlier call that
         has already returned.
         """
-        pending = self._unconfirmed.pop(unit, None)
-        if pending is None:
+        confirm = self._unconfirmed.pop(unit, None)
+        if confirm is None:
             return
-        what, check = pending
+        for other in [k for k, v in self._unconfirmed.items() if v is confirm]:
+            del self._unconfirmed[other]
         try:
-            await self._confirm(unit, what, check)
+            await confirm()
         except ItmCommandError as err:
             _LOGGER.warning("%s", err)
 
     async def _finish(
         self, unit: str, what: str, check: Callable[[Unit], bool], *, confirm: bool
     ) -> Unit | None:
+        if self.dry_run:
+            return None
         if confirm:
             return await self._confirm(unit, what, check)
-        self._unconfirmed[unit] = (what, check)
+        self._unconfirmed[unit] = functools.partial(self._confirm, unit, what, check)
         return None
+
+    # -- whole zones ------------------------------------------------------------------
+    @asynccontextmanager
+    async def _write_zone(self, zone: str) -> AsyncIterator[_Session]:
+        """Open the zone path and select a zone's icon: its panel operates them all."""
+        async with self._session() as s:
+            await s.open_zone(self.zone_path)
+            name = _zone_name(zone, s.icons())
+            if not any(i[0] == name and i[1] == ICON_ID_ZONE for i in s.icons()):
+                msg = f"{zone!r} is not a zone"
+                raise ItmCommandError(msg)
+            await s.select_by_name(name)
+            yield s
+
+    async def _zone_members(self, zone: str) -> list[str]:
+        """Return the points directly in a zone below the zone path."""
+        async with self._session() as s:
+            await s.open_zone(self.zone_path)
+            name = _zone_name(zone, s.icons())
+            if not any(i[0] == name and i[1] == ICON_ID_ZONE for i in s.icons()):
+                msg = f"{zone!r} is not a zone"
+                raise ItmCommandError(msg)
+            await s.open_zone((name,))
+            return [i[0] for i in s.icons() if i[1] != ICON_ID_ZONE]
+
+    @asynccontextmanager
+    async def _zone_writes(self, zone: str) -> AsyncIterator[list[str]]:
+        """Apply the per-unit write rules to every point of a zone, for a zone write.
+
+        Holds each member's unit lock (in name order, so two zone writes can't
+        deadlock), lets an earlier unconfirmed change to a member show first, and
+        spaces the write like a unit write.
+        """
+        members = await self._zone_members(zone)
+        async with contextlib.AsyncExitStack() as stack:
+            for member in sorted(set(members)):
+                await stack.enter_async_context(self._unit_lock(member))
+            for member in members:
+                await self._settle(member)
+            now = time.monotonic()
+            wait = max(
+                (
+                    self._last_write.get(m, 0) + self.min_write_interval - now
+                    for m in members
+                ),
+                default=0,
+            )
+            if wait > 0:
+                await asyncio.sleep(wait)
+            try:
+                yield members
+            finally:
+                done = time.monotonic()
+                for member in members:
+                    self._last_write[member] = done
+
+    async def _finish_zone(  # pylint: disable=too-many-arguments
+        self,
+        zone: str,
+        members: list[str],
+        what: str,
+        check: Callable[[Unit], bool],
+        *,
+        confirm: bool,
+    ) -> dict[str, Unit] | None:
+        """Confirm a zone write, or leave it to the next write to each member."""
+        if self.dry_run:
+            return None
+        if confirm:
+            return await self._confirm_zone(zone, what, check)
+        later = functools.partial(self._confirm_zone, zone, what, check)
+        for member in members:
+            self._unconfirmed[member] = later
+        return None
+
+    async def fetch_zone_units(self, zone: str) -> dict[str, Unit]:
+        """Read every point directly in a zone below the zone path.
+
+        Args:
+        ----
+            zone: The zone's name (or "#n", or the "All" zone in any language).
+
+        Returns:
+        -------
+            The units and other points, by name.
+
+        """
+        async with self._session() as s:
+            await s.open_zone((*self.zone_path, zone))
+            return await s.read_units()
+
+    async def _confirm_zone(
+        self, zone: str, what: str, check: Callable[[Unit], bool]
+    ) -> dict[str, Unit]:
+        """Wait until every indoor unit in the zone shows a change."""
+        deadline = time.monotonic() + self.confirm_timeout
+        while True:
+            await asyncio.sleep(self.confirm_interval)
+            units = await self.fetch_zone_units(zone)
+            indoor = [u for u in units.values() if u.kind is PointKind.INDOOR]
+            if indoor and all(check(u) for u in indoor):
+                return units
+            if time.monotonic() >= deadline:
+                pending = [u.name for u in indoor if not check(u)]
+                msg = f"{zone}: {what} not confirmed on {pending}"
+                raise ItmCommandError(msg)
+
+    async def set_zone_power_state(
+        self, zone: str, state: PowerState, *, confirm: bool = True
+    ) -> dict[str, Unit] | None:
+        """Put every unit of a zone on, off, or in setback low/high at once.
+
+        Args:
+        ----
+            zone: The zone's name, below the client's zone path.
+            state: on / off / setback_low / setback_high.
+            confirm: Wait until every indoor unit in the zone shows it.
+
+        Returns:
+        -------
+            The zone's points as read back, or None when not confirmed or in a dry
+            run.
+
+        """
+        self._writable()
+        async with self._zone_writes(zone) as members:
+            return await self._zone_power_state(zone, members, state, confirm=confirm)
+
+    async def _zone_power_state(
+        self, zone: str, members: list[str], state: PowerState, *, confirm: bool
+    ) -> dict[str, Unit] | None:
+        async with self._write_zone(zone) as s:
+            options = s.state.get(ScreenID.OPERATION, P_POWER, "COMBO_STRS") or []
+            order = {
+                2: (PowerState.ON, PowerState.OFF),
+                4: (
+                    PowerState.ON,
+                    PowerState.SETBACK_LOW,
+                    PowerState.SETBACK_HIGH,
+                    PowerState.OFF,
+                ),
+            }.get(len(options), ())
+            if state not in order:
+                msg = f"{zone}: {state} not offered (options {options})"
+                raise ItmCommandError(msg)
+            await s.choose(P_POWER, order.index(state), confirm=True)
+            await s.commit(self.commit_delay)
+        return await self._finish_zone(
+            zone,
+            members,
+            f"power {state}",
+            lambda u: u.power_state == state,
+            confirm=confirm,
+        )
+
+    async def set_zone_setpoint(
+        self, zone: str, value: int, *, confirm: bool = True
+    ) -> dict[str, Unit] | None:
+        """Give every running unit of a zone the same setpoint.
+
+        Args:
+        ----
+            zone: The zone's name, below the client's zone path.
+            value: The setpoint, one the zone's panel offers.
+            confirm: Wait until every running indoor unit in the zone shows it.
+
+        Returns:
+        -------
+            The zone's points as read back, or None when not confirmed or in a dry
+            run.
+
+        """
+        self._writable()
+        async with self._zone_writes(zone) as members:
+            async with self._write_zone(zone) as s:
+                current = unit_from_panel(s.state)
+                if not current.running:
+                    msg = f"{zone} is stopped; the iTM ignores setpoint changes then"
+                    raise ItmCommandError(msg)
+                nums = list(current.setpoint_range)
+                if value not in nums:
+                    raise SetpointOutOfRange(zone, value, current.setpoint_range)
+                await s.choose(P_SETPOINT, nums.index(value))
+                await s.commit(self.commit_delay)
+            return await self._finish_zone(
+                zone,
+                members,
+                f"setpoint {value}",
+                lambda u: not u.running or u.setpoint == value,
+                confirm=confirm,
+            )
+
+    async def apply_zone(
+        self,
+        zone: str,
+        *,
+        power: bool | None = None,
+        mode: str | None = None,
+        fan_speed: str | None = None,
+        confirm: bool = True,
+    ) -> dict[str, Unit] | None:
+        """Change power, mode and/or fan speed of every unit in a zone at once.
+
+        Through the zone's settings dialog, like apply() does for one unit.
+
+        Args:
+        ----
+            zone: The zone's name, below the client's zone path.
+            power: Start (True) or stop (False) them.
+            mode: heat / cool / fan / dry / auto, as the zone's dialog offers.
+            fan_speed: low / medium / high / auto.
+            confirm: Wait until every indoor unit in the zone shows the change.
+
+        Returns:
+        -------
+            The zone's points as read back, or None when not confirmed or in a dry
+            run.
+
+        """
+        if power is None and mode is None and fan_speed is None:
+            return None
+        self._writable()
+        if fan_speed is not None and fan_speed not in FAN_SPEEDS:
+            msg = (
+                f"{zone}: unknown fan speed {fan_speed!r}, expected one of {FAN_SPEEDS}"
+            )
+            raise ItmCommandError(msg)
+        async with self._zone_writes(zone) as members:
+            async with self._write_zone(zone) as s:
+                await s.change_settings(
+                    zone, power=power, mode=mode, fan_speed=fan_speed
+                )
+            return await self._finish_zone(
+                zone,
+                members,
+                "change",
+                lambda u: (
+                    (power is None or _power_is(u, on=power))
+                    and (mode is None or u.mode == mode)
+                    and (fan_speed is None or u.fan_speed in {None, fan_speed})
+                ),
+                confirm=confirm,
+            )
 
     async def list_zones(self, path: tuple[str, ...] = ()) -> list[str]:
         """List the zones and units at a path (for discovery and configuration).
@@ -801,6 +1797,7 @@ class ItmClient:
                 change did not show in time.
 
         """
+        self._writable()
         async with self._unit_lock(unit):
             await self._settle(unit)
             async with self._write(unit) as s:
@@ -883,6 +1880,7 @@ class ItmClient:
         """
         if power is None and mode is None and fan_speed is None:
             return None
+        self._writable()
         if fan_speed is not None and fan_speed not in FAN_SPEEDS:
             msg = (
                 f"{unit}: unknown fan speed {fan_speed!r}, expected one of {FAN_SPEEDS}"
@@ -895,7 +1893,7 @@ class ItmClient:
                 # caller last saw: only send what differs, and nothing at all (no
                 # write to the unit) if it already is in the requested state.
                 current = unit_from_panel(s.state)
-                if power is not None and current.running == power:
+                if power is not None and _power_is(current, on=power):
                     power = None
                 if mode is not None and current.mode == mode:
                     mode = None
@@ -911,7 +1909,7 @@ class ItmClient:
                 unit,
                 "change",
                 lambda u: (
-                    (power is None or u.running == power)
+                    (power is None or _power_is(u, on=power))
                     and (mode is None or u.mode == mode)
                     and (fan_speed is None or u.fan_speed == fan_speed)
                 ),

@@ -51,6 +51,12 @@ class UIState:
         if parts is not None and (part, "SINGLE_SELIDX") in parts:
             parts[part, "SINGLE_SELIDX"] = index
 
+    def set_check(self, screen: int, part: int, *, on: bool) -> None:
+        """Keep a checkbox's state after ticking it: the iTM doesn't echo it."""
+        parts = self.screens.get(screen)
+        if parts is not None:
+            parts[part, "CHECK_STATE"] = int(on)
+
     def get(self, screen: int, part: int, ptype: str, default: Any = None) -> Any:
         """Return the last known value of a part.
 

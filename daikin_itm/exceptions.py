@@ -40,8 +40,27 @@ class LoginRejected(ItmError):  # noqa: N818 - public API name
     """
 
 
+class ExperimentalError(ItmError):
+    """A write not validated on a real iTM yet was asked without the opt-in.
+
+    Raised before anything is sent, unless the client was created with
+    ``allow_experimental=True`` (or the write is a dry run).
+    """
+
+
+class HistoryExportError(ItmError):
+    """The history export could not be read."""
+
+
 class ItmCommandError(ItmError):
     """The iTM answered a command with a dialog, or the UI was not as expected."""
+
+
+class ReadOnlyError(ItmCommandError):
+    """A write was asked of a client created with ``read_only=True``.
+
+    Raised before anything is sent, so the iTM is not touched.
+    """
 
 
 class ZoneNotFound(ItmCommandError):  # noqa: N818 - public API name
