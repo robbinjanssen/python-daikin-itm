@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from .exceptions import ItmCommandError
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Coroutine
+    from collections.abc import Awaitable, Coroutine, Iterable
 
 T = TypeVar("T")
 
@@ -62,3 +62,26 @@ def check_wrong(name: str, wrong: list[str], result: object) -> None:
     if wrong:
         msg = f"{name}: the iTM did not take the {', '.join(wrong)}: {result}"
         raise ItmCommandError(msg)
+
+
+def field_names(
+    only: Iterable[str] | None, known: Iterable[str], what: str
+) -> frozenset[str] | None:
+    """Check the names of the fields to read; None means the caller's default.
+
+    Raises
+    ------
+        ItmCommandError: Only is a string, or a name is not one of the known ones.
+
+    """
+    if only is None:
+        return None
+    known = tuple(known)
+    if isinstance(only, str):
+        msg = f"{what}: pass a list of names, not the string {only!r}"
+        raise ItmCommandError(msg)
+    names = frozenset(only)
+    if unknown := names - frozenset(known):
+        msg = f"unknown {what} {sorted(unknown)}; known: {known}"
+        raise ItmCommandError(msg)
+    return names

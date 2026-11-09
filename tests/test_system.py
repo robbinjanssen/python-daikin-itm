@@ -218,6 +218,44 @@ async def test_fetch_config_with_system(itm: FakeITM) -> None:
     config = await c.fetch_config(system=True)
     assert isinstance(config.system, SystemSettings)
     assert config.system.confirm_dialogs is False
+    assert config.system.web_users is not None
+
+
+async def test_fetch_config_with_some_system_screens(itm: FakeITM) -> None:
+    """fetch_config reads only the system screens asked for, in one session."""
+    c = FakeClient(itm)
+
+    def logins() -> int:
+        return sum(1 for r in itm.requests if r["screen"] == 1203 and r["event"] == 1)
+
+    before = logins()
+    config = await c.fetch_config(system=("hardware", "confirm_dialogs"))
+    assert logins() == before + 1
+    assert config.system is not None
+    assert config.system.hardware is not None
+    assert config.system.confirm_dialogs is False
+    assert config.system.web_users is None
+    assert config.system.network is None
+
+
+@pytest.mark.parametrize(
+    ("only", "message"),
+    [
+        ("hardware", "not the string 'hardware'"),
+        (["hardware", "screen_saver"], r"unknown system settings \[.screen_saver.\]"),
+    ],
+)
+async def test_system_names_are_checked(
+    itm: FakeITM, only: str | list[str], message: str
+) -> None:
+    """A string or an unknown field name is refused before anything is read."""
+    c = FakeClient(itm)
+    before = len(itm.requests)
+    with pytest.raises(ItmCommandError, match=message):
+        await c.fetch_system(only)
+    with pytest.raises(ItmCommandError, match=message):
+        await c.fetch_config(system=only)
+    assert len(itm.requests) == before
 
 
 # -- writes --------------------------------------------------------------------------

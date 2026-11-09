@@ -58,6 +58,7 @@ from ._screens import press_ok as _ok
 from ._screens import radio as _radio
 from ._screens import row_named as _row
 from ._util import T as _T
+from ._util import field_names
 from ._util import ignore as _ignore
 from .energy_navigator import ShownValue
 from .energy_navigator import shown_value as _shown
@@ -721,16 +722,11 @@ def wanted_parts(only: Iterable[str] | None) -> frozenset[str]:
 
     Raises
     ------
-        ItmCommandError: A name is not one of them.
+        ItmCommandError: Only is a string, or a name is not one of them.
 
     """
-    if only is None:
-        return frozenset(PARTS)
-    names = frozenset(only)
-    if unknown := names - frozenset(PARTS):
-        msg = f"unknown demand control parts {sorted(unknown)}; known: {PARTS}"
-        raise ItmCommandError(msg)
-    return names
+    names = field_names(only, PARTS, "demand control parts")
+    return frozenset(PARTS) if names is None else names
 
 
 async def read_demand_control(

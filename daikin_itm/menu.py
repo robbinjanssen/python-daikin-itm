@@ -298,6 +298,13 @@ class SetbackSettings:
     low_back: int | None
     recovery_cool: int | None = None
     recovery_heat: int | None = None
+    # The values the iTM offers per setting, in order; () when it didn't show it.
+    high_up_options: tuple[int, ...] = ()
+    high_back_options: tuple[int, ...] = ()
+    low_up_options: tuple[int, ...] = ()
+    low_back_options: tuple[int, ...] = ()
+    recovery_cool_options: tuple[int, ...] = ()
+    recovery_heat_options: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -596,13 +603,34 @@ def changeover_settings_from_screen(state: UIState) -> dict[str, Any]:
 def setback_from_screen(state: UIState) -> SetbackSettings:
     """Read the setback screen (and the advanced screen when it is open)."""
     s, a = MenuScreen.SETBACK, MenuScreen.SETBACK_ADVANCED
+    parts = {
+        "high_up": (s, SB_HIGH_UP),
+        "high_back": (s, SB_HIGH_BACK),
+        "low_up": (s, SB_LOW_UP),
+        "low_back": (s, SB_LOW_BACK),
+        "recovery_cool": (a, SBA_COOL),
+        "recovery_heat": (a, SBA_HEAT),
+    }
+
+    def value(key: str) -> int | None:
+        return _combo_value(state, *parts[key])
+
+    def options(key: str) -> tuple[int, ...]:
+        return tuple(state.get(*parts[key], "COMBO_NUMS") or ())
+
     return SetbackSettings(
-        high_up=_combo_value(state, s, SB_HIGH_UP),
-        high_back=_combo_value(state, s, SB_HIGH_BACK),
-        low_up=_combo_value(state, s, SB_LOW_UP),
-        low_back=_combo_value(state, s, SB_LOW_BACK),
-        recovery_cool=_combo_value(state, a, SBA_COOL),
-        recovery_heat=_combo_value(state, a, SBA_HEAT),
+        high_up=value("high_up"),
+        high_back=value("high_back"),
+        low_up=value("low_up"),
+        low_back=value("low_back"),
+        recovery_cool=value("recovery_cool"),
+        recovery_heat=value("recovery_heat"),
+        high_up_options=options("high_up"),
+        high_back_options=options("high_back"),
+        low_up_options=options("low_up"),
+        low_back_options=options("low_back"),
+        recovery_cool_options=options("recovery_cool"),
+        recovery_heat_options=options("recovery_heat"),
     )
 
 
