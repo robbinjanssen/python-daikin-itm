@@ -1,4 +1,4 @@
-# pylint: disable=protected-access,too-many-lines
+# pylint: disable=too-many-lines
 """Demand (power limit) control and energy saving: readers and writes.
 
 Session-level flows, each leaving every screen it opened with its Close or Cancel.

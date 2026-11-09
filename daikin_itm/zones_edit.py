@@ -204,7 +204,7 @@ async def delete_zone(s: _Session, name: str) -> bool:
             reply = await s.write(f"delete zone {name}", ZONES, ZN_DELETE)
             if reply is None:
                 return False
-            await s.answer_confirm(ZONES, reply)  # pylint: disable=protected-access
+            await s.answer_confirm(ZONES, reply)
             return True
     finally:
         await s.close_screen(ZONES)

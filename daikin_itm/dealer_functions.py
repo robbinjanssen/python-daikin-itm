@@ -1,4 +1,4 @@
-# pylint: disable=protected-access,too-many-lines
+# pylint: disable=too-many-lines
 """Dealer-option functions: temperature limit, sliding temperature, HMO.
 
 Session-level flows on the screens of the functions the iTM only offers with a

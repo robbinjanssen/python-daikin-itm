@@ -418,14 +418,16 @@ async def set_event_target(s: _Session, target: str, *, zone: bool) -> None:
         raise ItmCommandError(msg)
 
 
-async def _tick(s: _Session, checkbox: int, *, on: bool, what: str) -> None:
-    """Tick or untick a setting's checkbox, unless it already is."""
-    if _ticked(s.state, EVENT, checkbox) == on:
+async def _tick(
+    s: _Session, checkbox: int, *, on: bool, what: str, screen: int = EVENT
+) -> None:
+    """Tick or untick a checkbox, unless it already is."""
+    if _ticked(s.state, screen, checkbox) == on:
         return
-    if not _usable(s.state, EVENT, checkbox):
+    if not _usable(s.state, screen, checkbox):
         msg = f"{what}: the iTM does not offer this here"
         raise ItmCommandError(msg)
-    await _set_checkbox(s, EVENT, checkbox, on=on, what=what)
+    await _set_checkbox(s, screen, checkbox, on=on, what=what)
 
 
 def _mode_index(state: UIState, mode: str) -> int | None:
@@ -483,8 +485,8 @@ async def apply_event_settings(
     )
     if replace:
         for checkbox, value in settings:
-            if value is None and s.state.get(EVENT, checkbox, "CHECK_STATE") == 1:
-                await _pick(s, EVENT, checkbox, 0, "untick a setting")
+            if value is None:
+                await _tick(s, checkbox, on=False, what="untick a setting")
     if spec.power is not None:
         await _tick(s, EVT_POWER[0], on=True, what="power")
         await _click(s, EVENT, POWER_RADIOS[spec.power], f"power {spec.power}")
@@ -656,9 +658,9 @@ async def set_period(  # pylint: disable=too-many-locals
     await open_editor(s, program)
     try:
         await _tab(s, SE_TAB_PROPERTIES)
-        on = period is not None
-        if (s.state.get(EDITOR, SE_PERIOD_CHECK, "CHECK_STATE") == 1) != on:
-            await _pick(s, EDITOR, SE_PERIOD_CHECK, int(on), "period")
+        await _tick(
+            s, SE_PERIOD_CHECK, on=period is not None, what="period", screen=EDITOR
+        )
         if period is not None:
             (m1, d1), (m2, d2) = period
             for part, value, what in zip(
@@ -672,7 +674,7 @@ async def set_period(  # pylint: disable=too-many-locals
                     msg = f"period {what}: {value} not offered"
                     raise ItmCommandError(msg)
                 await _pick(s, EDITOR, part, index, f"period {what}")
-        label = "set period" if on else "remove period"
+        label = "set period" if period is not None else "remove period"
         return await save_editor(s, f"{label} of {program}")
     finally:
         await leave_editor(s)
