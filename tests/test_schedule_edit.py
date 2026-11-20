@@ -97,6 +97,19 @@ async def test_add_event_with_every_setting(itm: FakeScheduleITM) -> None:
     assert event.fan_speed == "high"
 
 
+async def test_add_setpoint_only_event(itm: FakeScheduleITM) -> None:
+    """The English mode list names the setpoint-only mode "Dependent"."""
+    spec = EventSpec(time="07:30", target="1:1-09", mode="setpoint", setpoint=21.0)
+    assert await run(itm, add_event, PROGRAM, 3, spec) is True
+    program = await FakeClient(itm).fetch_schedule(PROGRAM, details=True)
+    event = next(e for e in program.weekly[3] if e.time == "07:30")
+    assert (event.mode, event.mode_label, event.setpoint) == (
+        "setpoint",
+        "Dependent",
+        21.0,
+    )
+
+
 async def test_add_event_to_special_day_for_zone(itm: FakeScheduleITM) -> None:
     """A zone target on a special day; an empty day gets its first event."""
     spec = EventSpec(
@@ -231,10 +244,27 @@ async def test_set_and_remove_period(itm: FakeScheduleITM) -> None:
         await run(itm, set_period, PROGRAM, ((13, 1), (1, 1)))
 
 
+async def test_unavailable_options_are_named(
+    itm: FakeScheduleITM, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A period or calendar day the editor doesn't offer lists what it does."""
+    monkeypatch.setattr("daikin_itm.schedule_edit._option_index", lambda *_args: None)
+    with pytest.raises(ItmCommandError, match=r"period begin month: 6 not offered: \["):
+        await run(itm, set_period, PROGRAM, ((6, 1), (8, 31)))
+    with pytest.raises(ItmCommandError, match=r"calendar day 25 not offered: \["):
+        await run(
+            itm,
+            add_calendar_rule,
+            PROGRAM,
+            CalendarRuleSpec(pattern=2, month=12, day=25),
+        )
+
+
 async def test_rename_special_day(itm: FakeScheduleITM) -> None:
     """The name input takes 1-15 characters; only special days have names."""
     assert await run(itm, rename_special_day, PROGRAM, "Ex2", "Holiday") is True
     assert itm.special_names[PROGRAM][1] == "Holiday"
+    assert await run(itm, rename_special_day, PROGRAM, "Ex4", "R&D") is True
     c = FakeClient(itm)
     async with c._session() as s:
         await s.select_program(PROGRAM)
@@ -323,6 +353,27 @@ async def test_client_event_wrappers(itm: FakeScheduleITM) -> None:
     assert len(dry.planned) == 1
     with pytest.raises(ReadOnlyError):
         await FakeClient(itm, read_only=True).add_schedule_event(PROGRAM, 3, spec)
+
+
+async def test_read_only_refuses_before_the_read_a_write_starts_with(
+    itm: FakeScheduleITM,
+) -> None:
+    """A write that reads first is refused before that read, not after it."""
+    c = FakeClient(itm, read_only=True)
+    with pytest.raises(ReadOnlyError):
+        await c.add_schedule_calendar_rule(
+            PROGRAM, CalendarRuleSpec(pattern=2, month=12, day=25)
+        )
+    with pytest.raises(ReadOnlyError):
+        await c.edit_schedule_event(
+            PROGRAM,
+            1,
+            "06:00",
+            "Indoor units",
+            EventSpec(time="06:30", target="Indoor units", zone=True),
+            keep_unset=True,
+        )
+    assert itm.requests == []
 
 
 async def test_edit_event_keeps_unset_settings(itm: FakeScheduleITM) -> None:

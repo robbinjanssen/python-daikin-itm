@@ -11,6 +11,7 @@ Shapes follow the captures of a real iTM.
 from __future__ import annotations
 
 import copy
+import html
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -30,21 +31,6 @@ from .fake_itm import (
     _encode_part,
 )
 
-MONTHS = [
-    "Jan",
-    "Feb",
-    "Mar",
-    "Apr",
-    "May",
-    "Jun",
-    "Jul",
-    "Aug",
-    "Sep",
-    "Oct",
-    "Nov",
-    "Dec",
-]
-WEEKS = ["1st", "2nd", "3rd", "4th", "Last"]
 WEEKDAYS = [
     "Sunday",
     "Monday",
@@ -70,9 +56,6 @@ SETTINGS = {
 LOCK_KEYS = {7: 0, 11: 1, 14: 2}
 HOURMIN_ID, NUMBER_ID, ERROR_ID, DELETE_ID, RENAME_ID = 56, 70, 57, 20, 115
 CLEAR_ID, CALENDAR_COPY_ID = 116, 117
-
-
-EVERY_MONTH = "Every"  # codespell:ignore alle - the iTM's "every month"
 
 
 class FakeScheduleITM(FakeITM):  # pylint: disable=too-many-public-methods
@@ -179,7 +162,12 @@ class FakeScheduleITM(FakeITM):  # pylint: disable=too-many-public-methods
 
     def _editor_parts(self) -> list[tuple[int, str, Any]]:
         """Return FakeITM's editor parts plus the period, names and calendar."""
-        parts = super()._editor_parts()
+        parts = [
+            p
+            for p in super()._editor_parts()
+            if p[:2] not in {(26, "LIST_ROW"), (32, "COMBO_STRS")}
+        ]
+        parts += [self._calendar_list(), (32, "COMBO_STRS", list(self._names()))]
         if self.period is None:
             self.period = self._period_from_program()
         on = self.period[0] == 1
@@ -187,28 +175,26 @@ class FakeScheduleITM(FakeITM):  # pylint: disable=too-many-public-methods
         for part, value in zip((16, 17, 18, 19), self.period[1:], strict=True):
             parts.append((part, "SINGLE_SELIDX", value))
         parts += self._enabled(104, dict.fromkeys((16, 17, 18, 19), on))
-        parts += [(85 + i, "LABEL", n) for i, n in enumerate(self._names())]
-        self.calendar = {"pattern": 0, "daily": True, "values": {}}
         parts += [
-            (32, "COMBO_STRS", [f"Ex{i + 1}" for i in range(5)]),
-            (32, "SINGLE_SELIDX", 0),
-            (33, "CHECK_STATE", 1),
-            (39, "CHECK_STATE", 0),
-            (37, "COMBO_STRS", [*MONTHS, EVERY_MONTH]),
-            (37, "SINGLE_SELIDX", 0),
-            (38, "COMBO_NUMS", list(range(1, 32))),
-            (38, "SINGLE_SELIDX", 0),
-            (43, "COMBO_STRS", [*MONTHS, EVERY_MONTH]),
-            (44, "COMBO_STRS", WEEKS),
-            (46, "COMBO_STRS", WEEKDAYS),
+            (85 + i, "LABEL", html.escape(n)) for i, n in enumerate(self._names())
         ]
+        self.calendar = {"pattern": 0, "daily": True, "values": {}}
+        parts += [(33, "CHECK_STATE", 1), (39, "CHECK_STATE", 0)]
         parts += self._enabled(
             104, {43: False, 44: False, 46: False, 27: False, 28: False, 29: False}
         )
         return parts
 
     def _calendar_list(self) -> tuple[int, str, Any]:
-        rows = [{"text": r, "a": [-1] * 3, "b": [-1] * 3} for r in self.calendar_rows]
+        names = dict(zip((f"Ex{i + 1}" for i in range(5)), self._names(), strict=True))
+        rows = [
+            {
+                "text": [html.escape(c) for c in (*r[:2], names.get(r[2], r[2]))],
+                "a": [-1] * 3,
+                "b": [-1] * 3,
+            }
+            for r in self.calendar_rows
+        ]
         return (26, "LIST_ROW", {"rows": rows, "selected": []})
 
     # -- copies and clearing ----------------------------------------------------------
@@ -445,10 +431,21 @@ class FakeScheduleITM(FakeITM):  # pylint: disable=too-many-public-methods
             updates: list[Update] = [("DLG_CLOSE", 104, [RENAME_ID, 4], [])]
             if event == 1:
                 self._names()[self.editor_special] = ev["string"]
-                label = (85 + self.editor_special, "LABEL", ev["string"])
+                label = (85 + self.editor_special, "LABEL", html.escape(ev["string"]))
                 updates.append(("UPDATE", 104, [], [label]))
             return updates
         return self._calendar_event(ev)
+
+    def _new_rule(self) -> list[str]:
+        """Return the month and day of the rule the calendar tab's picks make."""
+        values, words = self.calendar["values"], self.calendar_words
+        if self.calendar["daily"]:
+            return [words.month_options[values.get(37, 0)], str(values.get(38, 0) + 1)]
+        week, weekday = (
+            words.weeks[values.get(44, 0)],
+            words.weekdays[values.get(46, 0)],
+        )
+        return [words.month_options[values.get(43, 0)], f"{week} {weekday}"]
 
     def _calendar_event(self, ev: dict[str, Any]) -> list[Update] | None:
         part, event, number = ev["part"], ev["event"], ev["number"]
@@ -474,14 +471,7 @@ class FakeScheduleITM(FakeITM):  # pylint: disable=too-many-public-methods
                 cal["pattern"] = number
             return [("UPDATE", 104, [], [])]
         if part == 49 and event == 1:
-            values = cal["values"]
-            if cal["daily"]:
-                month = [*MONTHS, EVERY_MONTH][values.get(37, 0)]
-                day = str(values.get(38, 0) + 1)
-            else:
-                month = [*MONTHS, EVERY_MONTH][values.get(43, 0)]
-                day = f"{WEEKS[values.get(44, 0)]} {WEEKDAYS[values.get(46, 0)]}"
-            self.calendar_rows.append([month, day, f"Ex{cal['pattern'] + 1}"])
+            self.calendar_rows.append([*self._new_rule(), f"Ex{cal['pattern'] + 1}"])
             return [("UPDATE", 104, [], [self._calendar_list()])]
         if part == 26 and event == 1:
             row = ev["array"][0] if ev["array"] else -1

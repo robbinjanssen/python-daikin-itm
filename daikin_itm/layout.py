@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 
 from ._bases import ClientCore
 from ._screens import clean as _clean
+from ._util import cleanup as _cleanup
 from .exceptions import ItmCommandError
 from .models import P_NAME, PointKind, point_kind
 from .protocol import DataType, EventType, ScreenID
@@ -170,7 +171,7 @@ async def read_layout(s: _Session, *, names: bool = False) -> Layout:
 
     """
     await s.click(MAINMENU, MM_LAYOUT_VIEW, "show the layout view")
-    try:
+    async with _cleanup(lambda: leave_layout(s)):
         if LAYOUT_VIEW not in s.state.screens:
             msg = "the layout view did not open"
             raise ItmCommandError(msg)
@@ -191,8 +192,6 @@ async def read_layout(s: _Session, *, names: bool = False) -> Layout:
                 ),
             )
         return layout
-    finally:
-        await leave_layout(s)
 
 
 class LayoutMixin(ClientCore):  # pylint: disable=too-few-public-methods

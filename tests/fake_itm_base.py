@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import itertools
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator
+    from collections.abc import Callable, Iterable, Iterator
 
 POWER_OPTIONS = ["Start", "SB Low", "SB High", "Stop"]
 
@@ -42,6 +43,7 @@ class FakeUnit:  # pylint: disable=too-many-instance-attributes
     setback: int = 0  # 0 none, 1 low, 2 high (the unit is not running then)
     thermo_on: bool = False
     error_code: str = ""
+    icon_id: int = 2114  # the icon of an indoor unit as seen on devices
     airflow: int | None = None  # dialog icon (3101..3111); None: not adjustable
     filter_sign: bool = False
     dust_alarm: bool = False
@@ -58,6 +60,8 @@ class FakeUnit:  # pylint: disable=too-many-instance-attributes
     analog_output: float | None = None
     multistate: int | None = None  # index into MULTISTATE_OPTIONS
     r32_alarm_stop: bool = False  # the dialog offers to stop the R32 alarm
+    # The unit doesn't take a change the iTM sends it (power, setpoint, settings).
+    ignores_writes: bool = False
 
 
 LOW_NOISE_OPTIONS = ["Off", "Step 1", "Step 2", "Step 3"]
@@ -107,6 +111,7 @@ EXTRA_NUMBERS = {
 }
 
 
+ANALOG_LIST_HEADERS = ["Name", "Status", "Value", "Blocked", "Error Type"]
 LIST_HEADERS = [
     "Name",
     "Status",
@@ -162,6 +167,7 @@ class FakeAnalog:
     point_id: str = "312"
     source_point: str = "1:1-00"
     upper_limit: float = 30.0
+    value: float | None = 21.25
 
 
 @dataclass
@@ -252,7 +258,7 @@ MENU_SCREENS = {
     51: 2600,
     53: 800,
 }
-EVENT_MODES = ["Fan", "Cool", "Heat", "Setpoint", "Automatic"]
+EVENT_MODES = ["Fan", "Cool", "Heat", "Dependent", "Automatic"]
 MENU_CLOSE_PARTS = {
     100: 13,
     102: 5,
@@ -306,6 +312,57 @@ MONTHS = [
 ]
 WEEKS = ["1st", "2nd", "3rd", "4th", "Last"]
 WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+
+
+@dataclass(frozen=True)
+class CalendarWords:
+    """The schedule editor's month, week and weekday words of a display language."""
+
+    months: tuple[str, ...]
+    every: str
+    weeks: tuple[str, ...]
+    weekdays: tuple[str, ...]
+
+    @property
+    def month_options(self) -> list[str]:
+        """Return the calendar's month options: the months, then every month."""
+        return [*self.months, self.every]
+
+
+ENGLISH_CALENDAR = CalendarWords(
+    months=tuple(MONTHS),
+    every="Every",
+    weeks=tuple(WEEKS),
+    weekdays=(
+        "Sunday",
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+    ),
+)
+# A made-up display language, with words in no table of the library.
+OTHER_CALENDAR = CalendarWords(
+    months=(
+        "Alpha",
+        "Beta",
+        "Gamma",
+        "Delta",
+        "Epsilon",
+        "Zeta",
+        "Eta",
+        "Theta",
+        "Iota",
+        "Kappa",
+        "Lambda",
+        "Mu",
+    ),
+    every="Omega",
+    weeks=("Pos 1", "Pos 2", "Pos 3", "Pos 4", "Pos Z"),
+    weekdays=("Dia A", "Dia B", "Dia C", "Dia D", "Dia E", "Dia F", "Dia G"),
+)
 SERVICE_BUTTONS = {
     69: 1500,
     77: 1505,
@@ -396,10 +453,20 @@ class FakeITMBase:  # pylint: disable=too-many-instance-attributes
     """The simulated iTM's state, shared by its screens."""
 
     def __init__(  # noqa: PLR0915  # pylint: disable=too-many-statements
-        self, username: str = "user", password: str = "secret"
+        self,
+        username: str = "user",
+        password: str = "secret",
+        *,
+        normal_user: bool = False,
     ) -> None:
-        """Set up three units in Building/Indoor units, one of them stopped."""
+        """Set up three units in Building/Indoor units, one of them stopped.
+
+        With ``normal_user`` the account is a normal web user managing Indoor
+        units, without allowed screens: its units show at the top level, the
+        login hides the menu button and the main menu doesn't open.
+        """
         self.username = username
+        self.normal_user = normal_user
         self.digest = hashlib.sha256(password.encode()).hexdigest()
         self.units = [
             FakeUnit(
@@ -445,6 +512,8 @@ class FakeITMBase:  # pylint: disable=too-many-instance-attributes
                 )
             ],
         )
+        if normal_user:
+            self.root = FakeZone("top", self.units)
         # A unit error: the main menu bar shows the error indicator and button.
         self.errors: list[list[str]] = []
         # The main menu: what its screens show.
@@ -459,6 +528,7 @@ class FakeITMBase:  # pylint: disable=too-many-instance-attributes
         self.time_24h = True
         self.decimal_comma = False
         self.clock_text = "01/01/2025 10:15:30"
+        self.bar_clock = "Tue, 31/12\n09:00"  # the main menu bar's clock
         self.dst = False
         self.groups: list[FakeGroup] = []
         self.selected_group: int | None = None
@@ -477,6 +547,7 @@ class FakeITMBase:  # pylint: disable=too-many-instance-attributes
         self.history_classes = {3, 4, 5, 6}  # checked class filters
         self.history_job = 0
         self.history_loading = False
+        self.history_cancelled = 0
         self.history_page = 0
         self.history_page_size = 100
         self.optional_available: dict[int, bool] = {
@@ -555,31 +626,70 @@ class FakeITMBase:  # pylint: disable=too-many-instance-attributes
             },
         }
         self.calendar_rows = [["Jan", "1", "Ex1"]]
+        self.calendar_words = ENGLISH_CALENDAR
         self.selected_program = 0
         self.editor_day = 0
         self.editor_special = 0
         self.editor_list = "weekly"
         self.overview_offset = 0
+        self.overview_follows_calendar = False
+        self.overview_reach: int | None = None
         self.selected_event: int | None = None
         self.editor_confirming = False
+        self.editor_stays_open = False
+        self.ignores_typed_values = False
+        self.typed_values_ignored = 0
+        self.input_dialogs: dict[tuple[int, int], int] = {}
         self.session: str | None = None
+        # The session ends after idle_timeout seconds without a request (None:
+        # never), by clock, which a test may replace.
+        self.clock: Callable[[], float] = time.monotonic
+        self.idle_timeout: float | None = None
+        self.last_request = 0.0
         self.tokens: Iterator[str] = (f"{i:032x}" for i in itertools.count(1))
         self.requests: list[dict[str, Any]] = []
+        self.logins = 0
         self.fail_next: Exception | None = None
+        # Faults (FakeITM.handle and answer): which requests they hit, a lost
+        # reply, requests that hang, and what they hit so far.
+        self.fault_on: Callable[[dict[str, Any]], bool] = lambda _ev: True
+        self.lose_reply_next: Exception | None = None
+        self.lost_replies: list[dict[str, Any]] = []
+        self.hang_next = 0
+        self.hung: list[dict[str, Any]] = []
+        self.restarts = 0
         self.dialog: dict[str, Any] | None = None
-        # Changes reach the unit only after this many further logins (the real bus
-        # takes a few seconds).
+        # Changes reach the unit only after this many further logins or POLLING
+        # events (the real bus takes a few seconds; a check in the write's own
+        # session starts with a POLLING).
         self.latency_logins = 0
         self.web_version = "Ver1.32.00"
         self._pending: list[list[Any]] = []  # [logins_left, callable, unit]
         # Writes sent while an earlier change to the same unit was still pending.
         self.overlaps = 0
+        self.changed_elsewhere: list[int] = []
         self.path: list[FakeZone] = [self.root]
         self.selected = 0
         self.list_shown = False  # the list view instead of the icon view
         self.error_shown = False
-        # (part, type) -> value the client is believed to show
+        # (part, type) -> value the client is believed to show: on the operation
+        # panel, the icon view and the main menu bar. Like the real iTM, a reply
+        # only carries what differs from it, for as long as the session lasts.
         self.shown: dict[tuple[int, str], Any] = {}
+        # With sticky_picks the panel of the point it showed last is sent only
+        # where the point changed since the iTM last sent it: a pick the unit
+        # didn't take stays on the client's panel until another point is shown.
+        self.sticky_picks = False
+        # With forgets_picks the iTM keeps taking the value it sent last for what
+        # the client shows, not the client's pick: a pick the unit didn't take is
+        # then sent neither for its point nor for another point with that value.
+        self.forgets_picks = False
+        self.panel_sent: dict[tuple[int, str], Any] = {}
+        self.panel_item: object = None
+        self.icon_shown: dict[tuple[int, str], Any] = {}
+        self.bar_shown: dict[tuple[int, str], Any] = {}
+        # The list view is hidden, not closed: the list it sent last still counts.
+        self.list_sent: dict[str, Any] | None = None
         self.pending_setpoint: int | None = None
         self.pending_power: int | None = None
         self.confirming_setback: int | None = None

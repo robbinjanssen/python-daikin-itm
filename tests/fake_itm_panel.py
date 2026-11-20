@@ -6,6 +6,7 @@ import functools
 from typing import TYPE_CHECKING, Any, cast
 
 from .fake_itm_base import (
+    ANALOG_LIST_HEADERS,
     CAPACITY_OPTIONS,
     EXTRA_COMBOS,
     EXTRA_CONTROLS,
@@ -36,13 +37,27 @@ class PanelMixin(FakeITMBase):
 
     def _select_icon(self, ev: dict[str, Any]) -> list[Update]:
         self.selected = ev["number"]
-        return [("UPDATE", 1, [], []), ("UPDATE", 4, [], self._panel_delta())]
+        return [
+            ("UPDATE", 1, [], self._icon_delta()),
+            ("UPDATE", 4, [], self._panel_delta()),
+        ]
 
     def _zone_down(self, _ev: dict[str, Any]) -> list[Update]:
         self.path.append(cast("FakeZone", self.path[-1].children[self.selected]))
         self.selected = 0
         return [
-            ("UPDATE", 1, [], [(6, "ICONPANEL", self._icons())]),
+            ("UPDATE", 1, [], self._icon_delta()),
+            ("UPDATE", 4, [], self._panel_delta()),
+        ]
+
+    def _zone_top(self, _ev: dict[str, Any]) -> list[Update]:
+        if len(self.path) == 1:
+            msg = "1/1 clicked while disabled: the real iTM hangs"
+            raise RuntimeError(msg)
+        self.path = [self.root]
+        self.selected = 0
+        return [
+            ("UPDATE", 1, [], self._icon_delta()),
             ("UPDATE", 4, [], self._panel_delta()),
         ]
 
@@ -60,8 +75,9 @@ class PanelMixin(FakeITMBase):
             return [("DLG_OPEN", 4, confirm, [])]
         else:
             self.pending_power = ev["number"]
-        # The client already shows its own pick.
-        self.shown[ev["part"], "SINGLE_SELIDX"] = ev["number"]
+        if not self.forgets_picks:
+            # The client already shows its own pick.
+            self.shown[ev["part"], "SINGLE_SELIDX"] = ev["number"]
         return [("UPDATE", 4, [], [])]
 
     def _confirm_setback(self, ev: dict[str, Any]) -> list[Update]:
@@ -69,24 +85,47 @@ class PanelMixin(FakeITMBase):
         number, self.confirming_setback = self.confirming_setback, None
         if ev["event"] == 1:
             self.pending_power = number
-            self.shown[9, "SINGLE_SELIDX"] = number
+            if not self.forgets_picks:
+                self.shown[9, "SINGLE_SELIDX"] = number
         return [("UPDATE", 4, [], [])]
 
     def _list_view(self, _ev: dict[str, Any]) -> list[Update]:
         """Show the list view (screen 2) with every unit of the current zone."""
         self.list_shown = True
-        rows = [self._list_row(c) for c in self.path[-1].children]
+        children = self.path[-1].children
+        headers = LIST_HEADERS
+        rows = [self._list_row(c) for c in children]
+        analog = bool(children) and all(isinstance(c, FakeAnalog) for c in children)
+        if analog:
+            headers = ANALOG_LIST_HEADERS
+            rows = [self._analog_row(c) for c in children]
         panel = {
-            "cols": [[name, 100] for name in LIST_HEADERS],
+            "cols": [[name, 100] for name in headers],
             "sort": [0, 0],
             "rows": rows,
             "selected": self.selected,
         }
-        return [("SHOW", 2, [], [(8, "PNTLIST", panel)]), ("HIDE", 1, [], [])]
+        # A real iTM sent the analog list again each time it was shown.
+        sent = panel == self.list_sent and not analog
+        parts = [] if sent else [(8, "PNTLIST", panel)]
+        self.list_sent = panel
+        return [("SHOW", 2, [], parts), ("HIDE", 1, [], [])]
 
     def _icon_view(self, _ev: dict[str, Any]) -> list[Update]:
         self.list_shown = False
         return [("SHOW", 1, [], []), ("HIDE", 2, [], [])]
+
+    @staticmethod
+    def _analog_row(c: FakeAnalog) -> list[list[Any]]:
+        """Return a row of an analog-only zone's list: name, status, value, ..."""
+        value = "---" if c.value is None else f"{c.value:.2f}°C"
+        return [
+            [c.name, -1, -1],
+            ["", 2601, 5 if c.alarm else 2],
+            [value, -1, -1],
+            ["", -1, -1],
+            ["", -1, -1],
+        ]
 
     @staticmethod
     def _list_row(c: Any) -> list[list[Any]]:
@@ -98,7 +137,7 @@ class PanelMixin(FakeITMBase):
             return [[c.name, -1, -1], ["", icon, 0], *([["", -1, -1]] * 23)]
         cells: list[list[Any]] = [["", -1, -1] for _ in LIST_HEADERS]
         cells[0] = [c.name, -1, -1]
-        cells[1] = ["", 2114, 0 if c.running else 2]
+        cells[1] = ["", c.icon_id, 0 if c.running else 2]
         cells[2] = ["", 4000, -1]
         cells[3] = [c.mode, -1, -1]
         cells[4] = [f"{c.temp:.1f}°C", -1, -1]
@@ -173,6 +212,8 @@ class PanelMixin(FakeITMBase):
 
         def change(targets: list[FakeUnit] = targets) -> None:
             for item in targets:
+                if getattr(item, "ignores_writes", False):
+                    continue
                 if power is not None:
                     item.running = power == 0
                     item.setback = power if power in {1, 2} else 0
@@ -198,6 +239,7 @@ class PanelMixin(FakeITMBase):
                 (4, "CHECK_STATE", 0 if running else 1),
                 (18, "COMBO_STRS", []),
                 (18, "VISIBLED", 0),
+                (19, "VISIBLED", 0),
                 (28, "VISIBLED", 0),
             ]
             for check, combo, options, chosen in (
@@ -251,6 +293,12 @@ class PanelMixin(FakeITMBase):
             (73, "SINGLE_SELIDX", 0 if u.heat_limit[0] else 1),
             (75, "TEXT", f"{u.heat_limit[2]:.1f}"),
             (79, "TEXT", f"{u.heat_limit[1]:.1f}"),
+            (19, "LABEL", "Setpoint"),
+            (19, "CHECK_STATE", 0),
+            (20, "VISIBLED", 0),
+            (20, "CHECK_STATE", 1),
+            (21, "TEXT", f"{u.setpoint:.1f}"),
+            *_enabled((21, 23), 0),
         ]
         for radios, checked in (
             ((8, 9, 10), u.lock_start_stop),
@@ -391,6 +439,8 @@ class PanelMixin(FakeITMBase):
         if part in {7, 11, 14, 26, 60} and event == 1:
             (d["ticks"].add if number else d["ticks"].discard)(part)
             return [("UPDATE", 7, [], [(part, "CHECK_STATE", number)])]
+        if part in {19, 23, 32}:
+            return self._setpoint_event(ev)
         if part in radios:
             needs = {"start_stop": 7, "mode": 11, "setpoint": 14}[radios[part][0]]
             if needs in d["ticks"]:
@@ -419,8 +469,32 @@ class PanelMixin(FakeITMBase):
             return [("DLG_CLOSE", 7, [70, 6], [])]
         return None
 
+    def _setpoint_event(self, ev: dict[str, Any]) -> list[Update]:
+        """Answer the dialog's setpoint checkbox, "change" button and number input."""
+        part, event, number = ev["part"], ev["event"], ev["number"]
+        d = cast("dict[str, Any]", self.dialog)
+        if part == 19 and event == 1:
+            (d["ticks"].add if number else d["ticks"].discard)(part)
+            enabled = _enabled((21, 23), number)
+            return [("UPDATE", 7, [], [(19, "CHECK_STATE", number), *enabled])]
+        if part == 23:
+            if 19 not in d["ticks"]:
+                msg = "7/23 clicked while disabled: the real iTM hangs"
+                raise RuntimeError(msg)
+            u = self._item()
+            low, high = min(u.setpoint_range), max(u.setpoint_range)
+            data = [32, 6, 2, "Setpoint", u.setpoint, 0, low, 0, high, 0, 2, 0]
+            return [("DLG_OPEN", 7, [*data, *["x"] * 11], [])]
+        if event == 1:
+            d.setdefault("unit", {})["setpoint"] = ev["array"][0]
+        return [("DLG_CLOSE", 7, [32, 6], [])]
+
     @staticmethod
     def _apply_unit_settings(u: FakeUnit, pending: dict[str, Any]) -> None:
+        if u.ignores_writes:
+            return
+        if "setpoint" in pending:
+            u.setpoint = pending["setpoint"]
         if "lock_start_stop" in pending:
             u.lock_start_stop = pending["lock_start_stop"]
         if "lock_mode" in pending:
@@ -521,6 +595,8 @@ class PanelMixin(FakeITMBase):
     @staticmethod
     def _dialog_change(u: FakeUnit, d: dict[str, Any]) -> Callable[[], None]:
         def change() -> None:
+            if getattr(u, "ignores_writes", False):
+                return
             if d["power"] is not None:
                 u.running = d["power"]
                 u.setback = 0  # start or stop ends setback
@@ -566,6 +642,27 @@ class PanelMixin(FakeITMBase):
             return [c for c in item.children if isinstance(c, FakeUnit)]
         return [cast("FakeUnit", item)]
 
+    def _icon_delta(self) -> list[tuple[int, str, Any]]:
+        """Return the icon view's parts that differ from what the client shows."""
+        children = self.path[-1].children
+        item = children[self.selected] if children else None
+        below = 0 if len(self.path) == 1 else 1
+        panel = self._icons()
+        full = {
+            (0, "LABEL"): "&gt;".join(zone.name for zone in self.path),
+            (1, "ENABLED"): below,
+            (2, "ENABLED"): int(isinstance(item, FakeZone)),
+            (3, "ENABLED"): below,
+            (6, "ICONPANEL"): panel["icons"],
+        }
+        delta = [
+            (p, t, panel if t == "ICONPANEL" else v)
+            for (p, t), v in full.items()
+            if self.icon_shown.get((p, t)) != v
+        ]
+        self.icon_shown.update(full)
+        return delta
+
     def _icons(self) -> dict[str, Any]:
         icons = []
         for c in self.path[-1].children:
@@ -576,7 +673,7 @@ class PanelMixin(FakeITMBase):
             elif isinstance(c, FakeAnalog):
                 icons.append([c.name, 2601, 5 if c.alarm else 2])
             else:
-                icons.append([c.name, 2114, 0 if c.running else 2])
+                icons.append([c.name, c.icon_id, 0 if c.running else 2])
         return {"icons": icons, "selected": self.selected}
 
     def _panel_delta(self) -> list[tuple[int, str, Any]]:
@@ -587,7 +684,7 @@ class PanelMixin(FakeITMBase):
             full = {
                 (0, "LABEL"): item.name,
                 (1, "ICONID_MODE"): [
-                    2114,
+                    item.icon_id,
                     0 if item.running else 11 if item.setback else 2,
                 ],
                 (4, "LABEL"): f"{item.temp:.1f}°C",
@@ -642,6 +739,11 @@ class PanelMixin(FakeITMBase):
                 (4, "VISIBLED"): 0,
                 (5, "VISIBLED"): 0,
             }
-        delta = [(p, t, v) for (p, t), v in full.items() if self.shown.get((p, t)) != v]
+        base = self.shown
+        if self.sticky_picks and item is self.panel_item:
+            base = self.panel_sent
+        delta = [(p, t, v) for (p, t), v in full.items() if base.get((p, t)) != v]
         self.shown.update(full)
+        self.panel_sent = dict(full)
+        self.panel_item = item
         return delta

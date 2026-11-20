@@ -159,6 +159,7 @@ class FakeLayoutITM(FakeITM):
             index = ev["number"]
             self.layout_selected.append(index)
             item = self.layout_items[index]
+            self.shown[0, "LABEL"] = item.unit
             return [("UPDATE", 4, [], [(0, "LABEL", item.unit)])]
         msg = f"3/{part} clicked: the client never presses it"
         raise RuntimeError(msg)

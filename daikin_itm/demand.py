@@ -4,7 +4,7 @@
 Session-level flows, each leaving every screen it opened with its Close or Cancel.
 Writes save through the session's ``write`` / ``press_ok`` (a dry run plans the one
 request that saves and cancels; ``read_only`` refuses before anything is sent) and
-are confirmed by the client with a read in a fresh session (``confirm_*``). A part
+are confirmed by the client with a read-back (``confirm_*``). A part
 the iTM reports disabled (``ENABLED 0``) is never clicked; a hidden one is.
 
 The screens:
@@ -44,6 +44,7 @@ Shown texts are kept; numbers are parsed from them where they are plain ones
 
 from __future__ import annotations
 
+import functools
 import html
 import math
 from dataclasses import dataclass, field, replace
@@ -58,7 +59,8 @@ from ._screens import press_ok as _ok
 from ._screens import radio as _radio
 from ._screens import row_named as _row
 from ._util import T as _T
-from ._util import field_names
+from ._util import cleanup as _cleanup
+from ._util import field_names, one_login
 from ._util import ignore as _ignore
 from .energy_navigator import ShownValue
 from .energy_navigator import shown_value as _shown
@@ -548,25 +550,21 @@ async def _leave_all(s: _Session) -> None:
 async def read_legend(s: _Session) -> DemandLegend:
     """Read the legend (3300 -> 3302), then cancel it."""
     await _open_below(s, MAIN, MN_LEGEND, LEGEND)
-    try:
+    async with _cleanup(lambda: _close(s, LEGEND, LG_CANCEL)):
         return legend_from_screen(s.state)
-    finally:
-        await _close(s, LEGEND, LG_CANCEL)
 
 
 async def read_target_power(s: _Session) -> ShownValue | None:
     """Read the target power setup (3300 -> 3312), then cancel it."""
     await _open_below(s, MAIN, MN_TARGET_BUTTON, TARGET)
-    try:
+    async with _cleanup(lambda: _close(s, TARGET, TP_CANCEL)):
         return _shown(s.state, TARGET, TP_TEXT)
-    finally:
-        await _close(s, TARGET, TP_CANCEL)
 
 
 async def read_setup(s: _Session) -> DemandSetup:
     """Read the setup (3300 -> 3301): each control's radios, the forced level."""
     await _open_below(s, MAIN, MN_SETUP, SETUP)
-    try:
+    async with _cleanup(lambda: _close(s, SETUP, SU_CANCEL)):
         controls = []
         for i, cells in enumerate(_rows(s.state, SETUP, SU_LIST)):
             await s.select_row(SETUP, SU_LIST, i)
@@ -582,8 +580,6 @@ async def read_setup(s: _Session) -> DemandSetup:
             forced_level=_option(s.state, SETUP, SU_FORCED),
             forced_level_options=_options(s.state, SETUP, SU_FORCED),
         )
-    finally:
-        await _close(s, SETUP, SU_CANCEL)
 
 
 async def _open_control(s: _Session, control: str) -> int:
@@ -601,23 +597,21 @@ async def _walk(
 ) -> None:
     """Call visit(screen, control, group) for every control's every group."""
     await _open_below(s, MAIN, MN_SETUP, SETUP)
-    try:
+    async with _cleanup(lambda: _close(s, SETUP, SU_CANCEL)):
         for row, control in enumerate(_names(s.state, SETUP, SU_LIST, last=False)):
             await s.select_row(SETUP, SU_LIST, row)
             if s.state.get(SETUP, SU_MODIFY, "ENABLED") == 0:
                 continue  # never click a disabled Modify
             screen = await _open_control(s, control)
-            try:
+            async with _cleanup(
+                functools.partial(_close, s, screen, LAYOUTS[screen].cancel)
+            ):
                 groups = _names(s.state, screen, LS_GROUPS)
                 if not groups:
                     await visit(screen, control, None)
                 for i, group in enumerate(groups):
                     await s.select_row(screen, LS_GROUPS, i)
                     await visit(screen, control, group)
-            finally:
-                await _close(s, screen, LAYOUTS[screen].cancel)
-    finally:
-        await _close(s, SETUP, SU_CANCEL)
 
 
 async def read_levels(s: _Session) -> tuple[DemandLevelSetup, ...]:
@@ -635,10 +629,8 @@ async def _read_group(
     s: _Session, screen: int, control: str, group: str
 ) -> DemandGroup:
     await _open_below(s, screen, LS_GROUP_BUTTON, GROUP)
-    try:
+    async with _cleanup(lambda: _close(s, GROUP, GP_CANCEL)):
         return group_from_screen(s.state, control, group)
-    finally:
-        await _close(s, GROUP, GP_CANCEL)
 
 
 async def read_groups(s: _Session) -> tuple[DemandGroup, ...]:
@@ -656,7 +648,9 @@ async def read_groups(s: _Session) -> tuple[DemandGroup, ...]:
 async def read_control_status(s: _Session) -> tuple[DemandStatusTab, ...]:
     """Read the control status (3301 -> 3310), every tab, then cancel."""
     await _open_below(s, MAIN, MN_SETUP, SETUP)
-    try:
+    async with _cleanup(
+        lambda: _close(s, STATUS, CS_CANCEL), lambda: _close(s, SETUP, SU_CANCEL)
+    ):
         await _open_below(s, SETUP, SU_STATUS, STATUS)
         count = await _visit_tabs(s, STATUS, CS_TABS) or 1
         names = _tab_names(s.state, STATUS, CS_TABS, count)
@@ -671,28 +665,26 @@ async def read_control_status(s: _Session) -> tuple[DemandStatusTab, ...]:
                 names, CS_TAB_PARTS[:count], strict=False
             )
         )
-    finally:
-        await _close(s, STATUS, CS_CANCEL)
-        await _close(s, SETUP, SU_CANCEL)
 
 
 async def _read_data(s: _Session, button: int, screen: int) -> DemandData | None:
     if s.state.get(GRAPHS, button, "ENABLED") == 0:
         return None
     await _open_below(s, GRAPHS, button, screen)
-    try:
+    async with _cleanup(lambda: _close(s, screen, DATA_CANCEL[screen])):
         return DemandData(
             date=_string(s.state, screen, DATA_DATE),
             rows=_rows(s.state, screen, DATA_LIST),
         )
-    finally:
-        await _close(s, screen, DATA_CANCEL[screen])
 
 
 async def read_graphs(s: _Session) -> tuple[DemandGraph, ...]:
     """Read the graphs (3300 -> 3303), each tab's graph and its data (3304-3306)."""
     await _open_below(s, MAIN, MN_GRAPHS, GRAPHS)
-    try:
+    async with _cleanup(
+        *(functools.partial(_close, s, data, c) for data, c in DATA_CANCEL.items()),
+        functools.partial(_close, s, GRAPHS, GR_CANCEL),
+    ):
         count = len(s.state.get(GRAPHS, GR_TABS, "TAB_NAME") or []) or 1
         names = _tab_names(s.state, GRAPHS, GR_TABS, count)
         out = []
@@ -710,11 +702,9 @@ async def read_graphs(s: _Session) -> tuple[DemandGraph, ...]:
                     data=await _read_data(s, detail, screen),
                 )
             )
+        if count > 1:
+            await s.send(GRAPHS, GR_TABS, EventType.TAB_SELECT, DataType.INT, 0)
         return tuple(out)
-    finally:
-        for screen, cancel in DATA_CANCEL.items():
-            await _close(s, screen, cancel)
-        await _close(s, GRAPHS, GR_CANCEL)
 
 
 def wanted_parts(only: Iterable[str] | None) -> frozenset[str]:
@@ -748,14 +738,12 @@ async def read_demand_control(
         "control_status": read_control_status,
         "graphs": read_graphs,
     }
-    try:
+    async with _cleanup(lambda: _leave_all(s)):
         if not await open_main(s):
             return None
         status = status_from_screen(s.state)
         values = {name: await readers[name](s) for name in PARTS if name in only}
         return DemandControl(status=status, **values)
-    finally:
-        await _leave_all(s)
 
 
 # -- demand control: writes ----------------------------------------------------------
@@ -769,13 +757,11 @@ async def set_target(s: _Session, power: float) -> bool:
         True when saved, False in a dry run.
 
     """
-    try:
+    async with _cleanup(lambda: _leave_all(s)):
         await _require_main(s)
         await _open_below(s, MAIN, MN_TARGET_BUTTON, TARGET)
         await _number(s, TARGET, TP_BUTTON, power, "target power")
         return await _ok(s, f"save target power {power}", TARGET, TP_OK, TP_CANCEL)
-    finally:
-        await _leave_all(s)
 
 
 async def confirm_target(s: _Session, power: float) -> DemandStatus:
@@ -790,11 +776,9 @@ async def confirm_target(s: _Session, power: float) -> DemandStatus:
         ItmCommandError: It doesn't show the target power.
 
     """
-    try:
+    async with _cleanup(lambda: _leave_all(s)):
         await _require_main(s)
         status = status_from_screen(s.state)
-    finally:
-        await _leave_all(s)
     if not _close_to(status.target, power):
         msg = f"the iTM did not take the target power: {status.target}, not {power}"
         raise ItmCommandError(msg)
@@ -809,7 +793,7 @@ async def set_forced_level(s: _Session, level: str) -> bool:
         True when saved (or already so), False in a dry run.
 
     """
-    try:
+    async with _cleanup(lambda: _leave_all(s)):
         await _require_main(s)
         await _open_below(s, MAIN, MN_SETUP, SETUP)
         index = _option_index(s, SETUP, SU_FORCED, level, "forced level")
@@ -828,8 +812,6 @@ async def set_forced_level(s: _Session, level: str) -> bool:
             return False
         await s.answer_confirm(SETUP, reply)
         return True
-    finally:
-        await _leave_all(s)
 
 
 async def read_forced_level(s: _Session) -> str | None:
@@ -840,12 +822,10 @@ async def read_forced_level(s: _Session) -> str | None:
         The forced level's shown option.
 
     """
-    try:
+    async with _cleanup(lambda: _leave_all(s)):
         await _require_main(s)
         await _open_below(s, MAIN, MN_SETUP, SETUP)
         return _option(s.state, SETUP, SU_FORCED)
-    finally:
-        await _leave_all(s)
 
 
 async def _open_setup_for(s: _Session, control: str, group: str | None) -> int:
@@ -880,7 +860,7 @@ async def set_level_setup(s: _Session, change: LevelChange) -> bool:
         ItmCommandError: A value this kind of setup doesn't have, or not offered.
 
     """
-    try:
+    async with _cleanup(lambda: _leave_all(s)):
         screen = await _open_setup_for(s, change.control, change.group)
         layout = LAYOUTS[screen]
         if screen != TEMPERATURE and (
@@ -913,8 +893,6 @@ async def set_level_setup(s: _Session, change: LevelChange) -> bool:
             layout.ok,
             layout.cancel,
         )
-    finally:
-        await _leave_all(s)
 
 
 async def confirm_level_setup(s: _Session, change: LevelChange) -> DemandLevelSetup:
@@ -929,12 +907,10 @@ async def confirm_level_setup(s: _Session, change: LevelChange) -> DemandLevelSe
         ItmCommandError: It doesn't show the change.
 
     """
-    try:
+    async with _cleanup(lambda: _leave_all(s)):
         screen = await _open_setup_for(s, change.control, change.group)
         group = _selected_group(s, screen, change.group)
         got = level_setup_from_screen(s.state, screen, change.control, group)
-    finally:
-        await _leave_all(s)
     wrong = []
     if change.start_level is not None and (got.start_level or "").casefold() != (
         change.start_level.strip().casefold()
@@ -992,7 +968,7 @@ async def set_group(s: _Session, change: GroupChange) -> bool:
         True when saved, False in a dry run.
 
     """
-    try:
+    async with _cleanup(lambda: _leave_all(s)):
         screen = await _open_setup_for(s, change.control, change.group)
         await _open_below(s, screen, LS_GROUP_BUTTON, GROUP)
         if change.members is not None:
@@ -1010,8 +986,6 @@ async def set_group(s: _Session, change: GroupChange) -> bool:
         s.state.screens.pop(GROUP, None)
         layout = LAYOUTS[screen]
         return await _ok(s, label, screen, layout.ok, layout.cancel)
-    finally:
-        await _leave_all(s)
 
 
 async def confirm_group(s: _Session, change: GroupChange) -> DemandGroup:
@@ -1026,11 +1000,9 @@ async def confirm_group(s: _Session, change: GroupChange) -> DemandGroup:
         ItmCommandError: It doesn't show the change.
 
     """
-    try:
+    async with _cleanup(lambda: _leave_all(s)):
         screen = await _open_setup_for(s, change.control, change.group)
         got = await _read_group(s, screen, change.control, change.group.strip())
-    finally:
-        await _leave_all(s)
     wrong = []
     if change.members is not None and set(got.members) != {
         m.strip() for m in change.members
@@ -1077,7 +1049,7 @@ async def read_energy_saving(s: _Session) -> EnergySaving:
 
     """
     active = s.indicators().energy_saving
-    try:
+    async with _cleanup(lambda: _close(s, SUSPEND, SS_CANCEL)):
         if not await _open_suspend(s):
             return EnergySaving(active, None, None)
         return EnergySaving(
@@ -1085,8 +1057,6 @@ async def read_energy_saving(s: _Session) -> EnergySaving:
             suspend_status=_string(s.state, SUSPEND, SS_STATUS),
             suspend_enabled=s.state.get(SUSPEND, SS_BUTTON, "ENABLED") != 0,
         )
-    finally:
-        await _close(s, SUSPEND, SS_CANCEL)
 
 
 async def set_suspended(s: _Session, *, suspended: bool) -> bool:
@@ -1100,7 +1070,7 @@ async def set_suspended(s: _Session, *, suspended: bool) -> bool:
     if s.indicators().energy_saving is not suspended:
         return True
     verb = "suspend" if suspended else "resume"
-    try:
+    async with _cleanup(lambda: _close(s, SUSPEND, SS_CANCEL)):
         if not await _open_suspend(s):
             msg = "the energy saving suspend screen did not open"
             raise ItmCommandError(msg)
@@ -1110,8 +1080,6 @@ async def set_suspended(s: _Session, *, suspended: bool) -> bool:
             return False
         await s.answer_confirm(SUSPEND, reply)
         return True
-    finally:
-        await _close(s, SUSPEND, SS_CANCEL)
 
 
 # -- service screens (after a service login) -----------------------------------------
@@ -1140,12 +1108,10 @@ async def read_energy_saving_status(s: _Session) -> EnergySavingStatus | None:
         What it shows; None when it doesn't open.
 
     """
-    try:
+    async with _cleanup(lambda: _close(s, SERVICE_STATUS, EST_CANCEL)):
         if not await _open_service(s, MB_ENERGY_SAVING_STATUS, (SERVICE_STATUS,)):
             return None
         return energy_saving_status_from_screen(s.state)
-    finally:
-        await _close(s, SERVICE_STATUS, EST_CANCEL)
 
 
 async def disable_energy_saving(s: _Session) -> bool:
@@ -1156,7 +1122,7 @@ async def disable_energy_saving(s: _Session) -> bool:
         True when sent, False in a dry run.
 
     """
-    try:
+    async with _cleanup(lambda: _close(s, SERVICE_STATUS, EST_CANCEL)):
         if not await _open_service(s, MB_ENERGY_SAVING_STATUS, (SERVICE_STATUS,)):
             msg = "the energy saving status screen did not open"
             raise ItmCommandError(msg)
@@ -1166,8 +1132,6 @@ async def disable_energy_saving(s: _Session) -> bool:
             return False
         await s.answer_confirm(SERVICE_STATUS, reply)
         return True
-    finally:
-        await _close(s, SERVICE_STATUS, EST_CANCEL)
 
 
 async def _leave_service(s: _Session) -> None:
@@ -1188,7 +1152,7 @@ async def read_demand_service(s: _Session) -> DemandServiceSettings:
         What the screen that opened shows; empty when none did.
 
     """
-    try:
+    async with _cleanup(lambda: _leave_service(s)):
         screen = await _open_demand_setup(s)
         if screen is None:
             return DemandServiceSettings()
@@ -1203,8 +1167,6 @@ async def read_demand_service(s: _Session) -> DemandServiceSettings:
             ports = ports_from_screen(s.state)
             await _close(s, PORT_PICKER, PP_CANCEL)
         return DemandServiceSettings(pulse, interlock, ports)
-    finally:
-        await _leave_service(s)
 
 
 async def _set_port(  # noqa: PLR0913  # pylint: disable=too-many-arguments
@@ -1250,7 +1212,7 @@ async def set_pulse_setup(s: _Session, change: PulseChange) -> bool:
         True when saved, False in a dry run.
 
     """
-    try:
+    async with _cleanup(lambda: _leave_service(s)):
         await _require_screen(s, PULSE_SETUP, "demand pulse setup")
         for index, port in enumerate((change.input_port1, change.input_port2)):
             if port is not None:
@@ -1273,8 +1235,6 @@ async def set_pulse_setup(s: _Session, change: PulseChange) -> bool:
             radio = PS_SYNC_EXTERNAL if change.sync_external else PS_SYNC_PERIOD
             await s.click(PULSE_SETUP, radio, "synchronisation method")
         return await _ok(s, "save demand pulse setup", PULSE_SETUP, PS_OK, PS_CANCEL)
-    finally:
-        await _leave_service(s)
 
 
 def check_pulse_setup(got: DemandPulseSetup | None, change: PulseChange) -> None:
@@ -1319,7 +1279,7 @@ async def set_interlock_ports(s: _Session, ports: Mapping[int, str]) -> bool:
         True when saved, False in a dry run.
 
     """
-    try:
+    async with _cleanup(lambda: _leave_service(s)):
         await _require_screen(s, INTERLOCK_SETUP, "demand control interlock setup")
         for number, port in sorted(ports.items()):
             if not 1 <= number <= len(IL_PORT_BUTTONS):
@@ -1336,8 +1296,6 @@ async def set_interlock_ports(s: _Session, ports: Mapping[int, str]) -> bool:
         return await _ok(
             s, "save demand control interlock", INTERLOCK_SETUP, IL_OK, IL_CANCEL
         )
-    finally:
-        await _leave_service(s)
 
 
 def check_interlock_ports(
@@ -1417,6 +1375,7 @@ class DemandMixin(ClientCore):
         wanted = wanted_parts(only)
         return await self._in_session(lambda s: read_demand_control(s, wanted))
 
+    @one_login
     async def set_demand_target(self, power: float) -> DemandStatus | None:
         """Change the target power (3312) and OK.
 
@@ -1426,7 +1385,7 @@ class DemandMixin(ClientCore):
 
         Returns:
         -------
-            The status as read back in a fresh session; None in a dry run.
+            The status as read back; None in a dry run.
 
         """
         self._experimental("set the demand control target")
@@ -1435,6 +1394,7 @@ class DemandMixin(ClientCore):
             return None
         return await self._in_session(lambda s: confirm_target(s, power))
 
+    @one_login
     async def set_demand_forced_level(self, level: str) -> str | None:
         """Pick the setup's forced level (3301); the pick saves.
 
@@ -1461,6 +1421,7 @@ class DemandMixin(ClientCore):
             raise ItmCommandError(msg)
         return got
 
+    @one_login
     async def set_demand_level_setup(  # noqa: PLR0913  # pylint: disable=too-many-arguments
         self,
         control: str,
@@ -1496,6 +1457,7 @@ class DemandMixin(ClientCore):
             return None
         return await self._in_session(lambda s: confirm_level_setup(s, change))
 
+    @one_login
     async def set_demand_group(
         self,
         control: str,
@@ -1559,6 +1521,7 @@ class DemandMixin(ClientCore):
 
         return await self._in_session(read)
 
+    @one_login
     async def suspend_energy_saving(self, *, suspend: bool = True) -> bool | None:
         """Suspend energy saving (1400), or resume it with ``suspend=False``.
 
@@ -1585,6 +1548,7 @@ class DemandMixin(ClientCore):
             raise ItmCommandError(msg)
         return active
 
+    @one_login
     async def disable_energy_saving(
         self, password: str, *, allow_service_change: bool = False
     ) -> bool | None:
@@ -1634,6 +1598,7 @@ class DemandMixin(ClientCore):
         """
         return await self._service_session(password, read_demand_service)
 
+    @one_login
     async def set_demand_pulse_setup(  # noqa: PLR0913  # pylint: disable=too-many-arguments
         self,
         password: str,
@@ -1683,6 +1648,7 @@ class DemandMixin(ClientCore):
         check_pulse_setup(got, change)
         return got
 
+    @one_login
     async def set_demand_interlock_ports(
         self,
         password: str,

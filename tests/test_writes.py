@@ -497,6 +497,8 @@ async def test_zone_writes_follow_the_unit_rules(
         await real_sleep(0)
 
     monkeypatch.setattr(asyncio, "sleep", sleep)
+    for u in itm.units:
+        u.running = False
     c._last_write[member] = time.monotonic()
     assert await c.apply_zone(zone, power=True, confirm=False) is None
     assert any(w > 50 for w in waits)

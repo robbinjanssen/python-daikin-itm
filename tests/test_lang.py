@@ -10,6 +10,10 @@ from daikin_itm import PowerState, RemoteLock
 from daikin_itm.lang import (
     ALL_ZONE_LABELS,
     analog_key,
+    calendar_month,
+    calendar_week,
+    calendar_weekday,
+    event_mode_from_label,
     is_all_zone,
     lock_from_label,
     mode_from_label,
@@ -24,7 +28,8 @@ from daikin_itm.state import UIState
 
 # Per language, as captured: the settings dialog's modes (fan, cool, heat), the lock
 # radios (allowed, stop only, forbidden), the operation panel's on/off/setback combo,
-# a schedule event text, the Details status lines and an analog point's attributes.
+# schedule event texts and words, the Details status lines, an analog point's
+# attributes, the web user types, the thermostat's on and off and the "All" zone.
 CAPTURED: dict[str, dict[str, Any]] = {
     "nl": {
         "modes": ["Ventilator", "Koelen", "Verwarmen"],
@@ -38,6 +43,13 @@ CAPTURED: dict[str, dict[str, Any]] = {
         "analog": "Doelpunt:AC1\nBovengrens:31.0\nTekenreeks eenheid:°C",
         "admin": "Beheerder",
         "off": "UIT",
+        "stop": "Stop, Afst.bed.start/stop vergrendelen[Alleen stoppen], "
+        "Afst.bed.mode vergrendelen[Verboden], Afst.bed.temp vergrendelen[Verboden]",
+        "setback_high": "Setback Hoog",
+        "setpoint_mode": "Setpoint",
+        "user": "Gebruiker",
+        "on": "AAN",
+        "all": "Alles",
     },
     "en": {
         "modes": ["Fan", "Cool", "Heat"],
@@ -50,6 +62,13 @@ CAPTURED: dict[str, dict[str, Any]] = {
         "analog": "Target Point:AC1\nUpper Limit:31.0\nUnit Label:°C",
         "admin": "Manager",
         "off": "Off",
+        "stop": "Stop, R/C Start/Stop[Stop Only], R/C Op. Mode[Prohibited], "
+        "R/C Setpoint[Prohibited]",
+        "setback_high": "Setback High",
+        "setpoint_mode": "Dependent",
+        "user": "User",
+        "on": "ON",
+        "all": "All",
     },
     "de": {
         "modes": ["Umluft", "Kühlen ", "Heizen "],
@@ -62,6 +81,13 @@ CAPTURED: dict[str, dict[str, Any]] = {
         "analog": "Ziel-Punkt:AC1\nObergrenze:31.0\nEinheit:°C",
         "admin": "Administrator",
         "off": "AUS",
+        "stop": "Stop, FB.Start/Stop[Nur Stop], FB Modus[Unzulässig], "
+        "FB Sollwert[Unzulässig]",
+        "setback_high": "Setback Hoch",
+        "setpoint_mode": "Einstl.pkt",
+        "user": "Benutzer",
+        "on": "EIN",
+        "all": "Alle",  # codespell:ignore alle
     },
     "es": {
         "modes": ["Ventilación", "Frío", "Calor"],
@@ -74,6 +100,13 @@ CAPTURED: dict[str, dict[str, Any]] = {
         "analog": "Punto objetivo:AC1\nLímite sup.:31.0\nUnidad:°C",
         "admin": "Gestor",
         "off": "Off",
+        "stop": "Paro, C/R Marcha/Paro[Sólo paro], C/R Modo[Prohibido], "
+        "C/R Consigna[Prohibido]",
+        "setback_high": "Standby alto",
+        "setpoint_mode": "Pto.Consigna",
+        "user": "Usuario",
+        "on": "ON",
+        "all": "Todo",
     },
     "pt": {
         "modes": ["Ventilação", "Frio", "Calor"],
@@ -86,6 +119,13 @@ CAPTURED: dict[str, dict[str, Any]] = {
         "analog": "Ponto de destino:AC1\nLimite superior:31.0\nSequência de unidade:°C",
         "admin": "Gestor",
         "off": "OFF",
+        "stop": "Parar, R/C On/Off[Apenas paragem], R/C Modo func.[Proibido], "
+        "R/C Ajuste temp.[Proibido]",
+        "setback_high": "Bloqueio elevado",
+        "setpoint_mode": "Temperatura",
+        "user": "Utilizador",
+        "on": "LIGADO",
+        "all": "Todos",
     },
     "ja": {
         "modes": ["送風", "冷房", "暖房"],
@@ -98,6 +138,13 @@ CAPTURED: dict[str, dict[str, Any]] = {
         "analog": "対象管理点:AC1\n上限値:31.0\n単位文字列:℃",
         "admin": "管理者",
         "off": "Off",
+        "stop": "停止, リモコン発停[停止のみ許可], リモコン運転モード[禁止], "
+        "リモコン温度設定[禁止]",
+        "setback_high": "セットバック強",
+        "setpoint_mode": "温調",
+        "user": "一般ユーザ",
+        "on": "ON",
+        "all": "全て",
     },
     "fr": {
         "modes": ["Ventilation", "Rafraîchir", "Chauffage"],
@@ -111,6 +158,14 @@ CAPTURED: dict[str, dict[str, Any]] = {
         "analog": "Point cible:AC1\nLimite haute:31.0\nAbréviation d'unité:°C",
         "admin": "Administrateur",
         "off": "OFF",
+        "stop": "Arrêter, Télécommande Marche/Arrêt[Arrêt Seul], "
+        "Télécommande mode fonctionnement[Interdit], "
+        "Télécommande point de consigne[Interdit]",
+        "setback_high": "Setback haut",
+        "setpoint_mode": "Temp",
+        "user": "Utilisateur",
+        "on": "MARCHE",
+        "all": "Tout",
     },
     "it": {
         "modes": ["Vent", "Freddo", "Caldo"],
@@ -123,6 +178,13 @@ CAPTURED: dict[str, dict[str, Any]] = {
         "analog": "Punto target:AC1\nLimite superiore:31.0\nStringa unità:°C",
         "admin": "Gestore",
         "off": "OFF",
+        "stop": "Arresta, R/C On/Off[Solo Arresto], R/C Modo Oper.[Proibito], "
+        "R/C Setpoint[Proibito]",
+        "setback_high": "Setback alto",
+        "setpoint_mode": "Setpoint",
+        "user": "Utente",
+        "on": "ON",
+        "all": "Tutto",
     },
     "zh": {
         "modes": ["通风", "制冷", "制热"],
@@ -135,6 +197,32 @@ CAPTURED: dict[str, dict[str, Any]] = {
         "analog": "目標管理点:AC1\n上限值:31.0\n单位字符串:℃",
         "admin": "管理员",
         "off": "OFF",
+        "stop": "停止, 复位起动/停止[只允许停止], 复位运转模式[禁止], "
+        "复位温度设定[禁止]",
+        "setback_high": "温度维持强",
+        "setpoint_mode": "温度控制",
+        "user": "用户",
+        "on": "ON",
+        "all": "全部",
+    },
+    "ko": {
+        "modes": ["송풍", "냉방", "난방"],
+        "locks": ["허가", "정지만 허가", "금지"],
+        "power": ["운전", "SB저", "SB고", "정지"],
+        "event": "운전, 원격 운전/정지[허가], 원격 운전 모드[금지], "
+        "원격 온도 설정[허가], 자동, 23.0°C",
+        "setback": "세트백 저, 17.0°C",
+        "status": "서모 상태 [OFF]\nR32 Alarm [Disable]",
+        "analog": "대상 관리점:AC1\n상한치:31.0\n단위 문자 예:°C",
+        "admin": "관리자",
+        "off": "OFF",
+        "stop": "정지, 원격 운전/정지[정지만 허가], 원격 운전 모드[금지], "
+        "원격 온도 설정[금지]",
+        "setback_high": "세트백 고",
+        "setpoint_mode": "온도조절점",
+        "user": "사용자",
+        "on": "ON",
+        "all": "모두",
     },
 }
 LANGUAGES = list(CAPTURED)
@@ -163,7 +251,9 @@ def test_modes_locks_and_power(code: str) -> None:
         "off",
     ]
     assert user_is_admin(c["admin"]) is True
+    assert user_is_admin(c["user"]) is False
     assert on_off(c["off"]) is False
+    assert on_off(c["on"]) is True
 
 
 @pytest.mark.parametrize("code", LANGUAGES)
@@ -193,6 +283,36 @@ def test_event_texts(code: str) -> None:
 
 
 @pytest.mark.parametrize("code", LANGUAGES)
+def test_event_stop_setback_high_and_setpoint_mode(code: str) -> None:
+    """Stop with stop-only and forbidden locks, setback high, the setpoint-only mode."""
+    c = CAPTURED[code]
+
+    def parse(action: str) -> ScheduleEvent:
+        return event_from_action(
+            ScheduleEvent(
+                time="06:15", target="Zone", target_kind="zone", action=action
+            )
+        )
+
+    stop = parse(c["stop"])
+    assert (stop.power, stop.lock_start_stop, stop.lock_mode, stop.lock_setpoint) == (
+        PowerState.OFF,
+        RemoteLock.STOP_ONLY,
+        RemoteLock.FORBIDDEN,
+        RemoteLock.FORBIDDEN,
+    )
+    assert stop.extra == {}
+    assert parse(c["setback_high"]).power is PowerState.SETBACK_HIGH
+    setpoint = parse(f"{c['setpoint_mode']}, 21.0°C")
+    assert (setpoint.mode, setpoint.mode_label, setpoint.setpoint) == (
+        "setpoint",
+        c["setpoint_mode"],
+        21.0,
+    )
+    assert event_mode_from_label(c["setpoint_mode"]) == "setpoint"
+
+
+@pytest.mark.parametrize("code", LANGUAGES)
 def test_details_and_analog(code: str) -> None:
     """The Details status lines and an analog point's attributes."""
     c = CAPTURED[code]
@@ -205,22 +325,18 @@ def test_details_and_analog(code: str) -> None:
     assert analog["unit"] in {"°C", "℃"}
 
 
-def test_all_zone_in_every_language() -> None:
+@pytest.mark.parametrize("code", LANGUAGES)
+def test_all_zone_in_every_language(code: str) -> None:
     """The built-in "All" zone is recognised in each language; other names aren't."""
-    for name in (
-        "Alles",
-        "All",
-        ALL_ZONE_LABELS["de"],
-        "Todo",
-        "Todos",
-        "全て",
-        "Tout",
-        "Tutto",
-        "全部",
-    ):  # codespell:ignore alle
-        assert is_all_zone(name)
+    assert is_all_zone(CAPTURED[code]["all"])
+    assert set(ALL_ZONE_LABELS) == set(LANGUAGES)
+
+
+def test_other_zone_names_and_analog_keys() -> None:
+    """Other zone names aren't the "All" zone; analog keys outside the samples."""
     assert not is_all_zone("Workroom")
     assert analog_key("Unit Label") == "unit"
+    assert analog_key("목표 아날로그 값") == "source_value"
 
 
 @pytest.mark.parametrize("code", LANGUAGES)
@@ -251,3 +367,17 @@ def test_event_lock_with_unknown_key_falls_back_to_position() -> None:
     )
     assert event.lock_start_stop is RemoteLock.ALLOWED
     assert event.lock_mode is RemoteLock.FORBIDDEN
+
+
+def test_calendar_words() -> None:
+    """A calendar's month, week and weekday words, short and long, any case."""
+    assert calendar_month("Jan") == 1
+    assert calendar_month(" december ") == 12
+    assert calendar_month("Every") == 0
+    assert calendar_week("1st") == 1
+    assert calendar_week("Last") == 5
+    assert calendar_weekday("Sun") == 0
+    assert calendar_weekday("Saturday") == 6
+    assert calendar_month("Janvier") is None
+    assert calendar_week("5th") is None
+    assert calendar_weekday("") is None

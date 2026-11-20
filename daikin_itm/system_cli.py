@@ -100,10 +100,13 @@ async def _user(client: ItmClient, args: argparse.Namespace) -> None:
     """Add, change or delete a web access user."""
     admin = {"admin": True, "user": False}.get(args.type or "")
     if args.action == "add":
-        if not args.manage_zone:
+        if not admin and not args.manage_zone:
             sys.exit("a new web user needs at least one --manage-zone")
         user = await client.create_web_user(
-            args.name, _new_password(), zones=tuple(args.manage_zone), admin=bool(admin)
+            args.name,
+            _new_password(),
+            zones=tuple(args.manage_zone or ()),
+            admin=bool(admin),
         )
     elif args.action == "set":
         password = _new_password() if args.password else None
@@ -288,9 +291,11 @@ async def _email(client: ItmClient, args: argparse.Namespace) -> None:
         await client.set_email_enabled(args.address, enabled=action == "on")
     if _print_plan(client):
         return
-    _print_system(await client.fetch_system(["email"]))
-    if action == "show":
-        server = await client.fetch_email_server()
+    async with client.shared_session():
+        system = await client.fetch_system(["email"])
+        server = await client.fetch_email_server() if action == "show" else None
+    _print_system(system)
+    if server is not None:
         _out("e-mail server: " + ", ".join(f"{k} {v}" for k, v in server.items()))
 
 
@@ -350,7 +355,9 @@ def _add_system_commands(sub: Any) -> None:
     us.add_argument("--type", choices=["admin", "user"])
     us.add_argument("--password", action="store_true", help="set a new password")
     us.add_argument(
-        "--manage-zone", action="append", help="a zone the user manages (repeatable)"
+        "--manage-zone",
+        action="append",
+        help="a zone a normal user manages (repeatable; none for an admin)",
     )
     us.add_argument(
         "--screen",

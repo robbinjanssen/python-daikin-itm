@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from daikin_itm import ProtocolError
+from daikin_itm import ItmError, ProtocolError, RequestValueError
 from daikin_itm.models import (
     ICON_STATE_SETBACK,
     Capabilities,
@@ -30,6 +30,7 @@ from daikin_itm.protocol import (
     Writer,
     encode_event,
     is_token,
+    login_payload,
     parse_reply,
 )
 from daikin_itm.state import UIState
@@ -328,6 +329,11 @@ def test_list_row() -> None:
     }
 
 
+def test_list_row_without_rows() -> None:
+    """An empty LIST_ROW still names its columns, more than the reply holds."""
+    assert part_value("LIST_ROW", h(0), h(3), n(0)) == {"rows": [], "selected": []}
+
+
 def test_list_cell() -> None:
     """LIST_CELL holds two shorts, a string and two shorts per cell."""
     value = part_value("LIST_CELL", n(1), h(1), h(2), "x", h(3), h(4))
@@ -581,6 +587,60 @@ def test_writer_encoding() -> None:
     w.int(255)
     w.string("ab")
     assert w.buf == "tokffff000000ff0002ab"
+
+
+@pytest.mark.parametrize(
+    ("method", "value"),
+    [("short", -32769), ("short", 65536), ("int", -(2**31) - 1), ("int", 2**32)],
+)
+def test_writer_refuses_numbers_out_of_range(method: str, value: int) -> None:
+    """A number that doesn't fit its field is refused, not masked."""
+    w = Writer()
+    with pytest.raises(RequestValueError, match="does not fit"):
+        getattr(w, method)(value)
+    assert not w.buf
+
+
+def test_writer_takes_the_unsigned_range() -> None:
+    """The unsigned top of each field is still taken."""
+    w = Writer()
+    w.short(65535)
+    w.int(2**32 - 1)
+    assert w.buf == "ffff" + "ffffffff"
+
+
+@pytest.mark.parametrize(
+    "text", ["a\nb", "tab\there", "nul\0", "del\x7f", "c1\x85", "emoji \U0001f600"]
+)
+def test_request_strings_are_checked(text: str) -> None:
+    """A request refuses control characters and characters outside the BMP."""
+    with pytest.raises(RequestValueError, match="control character"):
+        encode_event("0" * 32, 1, 2, string=text)
+    w = Writer()
+    w.string(text)
+    assert w.buf.endswith(text)
+
+
+def test_too_long_strings_are_refused() -> None:
+    """A string whose length doesn't fit in a short is refused."""
+    assert encode_event("0" * 32, string="x" * 0xFFFF).endswith("x" * 0xFFFF)
+    with pytest.raises(RequestValueError, match="longer than 65535"):
+        encode_event("0" * 32, string="x" * 0x10000)
+    with pytest.raises(RequestValueError):
+        Writer().string("x" * 0x10000)
+
+
+def test_long_usernames_are_refused() -> None:
+    """The login's four decimal digits of username length can't overflow."""
+    assert login_payload("u" * 9999, "").startswith("9999")
+    with pytest.raises(RequestValueError, match="at most 9999"):
+        login_payload("u" * 10000, "")
+
+
+def test_request_value_error_is_an_itm_and_value_error() -> None:
+    """Callers catching ItmError or ValueError both catch it."""
+    assert issubclass(RequestValueError, ItmError)
+    assert issubclass(RequestValueError, ValueError)
 
 
 def test_not_a_reply() -> None:

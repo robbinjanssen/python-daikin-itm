@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -323,7 +323,7 @@ async def test_set_maintenance(itm: FakeITM) -> None:
     )
     assert await c.set_maintenance(unit, on=False) is False
     assert unit not in itm.in_maintenance
-    with pytest.raises(ItmCommandError, match="not found"):
+    with pytest.raises(ItmCommandError, match="not found; available: "):
         await c.set_maintenance("nope", on=True)
     dry = FakeClient(itm, dry_run=True)
     assert await dry.set_maintenance(unit, on=True) is None
@@ -382,7 +382,7 @@ async def test_web_users(itm: FakeITM) -> None:
             )
     with pytest.raises(ItmCommandError, match="at least one zone"):
         await c.create_web_user("demouser", "s3cret!", zones=())
-    with pytest.raises(ItmCommandError, match="not offered"):
+    with pytest.raises(ItmCommandError, match=r"not offered.*offered: \[.*Building"):
         await c.create_web_user("demouser", "s3cret!", zones=("Nowhere",))
     user = await c.create_web_user(
         "demouser", "s3cret!", zones=("Building",), admin=False
@@ -482,6 +482,13 @@ async def test_dst_and_clock(itm: FakeITM) -> None:
     ]
     with pytest.raises(ReadOnlyError):
         await FakeClient(itm, read_only=True).set_clock(when)
+
+
+async def test_clock_refuses_a_time_zone(itm: FakeITM) -> None:
+    """A datetime with a time zone is refused before anything is sent."""
+    with pytest.raises(TypeError, match="without a time zone"):
+        await FakeClient(itm).set_clock(datetime(2025, 1, 2, 21, 5, tzinfo=UTC))
+    assert itm.requests == []
 
 
 async def test_network_dry_run_sends_no_value(itm: FakeITM) -> None:

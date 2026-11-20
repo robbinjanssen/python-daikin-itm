@@ -37,6 +37,7 @@ class ClientCore:
 
         _session: Callable[[], AbstractAsyncContextManager[_Session]]
         _own_session: Callable[[], AbstractAsyncContextManager[_Session]]
+        _write_session: Callable[[], AbstractAsyncContextManager[None]]
 
         async def _in_session(
             self, call: Callable[[_Session], Awaitable[_T]]
@@ -90,6 +91,7 @@ class SessionCore:
         state: UIState
         logged_in: bool
         restarting: bool
+        change_sent: bool
 
         @property
         def client(self) -> ItmClient:
@@ -128,13 +130,28 @@ class SessionCore:
         def require_writable(self) -> None:
             """Refuse a write on a read-only client."""
 
+        def no_way_back(self, why: str) -> None:
+            """Record that only a new login gives the start position again."""
+
+        async def step_back(
+            self,
+            steps: int,
+            press: Callable[[], Awaitable[object]],
+            shown: Callable[[], object],
+            start: object,
+            why: str,
+        ) -> None:
+            """Undo a reader's steps to another day or page, in a shared session."""
+
         async def open_menu_screen(self, button: int, screen: MenuScreen) -> bool:
             """Press a menu list button and tell whether its screen opened."""
 
         async def close_screen(self, screen: MenuScreen) -> None:
             """Close (or cancel) a menu screen, if it is open. Never OK."""
 
-        async def wait_for_progress(self, reply: Reply, *, attempts: int = 20) -> None:
+        async def wait_for_progress(
+            self, reply: Reply, *, seconds: float | None = None, cancel: bool = False
+        ) -> None:
             """Wait out a PROGRESS dialog a reply opened, like the browser does."""
 
         async def open_system_screen(self, button: int, screen: MenuScreen) -> None:

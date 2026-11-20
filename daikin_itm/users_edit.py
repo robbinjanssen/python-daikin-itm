@@ -17,7 +17,11 @@ from ._screens import close as _close
 from ._screens import open_below as _open_below
 from ._screens import open_screen as _open
 from ._screens import radio as _radio
+from ._screens import raw_rows as _rows
+from ._screens import row_cells as _cells
+from ._util import cleanup as _cleanup
 from ._util import ignore as _ignore
+from ._util import one_login
 from .exceptions import ItmCommandError, LoginRejected, SessionEnded
 from .menu import CLOSE_PART, DATE_FORMATS, MenuScreen
 from .protocol import DataType, EventType, ScreenID
@@ -69,6 +73,13 @@ USER_SCREENS, US_SCREENS_BUTTON = 1201, 16
 UA_ALLOWED, UA_ADD, UA_REMOVE, UA_AVAILABLE, UA_OK, UA_CANCEL = 2, 4, 5, 8, 9, 10
 
 
+def _check_user_zones(*, admin: bool | None, zones: tuple[str, ...] | None) -> None:
+    """Refuse zones for an administrator: the iTM disables the zone list for one."""
+    if admin and zones:
+        msg = "an administrator manages every zone: the iTM takes no zones for one"
+        raise ItmCommandError(msg)
+
+
 @dataclass(frozen=True)
 class OwnSettings:
     """The logged-in user's own region settings (screen 1205)."""
@@ -105,7 +116,8 @@ async def open_own_settings(s: _Session, username: str, password: str) -> None:
 
     Raises
     ------
-        ItmCommandError: 1205 did not open (wrong credentials, or another session).
+        ItmCommandError: 1205 did not open (wrong credentials, or the user is logged in
+            elsewhere).
 
     """
     await s.handshake()
@@ -117,7 +129,8 @@ async def open_own_settings(s: _Session, username: str, password: str) -> None:
         ):
             await s.forget_login()
             msg = (
-                f"the user's own settings did not open (wrong credentials?): {dialogs}"
+                "the user's own settings did not open (wrong credentials, "
+                f"or this user is logged in elsewhere): {dialogs}"
             )
         else:
             msg = f"logged in, but the user's own settings did not open: {dialogs}"
@@ -194,22 +207,22 @@ async def read_own_language(s: _Session) -> str | None:
     """Open the language screen from 1205, read the checked language and cancel."""
     g = MenuScreen.LANGUAGE
     await _open_below(s, OWN_SCREEN, OWN_LANGUAGE_BUTTON, g)
-    try:
+    async with _cleanup(lambda: _close(s, g, CLOSE_PART[g])):
         return language_from_screen(s.state)
-    finally:
-        await _close(s, g, CLOSE_PART[g])
 
 
 async def _pick_own_language(s: _Session, code: str) -> None:
     """Open the language screen from 1205, pick a language and press its OK."""
     g = MenuScreen.LANGUAGE
     await _open_below(s, OWN_SCREEN, OWN_LANGUAGE_BUTTON, g)
-    try:
-        await s.send(g, LANGUAGE_RADIOS[code])
-        await s.press_ok(f"pick own language {code}", g, LG_OK, CLOSE_PART[g])
-    finally:
+
+    async def leave() -> None:
         if s.logged_in:
             await _close(s, g, CLOSE_PART[g])
+
+    async with _cleanup(leave):
+        await s.send(g, LANGUAGE_RADIOS[code])
+        await s.press_ok(f"pick own language {code}", g, LG_OK, CLOSE_PART[g])
 
 
 async def set_own_settings(  # noqa: PLR0913  # pylint: disable=too-many-arguments
@@ -314,7 +327,8 @@ async def _open_user_screens(s: _Session, name: str) -> None:
     await _open(s, MB_WEB_USERS, w)
     user = next((x for x in web_users_from_screen(s.state) if x.name == name), None)
     if user is None:
-        msg = f"web user: {name!r} not found"
+        names = [x.name for x in web_users_from_screen(s.state)]
+        msg = f"web user: {name!r} not found; available: {names}"
         raise ItmCommandError(msg)
     admin_msg = f"{name} is an administrator: allowed screens apply to normal users"
     if user.admin:
@@ -343,11 +357,9 @@ async def _leave_user_screens(s: _Session) -> None:
 
 async def read_web_user_screens(s: _Session, name: str) -> WebUserScreens:
     """Open a normal web user's allowed screens, read them and cancel."""
-    try:
+    async with _cleanup(lambda: _leave_user_screens(s)):
         await _open_user_screens(s, name)
         return web_user_screens_from_screen(s.state)
-    finally:
-        await _leave_user_screens(s)
 
 
 async def _move_screen(s: _Session, source: int, button: int, screen: str) -> None:
@@ -378,13 +390,13 @@ async def set_web_user_screens(
 
     """
     s.require_writable()
-    try:
+    async with _cleanup(lambda: _leave_user_screens(s)):
         await _open_user_screens(s, name)
         wanted = [x.strip() for x in screens]
         current = web_user_screens_from_screen(s.state)
         offered = set(current.allowed) | set(current.available)
         if missing := [x for x in wanted if x not in offered]:
-            msg = f"{name}: screens not offered: {missing}"
+            msg = f"{name}: screens not offered: {missing}; offered: {sorted(offered)}"
             raise ItmCommandError(msg)
         for screen in current.allowed:
             if screen not in wanted:
@@ -400,8 +412,6 @@ async def set_web_user_screens(
             return False
         u = MenuScreen.USER_SETUP
         return await s.press_ok(f"save {label}", u, US_OK, CLOSE_PART[u])
-    finally:
-        await _leave_user_screens(s)
 
 
 class UsersMixin(ClientCore):
@@ -416,12 +426,13 @@ class UsersMixin(ClientCore):
         users = (await self.fetch_system(["web_users"])).web_users or ()
         return next((u for u in users if u.name == name), None)
 
+    @one_login
     async def create_web_user(
         self,
         name: str,
         password: str,
         *,
-        zones: tuple[str, ...],
+        zones: tuple[str, ...] = (),
         admin: bool = False,
     ) -> WebUser | None:
         """Add a web access user.
@@ -430,7 +441,8 @@ class UsersMixin(ClientCore):
         ----
             name: The user name (1-15 characters).
             password: Its password (4-15 characters); never logged.
-            zones: The zones the user manages (the iTM wants at least one).
+            zones: The zones a user manages (at least one); none for an
+                administrator, who manages every zone (the iTM disables the list).
             admin: Administrator (True) or user.
 
         Returns:
@@ -439,12 +451,17 @@ class UsersMixin(ClientCore):
 
         """
         self._not_own_account(name)
-        if not zones:
+        _check_user_zones(admin=admin, zones=zones)
+        if not admin and not zones:
             msg = "a web user needs at least one zone"
             raise ItmCommandError(msg)
         await self._system_write(
             lambda s: s.save_web_user(
-                name, new=True, password=password, admin=admin, zones=tuple(zones)
+                name,
+                new=True,
+                password=password,
+                admin=admin,
+                zones=tuple(zones) if zones else None,
             )
         )
         if self.dry_run:
@@ -455,6 +472,7 @@ class UsersMixin(ClientCore):
             raise ItmCommandError(msg)
         return user
 
+    @one_login
     async def set_web_user(
         self,
         name: str,
@@ -470,7 +488,8 @@ class UsersMixin(ClientCore):
             name: The user.
             password: A new password (4-15 characters); never logged.
             admin: Administrator (True) or user.
-            zones: The zones the user manages, replacing the current ones.
+            zones: The zones the user manages, replacing the current ones (not
+                for an administrator).
 
         Returns:
         -------
@@ -478,6 +497,7 @@ class UsersMixin(ClientCore):
 
         """
         self._not_own_account(name)
+        _check_user_zones(admin=admin, zones=zones)
         if password is None and admin is None and not zones:
             msg = "nothing to change"
             raise ItmCommandError(msg)
@@ -494,6 +514,7 @@ class UsersMixin(ClientCore):
             raise ItmCommandError(msg)
         return user
 
+    @one_login
     async def delete_web_user(self, name: str) -> None:
         """Delete a web user (never the client's own).
 
@@ -522,6 +543,7 @@ class UsersMixin(ClientCore):
         """
         return await self._in_session(lambda s: read_web_user_screens(s, name))
 
+    @one_login
     async def set_web_user_screens(
         self, name: str, screens: Iterable[str]
     ) -> WebUserScreens | None:
@@ -720,8 +742,13 @@ class UsersSessionMixin(SessionCore):
         for zone in zones:
             row = row_index(self.state, z, UZ_LIST, 0, zone)
             if row is None:
+                offered = [
+                    c[0].strip()
+                    for c in map(_cells, _rows(self.state, z, UZ_LIST))
+                    if c
+                ]
                 await self.close_screen(z)
-                msg = f"zone {zone!r} not offered for web users"
+                msg = f"zone {zone!r} not offered for web users; offered: {offered}"
                 raise ItmCommandError(msg)
             rows.append(row)
         await self.send(
@@ -743,7 +770,7 @@ class UsersSessionMixin(SessionCore):
         """Add a web user, or change one: name, password, type and zones, then OK."""
         s, u = MenuScreen.WEB_USERS, MenuScreen.USER_SETUP
         await self.open_system_screen(MB_WEB_USERS, s)
-        try:
+        async with _cleanup(lambda: self.close_screen(u), lambda: self.close_screen(s)):
             listed = row_index(self.state, s, WU_LIST, 0, name) is not None
             if new and listed:
                 msg = f"web user {name!r} exists already"
@@ -767,15 +794,12 @@ class UsersSessionMixin(SessionCore):
                 await self._pick_user_zones(zones)
             verb = "add" if new else "change"
             await self.press_ok(f"{verb} web user {name}", u, US_OK, CLOSE_PART[u])
-        finally:
-            await self.close_screen(u)
-            await self.close_screen(s)
 
     async def delete_web_user(self, name: str) -> None:
         """Select a web user, press Delete and confirm."""
         s = MenuScreen.WEB_USERS
         await self.open_system_screen(MB_WEB_USERS, s)
-        try:
+        async with _cleanup(lambda: self.close_screen(s)):
             await self.select_listed(s, WU_LIST, 0, name, "web user")
             if self.state.get(s, WU_DELETE, "ENABLED") == 0:
                 msg = f"the iTM does not allow deleting {name!r}"
@@ -783,5 +807,3 @@ class UsersSessionMixin(SessionCore):
             reply = await self.write(f"delete web user {name}", s, WU_DELETE)
             if reply is not None:
                 await self.answer_confirm(s, reply)
-        finally:
-            await self.close_screen(s)

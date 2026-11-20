@@ -70,7 +70,7 @@ async def test_add_and_delete_zone(itm: FakeZonesITM) -> None:
     assert "demo group" not in names(itm)
     with pytest.raises(ItmCommandError, match="root zone"):
         await run(itm, delete_zone, "Top")
-    with pytest.raises(ItmCommandError, match="not found once"):
+    with pytest.raises(ItmCommandError, match=r"not found once.*listed: \["):
         await run(itm, delete_zone, "Nowhere")
     assert itm.open_screens == set()
 

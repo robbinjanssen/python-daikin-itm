@@ -57,6 +57,8 @@ from ._screens import close as _leave
 from ._screens import part_text_or_blank as _text
 from ._screens import radio as _radio
 from ._screens import select_rows as _select_rows
+from ._util import cleanup as _cleanup
+from ._util import one_login
 from .exceptions import ItmCommandError
 from .menu import CLOSE_PART, MenuScreen
 from .protocol import DataType, EventType
@@ -309,11 +311,9 @@ async def read_outdoor_units(
         The outdoor units, in list order.
 
     """
-    try:
+    async with _cleanup(lambda: _leave(s, LEAKAGE, LK_CLOSE)):
         await _open_leakage(s, password)
         return outdoor_units_from_screen(s.state)
-    finally:
-        await _leave(s, LEAKAGE, LK_CLOSE)
 
 
 def registration_from_screen(state: UIState) -> LeakageRegistration:
@@ -358,11 +358,9 @@ async def _read_sub(
 ) -> _T:
     """Open a 3100 sub-screen for the selected unit, read it and cancel."""
     button, sub, cancel = spec
-    try:
+    async with _cleanup(lambda: _leave(s, sub, cancel)):
         await _open_sub(s, LEAKAGE, button, sub, what)
         return read(s.state)
-    finally:
-        await _leave(s, sub, cancel)
 
 
 async def read_leakage_check(
@@ -377,7 +375,11 @@ async def read_leakage_check(
         What the screens show.
 
     """
-    try:
+    async with _cleanup(
+        lambda: _leave(s, REGISTRATION, RG_CANCEL),
+        lambda: _leave(s, SCHEDULE, SC_CANCEL),
+        lambda: _leave(s, LEAKAGE, LK_CLOSE),
+    ):
         await _open_leakage(s, password)
         units = outdoor_units_from_screen(s.state)
         registrations: dict[str, LeakageRegistration] = {}
@@ -399,10 +401,6 @@ async def read_leakage_check(
                     f"{key}: leakage check schedule",
                 )
         return LeakageCheck(units, registrations, schedules)
-    finally:
-        await _leave(s, REGISTRATION, RG_CANCEL)
-        await _leave(s, SCHEDULE, SC_CANCEL)
-        await _leave(s, LEAKAGE, LK_CLOSE)
 
 
 async def read_registration(
@@ -415,7 +413,7 @@ async def read_registration(
         The registered and the unregistered indoor units.
 
     """
-    try:
+    async with _cleanup(lambda: _leave(s, LEAKAGE, LK_CLOSE)):
         await _open_leakage(s, password)
         await _select_outdoor(s, outdoor)
         return await _read_sub(
@@ -424,8 +422,6 @@ async def read_registration(
             registration_from_screen,
             f"{outdoor}: indoor unit registration",
         )
-    finally:
-        await _leave(s, LEAKAGE, LK_CLOSE)
 
 
 async def read_schedule(
@@ -438,7 +434,7 @@ async def read_schedule(
         Its four programs.
 
     """
-    try:
+    async with _cleanup(lambda: _leave(s, LEAKAGE, LK_CLOSE)):
         await _open_leakage(s, password)
         await _select_outdoor(s, outdoor)
         return await _read_sub(
@@ -447,8 +443,6 @@ async def read_schedule(
             schedule_from_screen,
             f"{outdoor}: leakage check schedule",
         )
-    finally:
-        await _leave(s, LEAKAGE, LK_CLOSE)
 
 
 async def _pick_units(  # pylint: disable=too-many-locals
@@ -496,7 +490,9 @@ async def set_registration(
 
     """
     s.require_writable()
-    try:
+    async with _cleanup(
+        lambda: _leave(s, REGISTRATION, RG_CANCEL), lambda: _leave(s, LEAKAGE, LK_CLOSE)
+    ):
         await _open_leakage(s, password)
         await _select_outdoor(s, outdoor)
         await _open_sub(
@@ -516,9 +512,6 @@ async def set_registration(
         return await s.press_ok(
             f"register indoor units with {outdoor}", REGISTRATION, RG_OK, RG_CANCEL
         )
-    finally:
-        await _leave(s, REGISTRATION, RG_CANCEL)
-        await _leave(s, LEAKAGE, LK_CLOSE)
 
 
 def parse_time(text: str) -> tuple[int, int]:
@@ -604,7 +597,9 @@ async def set_schedule_program(  # noqa: PLR0913  # pylint: disable=too-many-arg
     if at is not None:
         parse_time(at)
     combo, _, date_button, _, time_button = SC_PROGRAMS[program - 1]
-    try:
+    async with _cleanup(
+        lambda: _leave(s, SCHEDULE, SC_CANCEL), lambda: _leave(s, LEAKAGE, LK_CLOSE)
+    ):
         await _open_leakage(s, password)
         await _select_outdoor(s, outdoor)
         await _open_sub(
@@ -626,9 +621,6 @@ async def set_schedule_program(  # noqa: PLR0913  # pylint: disable=too-many-arg
         return await s.press_ok(
             f"save the leakage check schedule of {outdoor}", SCHEDULE, SC_OK, SC_CANCEL
         )
-    finally:
-        await _leave(s, SCHEDULE, SC_CANCEL)
-        await _leave(s, LEAKAGE, LK_CLOSE)
 
 
 async def copy_schedule(
@@ -645,7 +637,9 @@ async def copy_schedule(
     if not targets:
         msg = "name at least one outdoor unit to copy to"
         raise ItmCommandError(msg)
-    try:
+    async with _cleanup(
+        lambda: _leave(s, COPY, CP_CANCEL), lambda: _leave(s, LEAKAGE, LK_CLOSE)
+    ):
         await _open_leakage(s, password)
         await _select_outdoor(s, outdoor)
         await _open_sub(s, LEAKAGE, LK_COPY, COPY, f"{outdoor}: schedule copy")
@@ -655,9 +649,6 @@ async def copy_schedule(
         return await s.press_ok(
             f"copy the leakage check schedule of {outdoor}", COPY, CP_OK, CP_CANCEL
         )
-    finally:
-        await _leave(s, COPY, CP_CANCEL)
-        await _leave(s, LEAKAGE, LK_CLOSE)
 
 
 async def run_check(s: _Session, password: str, outdoor: str, *, start: bool) -> bool:
@@ -673,7 +664,7 @@ async def run_check(s: _Session, password: str, outdoor: str, *, start: bool) ->
     """
     s.require_writable()
     verb = "start" if start else "stop"
-    try:
+    async with _cleanup(lambda: _leave(s, LEAKAGE, LK_CLOSE)):
         await _open_leakage(s, password)
         await _select_outdoor(s, outdoor)
         reply = await _write_enabled(
@@ -686,8 +677,6 @@ async def run_check(s: _Session, password: str, outdoor: str, *, start: bool) ->
             return False
         await s.answer_confirm(LEAKAGE, reply)
         return True
-    finally:
-        await _leave(s, LEAKAGE, LK_CLOSE)
 
 
 async def export_results(s: _Session, password: str, fetch: exports.Fetch) -> Download:
@@ -701,7 +690,7 @@ async def export_results(s: _Session, password: str, fetch: exports.Fetch) -> Do
         The file's name and contents.
 
     """
-    try:
+    async with _cleanup(lambda: _leave(s, LEAKAGE, LK_CLOSE)):
         await _open_leakage(s, password)
         if s.state.get(LEAKAGE, LK_CSV, "ENABLED") == 0 and _rows(
             s.state, LEAKAGE, LK_LIST
@@ -711,8 +700,6 @@ async def export_results(s: _Session, password: str, fetch: exports.Fetch) -> Do
             msg = "leakage check results: the iTM has no outdoor unit to export"
             raise ItmCommandError(msg)
         return await exports.download(s, LEAKAGE, LK_CSV, fetch)
-    finally:
-        await _leave(s, LEAKAGE, LK_CLOSE)
 
 
 def parse_results(data: bytes) -> LeakageCheckResults:
@@ -816,7 +803,9 @@ async def read_r32_ports(s: _Session, password: str) -> R32OutputPorts:
         Ports 1 and 2 as shown and the offered ports.
 
     """
-    try:
+    async with _cleanup(
+        lambda: _leave(s, PORTS, PT_CANCEL), lambda: _leave(s, R32, CLOSE_PART[R32])
+    ):
         await _open_r32(s, password)
         ports = tuple(_text(s.state, R32, p) for p in R32_TEXTS)
         offered: tuple[str, ...] = ()
@@ -824,9 +813,6 @@ async def read_r32_ports(s: _Session, password: str) -> R32OutputPorts:
             await _open_sub(s, R32, R32_CHANGE[0], PORTS, "R32 output port setup")
             offered = tuple(_port_text(r) for r in _port_rows(s.state))
         return R32OutputPorts(ports=ports, offered=offered)
-    finally:
-        await _leave(s, PORTS, PT_CANCEL)
-        await _leave(s, R32, CLOSE_PART[R32])
 
 
 async def set_r32_port(
@@ -853,7 +839,9 @@ async def set_r32_port(
     if port not in {1, 2}:
         msg = f"an R32 output port is 1 or 2, not {port}"
         raise ItmCommandError(msg)
-    try:
+    async with _cleanup(
+        lambda: _leave(s, PORTS, PT_CANCEL), lambda: _leave(s, R32, CLOSE_PART[R32])
+    ):
         await _open_r32(s, password)
         if value is None:
             reply = await _write_enabled(
@@ -879,9 +867,6 @@ async def set_r32_port(
         return await s.press_ok(
             f"set R32 output port {port} to {value}", PORTS, PT_OK, PT_CANCEL
         )
-    finally:
-        await _leave(s, PORTS, PT_CANCEL)
-        await _leave(s, R32, CLOSE_PART[R32])
 
 
 def port_shown(shown: str, value: str | None) -> bool:
@@ -914,11 +899,9 @@ async def read_passwords(s: _Session) -> PasswordSettings:
         Whether each password is enabled.
 
     """
-    try:
+    async with _cleanup(lambda: _leave(s, PASSWORDS, PW_CLOSE)):
         await _open_menu_button(s, MB_PASSWORD, PASSWORDS, "password setting")
         return passwords_from_screen(s.state)
-    finally:
-        await _leave(s, PASSWORDS, PW_CLOSE)
 
 
 def _password_dialog(reply: Reply) -> Any:
@@ -1036,7 +1019,7 @@ async def set_password(
     if enabled is False and password is not None:
         msg = "a password is not changed while disabling it"
         raise ItmCommandError(msg)
-    try:
+    async with _cleanup(lambda: _leave(s, PASSWORDS, PW_CLOSE)):
         await _open_menu_button(s, MB_PASSWORD, PASSWORDS, "password setting")
         current = getattr(passwords_from_screen(s.state), kind)
         entered = False
@@ -1047,8 +1030,6 @@ async def set_password(
         if password is not None and not entered:
             await _change_password(s, kind, password)
         return not s.client.dry_run
-    finally:
-        await _leave(s, PASSWORDS, PW_CLOSE)
 
 
 # -- the client's methods -------------------------------------------------------------
@@ -1151,6 +1132,7 @@ class ServiceEditMixin(ClientCore):
         """
         return parse_results((await self.export_leakage_check_results(password)).data)
 
+    @one_login
     async def set_leakage_check_indoor_units(
         self,
         password: str,
@@ -1195,6 +1177,7 @@ class ServiceEditMixin(ClientCore):
             raise ItmCommandError(msg)
         return got
 
+    @one_login
     async def set_leakage_check_schedule(  # noqa: PLR0913  # pylint: disable=too-many-arguments
         self,
         password: str,
@@ -1249,6 +1232,7 @@ class ServiceEditMixin(ClientCore):
             raise ItmCommandError(msg)
         return got
 
+    @one_login
     async def copy_leakage_check_schedule(
         self,
         password: str,
@@ -1307,6 +1291,7 @@ class ServiceEditMixin(ClientCore):
             raise ItmCommandError(msg)
         return unit
 
+    @one_login
     async def start_leakage_check(
         self, password: str, outdoor: str, *, allow_leakage_check: bool = False
     ) -> LeakageOutdoorUnit | None:
@@ -1334,6 +1319,7 @@ class ServiceEditMixin(ClientCore):
             password, outdoor, start=True, allowed=allow_leakage_check
         )
 
+    @one_login
     async def stop_leakage_check(
         self, password: str, outdoor: str, *, allow_leakage_check: bool = False
     ) -> LeakageOutdoorUnit | None:
@@ -1410,6 +1396,7 @@ class ServiceEditMixin(ClientCore):
         """
         return await self._in_session(lambda s: read_r32_ports(s, password))
 
+    @one_login
     async def set_r32_output_port(
         self,
         password: str,
@@ -1461,6 +1448,7 @@ class ServiceEditMixin(ClientCore):
         """
         return await self._in_session(read_passwords)
 
+    @one_login
     async def set_password_setting(
         self,
         kind: str,

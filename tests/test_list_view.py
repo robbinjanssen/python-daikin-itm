@@ -101,7 +101,7 @@ def test_list_of_zones_only() -> None:
     # A short layout with anything but zones is still refused.
     rows[1][1] = ["", 2100, 0]
     s.apply([ScreenUpdate(2, "SHOW", [], [Part(L_LIST, "PNTLIST", panel)])])
-    with pytest.raises(ProtocolError, match="4 columns"):
+    with pytest.raises(ProtocolError, match=r"4 columns.*view=\"icons\""):
         units_from_list(s)
 
 

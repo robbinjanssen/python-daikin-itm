@@ -27,21 +27,77 @@ live); and the °F and decimal comma display settings (the date format and 12-ho
 clock are validated live). Pre-cool/pre-heat, time and management point parts of
 screen 7 belong to schedule events, not to a unit.
 
+`events_on()`, `events_between()`, `day_pattern()`, `next_event()` and `targets()`
+compute a schedule program's days from the program as screen 104 reads it, without
+requests (`events_between()` against synthetic programs only, its DST handling a
+choice of the library: how the iTM runs an event in a DST gap or overlap is
+unknown). They are tested against synthetic programs and the simulated iTM, and
+compared with the iTM's day overview (screen 102) on one real iTM with `itm
+schedule NAME --on DATE --compare` and a throwaway program; ROADMAP.md lists what
+is still open. The period and calendar rules are read by position in the editor's
+combos and option lists (`period_dates`, `calendar_values`), so they don't depend on the
+display language. A real iTM sends those option lists when the editor opens, in the
+order and length assumed (twelve months and "every month", four weeks and "last",
+Sunday to Saturday), in each of its ten display languages; reading a calendar row
+with them is seen in Dutch, in other languages tested against the simulated iTM
+only.
+
+`shared_session()`, which lets several reads use one login, reads the screens below
+as the single reads do, and goes back to the top level with the icon view's Top
+button. On one real iTM every read in the check gave the same result inside a block as
+alone (read only, `itm check shared-session`); `ROADMAP.md` lists what is still to check.
+Clients of the same iTM and user in one process taking turns on its session
+(`other_client_timeout`, `SessionInUse`) are tested against the simulated iTM
+only as well. So is `kept_session()` (experimental): one login kept for a polling
+client's lifetime, with a keep-alive POLLING, a new login after the iTM ended the
+session, and writes (with `allow_experimental`) read back in that session from
+the dialog opened anew or a panel value only once the iTM sent it again (else a
+new login).
+A write and the reads that check it share one login (`confirm_in_session`, on
+by default), read back the same way; seen on one real iTM (in a kept session)
+for power, mode, fan speed, the setpoint lock, a zone's fan speed and the
+setpoint. A menu write read back in the same login is tested against the
+simulated iTM only (a menu write's V below was seen with a read-back after a new
+login), and so is a typed name, number or time of day keeping the write's login.
+
+How the client meets faults is tested against the simulated iTM only (its lost
+reply, hung request and restart modes): after a request that got no answer only
+the logout is sent (`request_timeout`, `logout_timeout`); a change whose reply
+was lost raises `WriteOutcomeUnknown` and the next write to the unit waits for
+it; the login screen's first request is sent once more after a broken
+connection; a progress dialog is waited out by time (`progress_timeout`), and
+the history's load is cancelled after it (CANCEL_PROG, its reply not recorded
+on a real iTM yet). A read that checks a sent change and gets no answer is tried
+again until `confirm_timeout`.
+
+The unit and zone writes on screens 4 and 7 never send a value the iTM
+already shows (`set_unit_settings` changes only the settings the dialog
+doesn't show yet; a zone write reads its points first and, when its units lack
+different things, writes them one by one with only what each lacks), then read
+what they left out for `verify_timeout`, with or without confirm, and write it
+after all, once, when another change on its way moves it (on a real iTM such a
+skipped write lost to another account's change made just before; the check is
+not validated there yet), count the changes they send per unit
+(`writes_sent`, `on_write`) and can be capped per unit
+(`max_writes_per_unit_per_hour`, `max_writes_per_unit_per_day`). That logic
+is tested against the simulated iTM; the screens' reads and writes it uses are
+the validated ones.
+
 172 screens, each counted by its best status (read or write). Covered: 138 (validated on a real iTM: 94, dry run only: 0, simulated iTM only: 44); probed only: 0; needs a licence or another iTM: 0; out of scope: 33; not covered: 1.
 
 | Screen | Class | Read | Write | Notes |
 | ---: | :---- | :--: | :---: | :---- |
-| 1 | `ScMainStdIcon` | V | V | icon view: units, zones, selection |
-| 2 | `ScMainStdList` | V | - | list view (fetch_units(view='list')); a zone holding only zones gives no units |
+| 1 | `ScMainStdIcon` | V | V | icon view: units, zones, selection; the Top button, which only `shared_session()` clicks, was seen to return to the top level on one real iTM; a normal web user's top level holds its managed zone's contents (seen for a user managing one zone) |
+| 2 | `ScMainStdList` | V | - | list view (fetch_units(view='list')); a zone holding only zones gives no units; a zone holding only analog inputs gives their present values (fetch_analog_values, five columns, seen on a real iTM; it keeps a shared or kept session, seen on one real iTM) |
 | 3 | `ScMainLayout` | V | - | graphical layout view (fetch_layout; validated without a layout: empty until an installer sets one up) |
 | 4 | `ScMainOperation` | V | V | operation panel: power, setback, setpoint, fan; of a unit or a whole zone |
-| 5 | `ScSysMainMenu` | V | V | menu list; service login (corner buttons) |
+| 5 | `ScSysMainMenu` | V | V | menu list; service login (corner buttons); doesn't open for a normal web user without allowed screens (`MenuNotAvailable`, seen on one real iTM); that user's login hides the main menu bar's menu button (`ItmIndicators.menu_available`), so the client doesn't press it |
 | 6 | `ScMainLegend` | X | X | icon legend (static help, no data) |
-| 7 | `ScMainSetting` | V | V | unit/zone settings: mode, fan, locks, overtime, limits, airflow direction (V); ventilation mode/amount, filter sign and dust alarm reset (F); separate cool/heat setpoints, low noise, outputs (-) |
-| 9 | `ScMainDetail` | V | - | details: thermostat, R32, analog attributes |
+| 7 | `ScMainSetting` | V | V | unit/zone settings: mode, fan, locks, overtime, limits, airflow direction, the setpoint (`set_setpoint(when_stopped="dialog")` for a stopped unit, `apply(setpoint=...)`; validated in heating and cooling, running and stopped, and with a mode in the same dialog) (V); ventilation mode/amount, filter sign and dust alarm reset (F); separate cool/heat setpoints, low noise, outputs (-) |
+| 9 | `ScMainDetail` | V | - | details: thermostat, R32, analog attributes and ID (`fetch_thermostat_status` reads the thermostat for many units in one session, tested against the simulated iTM only; `fetch_points(thermostat=...)` in the units' own walk, the same alone and in a shared session on a real iTM) |
 | 10 | `ScMainErrorInformation` | F | - | error information (never seen with content) |
 | 100 | `ScSchMain` | V | V | programs: list, create, delete, enable, copy |
-| 102 | `ScSchConfirm` | V | - | day overview |
+| 102 | `ScSchConfirm` | V | - | day overview (moved one day ahead with `days_ahead`, then back, in a shared session: seen on a real iTM; also onto and past a day without events; more steps in a shared session: simulated iTM only) |
 | 103 | `ScSchLegend` | X | X | schedule legend (static help, no data) |
 | 104 | `ScSchEdit` | V | V | program editor: patterns, period, special days, calendar rules, day clear |
 | 106 | `ScSchCalCopy` | - | V | calendar copy (to programs named explicitly) |
@@ -65,7 +121,7 @@ screen 7 belong to schedule events, not to a unit.
 | 503 | `ScSlideTempAi` | F | F | sliding temperature analog input |
 | 600 | `ScHMO` | V | F | heating mode optimisation per unit, all on/off (read validated without the dealer option) |
 | 700 | `ScTimerExtension` | V | V | overtime timer duration |
-| 800 | `ScHistoryMain` | V | - | history (with its progress dialog) |
+| 800 | `ScHistoryMain` | V | - | history (`HistoryEntry.source_kind`: "web" for `Web:<user>`, "itm" for an empty source, seen on a real iTM; with its progress dialog; paged back one page with `pages`, then forward, in a shared session: seen on a real iTM; more pages: simulated iTM only) |
 | 801 | `ScHistoryOutput` | - | V | history export (a ZIP download) |
 | 900 | `ScInterlockMain` | V | F | interlock programs (read validated on an empty list, without the dealer option) |
 | 901 | `ScInterlockProgramSetup` | F | F | interlock program setup |
@@ -123,7 +179,7 @@ screen 7 belong to schedule events, not to a unit.
 | 2100 | `ScSysCheckSetting` | V | V | confirm dialogs on/off |
 | 2200 | `ScSysHardSetting` | V | V | touch panel backlight, buzzer, key click |
 | 2300 | `ScSysCalibration` | X | X | touch panel calibration (needs a finger on the panel) |
-| 2400 | `ScSysTimeSetting` | V | V | clock and summer time |
+| 2400 | `ScSysTimeSetting` | V | V | clock and summer time (a clock with a time zone refused) |
 | 2500 | `ScSysLocalSetting` | V | V | region: language, date format, 12/24h (V); °C/°F, decimal separator (F) |
 | 2501 | `ScSysLanguageSetting` | V | V | display language |
 | 2600 | `ScSysVersionInfo` | V | - | version information |

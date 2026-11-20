@@ -26,6 +26,26 @@ class ScheduleMixin(FakeITMBase):
         weekday = (3 + self.overview_offset) % 7
         return f"{base:02d}/01({names[weekday]})", weekday
 
+    def _overview_events(self) -> list[dict[str, Any]]:
+        """Return the events of the shown day: its weekday's, or by the calendar."""
+        name = self._program()[1]
+        _label, weekday = self._overview_day()
+        if not self.overview_follows_calendar:
+            return self.schedule_events.get(name, {}).get(weekday, [])
+        day = 1 + self.overview_offset
+        for month, number, pattern in self.calendar_rows:
+            if month == "Jan" and number == str(day):
+                return self.special_events.get(name, {}).get(pattern, [])
+        return self.schedule_events.get(name, {}).get(weekday, [])
+
+    def _overview_nav(self) -> list[tuple[int, str, Any]]:
+        if self.overview_reach is None:
+            return []
+        return [
+            (1, "ENABLED", int(self.overview_offset > 0)),
+            (3, "ENABLED", int(self.overview_offset < self.overview_reach)),
+        ]
+
     def _current_events(self) -> list[dict[str, Any]]:
         name = self._program()[1]
         if self.editor_list == "weekly":
@@ -48,58 +68,32 @@ class ScheduleMixin(FakeITMBase):
                 }
             )
             rows.append({"text": ["", "", ""], "a": [4016, -1, -1], "b": [-1, -1, -1]})
-        return {"rows": rows, "selected": []}
+        return {"rows": rows, "selected": [], "ncols": 3}
 
     def _bar(self, events: list[dict[str, Any]]) -> list[list[int]]:
+        """Return a day's bar as the iTM sends it: from its first event to its last."""
         minutes = {int(e["time"][:2]) * 60 + int(e["time"][3:]) for e in events}
-        return [[slot, 0 if slot * 15 in minutes else -1, -1, 2] for slot in range(96)]
+        slots = {m // 15 for m in minutes if m % 15 == 0}
+        if not slots:
+            return []
+        return [
+            [slot, 0 if slot in slots else -1, -1, 2]
+            for slot in range(min(slots), max(slots) + 1)
+        ]
 
     def _editor_parts(self) -> list[tuple[int, str, Any]]:
         state, name, start, _end = self._program()
+        words = self.calendar_words
         parts: list[tuple[int, str, Any]] = [
             (3, "TEXT", name),
             (7, "CHECK_STATE", 0 if state in (3, 4) else 1),
             (8, "CHECK_STATE", 1 if state in (3, 4) else 0),
             (10, "CHECK_STATE", 1 if start else 0),
-            (
-                16,
-                "COMBO_STRS",
-                [
-                    "Jan",
-                    "Feb",
-                    "Mar",
-                    "Apr",
-                    "May",
-                    "Jun",
-                    "Jul",
-                    "Aug",
-                    "Sep",
-                    "Oct",
-                    "Nov",
-                    "Dec",
-                ],
-            ),
+            (16, "COMBO_STRS", list(words.months)),
             (16, "SINGLE_SELIDX", 4),
             (17, "COMBO_NUMS", list(range(1, 32))),
             (17, "SINGLE_SELIDX", 0),
-            (
-                18,
-                "COMBO_STRS",
-                [
-                    "Jan",
-                    "Feb",
-                    "Mar",
-                    "Apr",
-                    "May",
-                    "Jun",
-                    "Jul",
-                    "Aug",
-                    "Sep",
-                    "Oct",
-                    "Nov",
-                    "Dec",
-                ],
-            ),
+            (18, "COMBO_STRS", list(words.months)),
             (18, "SINGLE_SELIDX", 8),
             (19, "COMBO_NUMS", list(range(1, 32))),
             (19, "SINGLE_SELIDX", 29),
@@ -114,6 +108,18 @@ class ScheduleMixin(FakeITMBase):
                     "selected": [],
                 },
             ),
+            (32, "COMBO_STRS", [f"Ex{i + 1}" for i in range(5)]),
+            (32, "SINGLE_SELIDX", 0),
+            (37, "COMBO_STRS", words.month_options),
+            (37, "SINGLE_SELIDX", 0),
+            (38, "COMBO_NUMS", list(range(1, 32))),
+            (38, "SINGLE_SELIDX", 0),
+            (43, "COMBO_STRS", words.month_options),
+            (43, "SINGLE_SELIDX", 0),
+            (44, "COMBO_STRS", list(words.weeks)),
+            (44, "SINGLE_SELIDX", 0),
+            (46, "COMBO_STRS", list(words.weekdays)),
+            (46, "SINGLE_SELIDX", 0),
         ]
         weekly = self.schedule_events.get(name, {})
         parts += [
@@ -228,24 +234,27 @@ class ScheduleMixin(FakeITMBase):
             return [("UPDATE", 100, [], [(5, "LABEL", self._program()[1])])]
         if screen == 100 and part == 8:
             self.open_screens.add(102)
-            label, weekday = self._overview_day()
-            events = self.schedule_events.get(self._program()[1], {}).get(weekday, [])
+            label, _weekday = self._overview_day()
             parts = [
                 (0, "LABEL", f"Schedule:{self._program()[1]}"),
                 (2, "LABEL", label),
-                (4, "LIST_ROW", self._event_rows(events)),
+                (4, "LIST_ROW", self._event_rows(self._overview_events())),
+                *self._overview_nav(),
             ]
             return [("OPEN", 102, [-1], parts)]
         if screen == 102 and part in {1, 3}:
             self.overview_offset += 1 if part == 3 else -1
-            label, weekday = self._overview_day()
-            events = self.schedule_events.get(self._program()[1], {}).get(weekday, [])
+            label, _weekday = self._overview_day()
             return [
                 (
                     "UPDATE",
                     102,
                     [],
-                    [(2, "LABEL", label), (4, "LIST_ROW", self._event_rows(events))],
+                    [
+                        (2, "LABEL", label),
+                        (4, "LIST_ROW", self._event_rows(self._overview_events())),
+                        *self._overview_nav(),
+                    ],
                 )
             ]
         if screen == 100 and part == 11:
@@ -336,7 +345,7 @@ class ScheduleMixin(FakeITMBase):
             ]
         if screen == 104 and part == 24 and self.editor_confirming:
             self.editor_confirming = False
-            if event == 1:  # Yes: leave without saving
+            if event == 1 and not self.editor_stays_open:  # Yes: leave unsaved
                 self.open_screens.discard(104)
                 self.new_program = None
                 return [("DLG_CLOSE", 104, [24, 2], []), ("CLOSE", 104, [], [])]

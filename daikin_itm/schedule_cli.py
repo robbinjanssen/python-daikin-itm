@@ -3,20 +3,25 @@
 from __future__ import annotations
 
 import sys
+from itertools import zip_longest
 from typing import TYPE_CHECKING, Any
 
+from .cli_common import date_arg
 from .cli_common import echo as _out
 from .cli_common import print_plan as _print_plan
+from .cli_common import safe as _safe
 from .menu import CalendarRule
 from .models import PowerState, RemoteLock
+from .schedule_days import day_pattern, events_on
 from .schedule_edit import CalendarRuleSpec, EventSpec
 
 if TYPE_CHECKING:
     import argparse
     from collections.abc import Awaitable, Callable
+    from datetime import date
 
     from .client import ItmClient
-    from .menu import ScheduleEvent, ScheduleSummary
+    from .menu import ItmInfo, ScheduleEvent, ScheduleProgram, ScheduleSummary
 
 
 def print_schedules(programs: list[ScheduleSummary]) -> None:
@@ -60,8 +65,148 @@ def _print_event(e: ScheduleEvent) -> None:
     _out(f"    {e.time} {e.target:20} {e.target_kind:12} {e.action}{extra}")
 
 
+WEEKDAY_NAMES = (
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+)
+
+
+def _day_events(
+    program: ScheduleProgram, day: date
+) -> tuple[str, tuple[ScheduleEvent, ...]]:
+    """Return which pattern a date uses and the events computed for it."""
+    try:
+        pattern = day_pattern(program, day)
+        events = events_on(program, day)
+    except ValueError as err:
+        sys.exit(_safe(f"error: {err}"))
+    if pattern is None:
+        uses = "outside the period"
+    elif isinstance(pattern, int):
+        uses = WEEKDAY_NAMES[pattern]
+    else:
+        uses = f"{_special_name(program, pattern)} (calendar)"
+    return uses, events
+
+
+def _special_name(program: ScheduleProgram, key: str) -> str:
+    """Return the name a special day ("Ex1".."Ex5") has in a program."""
+    index = int(key[2:]) - 1
+    names = program.special_names
+    return names[index] if index < len(names) else key
+
+
+def _print_day(program: ScheduleProgram, day: date) -> None:
+    """Print the events a program runs on a date, as computed from the program."""
+    uses, events = _day_events(program, day)
+    _out(f"  {day.isoformat()}: {uses}")
+    for e in events:
+        _print_event(e)
+    if not events:
+        _out("    no events")
+
+
+def _pair_events(
+    computed: tuple[ScheduleEvent, ...], overview: tuple[ScheduleEvent, ...]
+) -> list[tuple[tuple[str, str], ScheduleEvent | None, ScheduleEvent | None]]:
+    """Pair the events of both sides by time and target, in time order."""
+    keys: dict[tuple[str, str], tuple[list[ScheduleEvent], list[ScheduleEvent]]] = {}
+    for side, events in enumerate((computed, overview)):
+        for e in events:
+            keys.setdefault((e.time, e.target.strip()), ([], []))[side].append(e)
+    return [(key, a, b) for key in sorted(keys) for a, b in zip_longest(*keys[key])]
+
+
+def _difference(a: ScheduleEvent | None, b: ScheduleEvent | None) -> str:
+    """Tell how a computed and an overview event differ ("" when they agree)."""
+    if a is None:
+        return "only in the day overview"
+    if b is None:
+        return "only computed"
+    if a.action.strip() and b.action.strip() and a.action.strip() != b.action.strip():
+        return "action differs"
+    return ""
+
+
+def _print_comparison(
+    computed: tuple[ScheduleEvent, ...], overview: tuple[ScheduleEvent, ...]
+) -> int:
+    """Print both sides' events next to each other; return the number of differences."""
+    rows = [
+        (
+            *key,
+            a.action.strip() if a else "-",
+            b.action.strip() if b else "-",
+            _difference(a, b),
+        )
+        for key, a, b in _pair_events(computed, overview)
+    ]
+    heads = ("time", "target", "computed", "day overview", "")
+    widths = [max(len(r[i]) for r in (heads, *rows)) for i in range(4)]
+    for r in (heads, *rows):
+        cells = [f"{r[i]:{widths[i]}}" for i in range(4)]
+        _out(f"    {'  '.join(cells)}  {r[4]}".rstrip())
+    if not rows:
+        _out("    no events on either side")
+    return sum(1 for r in rows if r[4])
+
+
+def _itm_today(info: ItmInfo) -> date:
+    """Return the iTM's own date, from its clock."""
+    if info.clock is None:
+        sys.exit(
+            "error: the iTM's clock could not be read, so --compare cannot tell "
+            "how many days ahead that date is"
+        )
+    return info.clock.date()
+
+
+async def _schedule_compare(
+    client: ItmClient, args: argparse.Namespace, on: date
+) -> None:
+    """Print a date's computed events next to the day overview; exit 1 on a difference.
+
+    The day overview is read last: moving it to a later day ends the shared session.
+    """
+    async with client.shared_session():
+        today = _itm_today(await client.fetch_info())
+        days_ahead = (on - today).days
+        if days_ahead < 0:
+            sys.exit(
+                f"error: {on.isoformat()} is in the past: the iTM's date is "
+                f"{today.isoformat()}, and its day overview only goes forward"
+            )
+        p = await client.fetch_schedule(args.name, events=True, details=args.details)
+        overview = await client.fetch_schedule_day(args.name, days_ahead=days_ahead)
+    period = f"{p.period[0]} - {p.period[1]}" if p.period else "all year"
+    _out(f"{p.name}: {'enabled' if p.enabled else 'disabled'}, {period}")
+    uses, computed = _day_events(p, on)
+    _out(f"  {on.isoformat()}: {uses}; the iTM's day overview shows {overview.day}")
+    if day_pattern(p, on) is None:
+        _out(
+            "  the day overview leaves the period out, so it is compared with the "
+            "date's pattern without the period"
+        )
+        computed = events_on(p, on, ignore_period=True)
+    differences = _print_comparison(computed, overview.events)
+    if differences:
+        _out(
+            f"differ: {differences} difference(s) between the computed events and "
+            "the day overview"
+        )
+        sys.exit(1)
+    _out("agree: the computed events match the day overview")
+
+
 async def _schedule(client: ItmClient, args: argparse.Namespace) -> None:
-    """Show a schedule program in full; create, delete, enable or disable it."""
+    """Show a program in full or on a date; create, delete, enable or disable it."""
+    if args.compare and args.on is None:
+        sys.exit("--compare needs --on YYYY-MM-DD")
     if args.create:
         created = await client.create_schedule(args.name)
         if not _print_plan(client) and created is not None:
@@ -77,30 +222,36 @@ async def _schedule(client: ItmClient, args: argparse.Namespace) -> None:
         if not _print_plan(client) and summary is not None:
             print_schedules([summary])
         return
+    on = date_arg(args.on)
+    if on is not None and args.no_events:
+        sys.exit("--on needs the events: leave out --no-events")
+    if on is not None and args.compare:
+        await _schedule_compare(client, args, on)
+        return
     p = await client.fetch_schedule(
         args.name, events=not args.no_events, details=args.details
     )
     period = f"{p.period[0]} - {p.period[1]}" if p.period else "all year"
     _out(f"{p.name}: {'enabled' if p.enabled else 'disabled'}, {period}")
-    names = [
-        "Sunday",
-        "Monday",
-        "Tuesday",
-        "Wednesday",
-        "Thursday",
-        "Friday",
-        "Saturday",
-    ]
+    if on is not None:
+        _print_day(p, on)
+    else:
+        _print_program(p)
+
+
+def _print_program(p: ScheduleProgram) -> None:
+    """Print a program's weekdays, special days and calendar."""
     for day in range(7):
         events = p.weekly.get(day, ())
         slots = p.weekly_slots.get(day, ())
         if not events and not slots:
             continue
-        _out(f"  {names[day]} ({len(slots)} time slots)")
+        _out(f"  {WEEKDAY_NAMES[day]} ({len(slots)} time slots)")
         for e in events:
             _print_event(e)
-    for label, events in p.special.items():
-        _out(f"  {label}")
+    for key, events in p.special.items():
+        name = _special_name(p, key)
+        _out(f"  {key}" if name == key else f"  {name} ({key})")
         for e in events:
             _print_event(e)
     for rule in p.calendar:
@@ -147,11 +298,15 @@ def _event_spec(args: argparse.Namespace, time: str, target: str) -> EventSpec:
 
 
 def _calendar_rule(args: argparse.Namespace) -> CalendarRuleSpec:
-    """Build a CalendarRuleSpec from --date M-D or --weekday MONTH|all:WEEK:WEEKDAY."""
+    """Build a CalendarRuleSpec from --date or --weekday."""
     try:
         if args.date:
-            month, day = (int(x) for x in args.date.split("-"))
-            return CalendarRuleSpec(pattern=args.pattern, month=month, day=day)
+            month_text, day = args.date.split("-")
+            return CalendarRuleSpec(
+                pattern=args.pattern,
+                month=None if month_text == "all" else int(month_text),
+                day=int(day),
+            )
         month_text, week, weekday = args.weekday.split(":")
         return CalendarRuleSpec(
             pattern=args.pattern,
@@ -160,7 +315,9 @@ def _calendar_rule(args: argparse.Namespace) -> CalendarRuleSpec:
             weekday=int(weekday),
         )
     except ValueError as err:
-        sys.exit(f"a rule is --date M-D or --weekday MONTH|all:WEEK:WEEKDAY ({err})")
+        sys.exit(
+            f"a rule is --date M|all-D or --weekday MONTH|all:WEEK:WEEKDAY ({err})"
+        )
 
 
 COPY_ACTIONS = {"copy-program", "copy-day", "clear-day", "copy-event", "copy-calendar"}
@@ -301,7 +458,7 @@ def _add_schedule_edit_command(sub: Any) -> None:  # pylint: disable=too-many-lo
     ar = actions.add_parser("add-rule", help="add a calendar rule")
     ar.add_argument("pattern", type=int, help="1-5: Ex1-Ex5")
     when = ar.add_mutually_exclusive_group(required=True)
-    when.add_argument("--date", help="M-D")
+    when.add_argument("--date", help="M-D, or all-D for that day of every month")
     when.add_argument("--weekday", help="MONTH|all:WEEK(1-5, 5 = last):WEEKDAY(0-6)")
     cp = actions.add_parser("copy-program", help="copy the program (disabled)")
     cp.add_argument("new_name")
@@ -335,6 +492,23 @@ def add_schedule_commands(sub: Any) -> None:
         "--create", action="store_true", help="create it (empty and disabled)"
     )
     on_off.add_argument("--delete", action="store_true", help="delete the program")
+    on_off.add_argument(
+        "--on",
+        metavar="YYYY-MM-DD",
+        help="the events of that date, computed from the program (see --compare)",
+    )
+    sc.add_argument(
+        "--compare",
+        action="store_true",
+        help=(
+            "with --on: also read the iTM's own day overview for that date and "
+            "compare it with the computed events: the times and targets, and the "
+            "action where both sides show one (events of the same time and target "
+            "are paired). Prints both side by side, ends with agree or differ, and "
+            "exits 1 on a difference. The date counts from the iTM's own clock; a "
+            "date in the past is refused"
+        ),
+    )
     sc.add_argument(
         "--details",
         action="store_true",

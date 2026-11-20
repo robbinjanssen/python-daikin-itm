@@ -5,13 +5,14 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .cli_common import date_arg as _date_arg
+from .cli_common import download_path as _download_path
 from .cli_common import echo as _out
 from .cli_common import print_plan as _print_plan
 from .cli_common import print_system as _print_system
+from .cli_common import refuse_existing as _refuse_existing
 from .cli_common import save as _save
 from .cli_common import shown as _shown
 from .energy_navigator import ConversionType, EnergyNavigator, PlannedYear, RuleRange
@@ -273,6 +274,7 @@ async def _ppd(client: ItmClient, args: argparse.Namespace) -> None:
 
 async def _export(client: ItmClient, args: argparse.Namespace) -> None:
     """Export the history, energy data or point list to a local file."""
+    _refuse_existing(args.out, force=args.force)
     if args.kind == "setup":
         download = await client.export_setup()
     elif args.kind == "energy":
@@ -290,8 +292,8 @@ async def _export(client: ItmClient, args: argparse.Namespace) -> None:
                 return
         else:
             download = await client.export_point_list(start, end)
-    out = Path(args.out or download.name)
-    await asyncio.to_thread(_save, out, download.data)
+    out = _download_path(args.out, download.name)
+    await asyncio.to_thread(_save, out, download.data, force=args.force)
     _out(f"{download.name}: {len(download.data)} bytes written to {out}")
 
 
@@ -313,14 +315,15 @@ def _print_history_export(export: HistoryExport) -> None:
 
 async def _backup(client: ItmClient, args: argparse.Namespace) -> None:
     """Run the iTM's backup; write the file when the iTM offers one."""
+    _refuse_existing(args.out, force=args.force)
     download = await client.run_backup()
     if _print_plan(client):
         return
     if download is None:
         _out("backup done; the iTM keeps it (no file offered)")
         return
-    out = Path(args.out or download.name)
-    await asyncio.to_thread(_save, out, download.data)
+    out = _download_path(args.out, download.name)
+    await asyncio.to_thread(_save, out, download.data, force=args.force)
     _out(f"{download.name}: {len(download.data)} bytes written to {out}")
 
 
@@ -388,6 +391,7 @@ def add_energy_commands(sub: Any) -> None:
     pp.add_argument("--day", type=int, help="or: the monthly calculation day")
     bk = sub.add_parser("backup", help="run the iTM's backup (a job on the device)")
     bk.add_argument("--out", help="the file to write, if the iTM offers one")
+    bk.add_argument("--force", action="store_true", help="overwrite an existing file")
     ex = sub.add_parser(
         "export", help="export history, energy data, the point list or the setup"
     )
@@ -395,7 +399,12 @@ def add_energy_commands(sub: Any) -> None:
     ex.add_argument("--start", help="YYYY-MM-DD")
     ex.add_argument("--end", help="YYYY-MM-DD")
     ex.add_argument("--period", help="energy: a period as the iTM lists it")
-    ex.add_argument("--out", help="the file to write (default: the iTM's file name)")
+    ex.add_argument(
+        "--out",
+        help="the file to write (default: the iTM's file name, if it ends in "
+        ".csv, .zip or .txt)",
+    )
+    ex.add_argument("--force", action="store_true", help="overwrite an existing file")
     ex.add_argument(
         "--parse",
         action="store_true",

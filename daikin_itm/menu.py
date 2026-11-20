@@ -18,9 +18,12 @@ from ._screens import checked_index as _checked
 from ._screens import part_text as _text
 from .exceptions import ProtocolError
 from .lang import (
+    calendar_month,
+    calendar_week,
+    calendar_weekday,
     event_lock_key,
+    event_mode_from_label,
     lock_from_label,
-    mode_from_label,
     power_from_label,
 )
 from .models import FAN_ICONS, ICON_ID_ZONE, PowerState, RemoteLock, point_kind
@@ -184,6 +187,10 @@ SE_SPECIAL_RADIOS = tuple(range(85, 90))  # Ex1 .. Ex5
 SE_SPECIAL_BARS = tuple(range(95, 100))
 SE_EDIT_SPECIAL = 102
 SE_CALENDAR_LIST = 26
+SE_CAL_PATTERN, SE_CAL_DATE_MONTH = 32, 37  # Ex1 .. Ex5; Jan .. Dec, every month
+SE_CAL_WEEK_MONTH, SE_CAL_WEEK, SE_CAL_WEEKDAY = 43, 44, 46  # 1st .. Last; Sun .. Sat
+MONTHS, MONTH_DAYS, WEEKS, WEEKDAYS, SPECIAL_DAYS = 12, 31, 5, 7, 5
+_SPECIAL_KEY = re.compile(r"^Ex[1-5]$")
 SE_TAB_PROPERTIES, SE_TAB_WEEKLY, SE_TAB_SPECIAL, SE_TAB_CALENDAR = 0, 1, 2, 3
 SLOT_MINUTES = 15  # a pattern bar has 96 slots
 # Day events (107) and one event's settings (109).
@@ -236,17 +243,29 @@ _ACTION_TEMP = re.compile(r"^(-?\d+(?:[.,]\d+)?)\s*(?:°[CF]|℃|℉)$")
 
 @dataclass(frozen=True)
 class ItmIndicators:
-    """The indicators of the main menu bar (shown while active) and its clock."""
+    """The indicators of the main menu bar (shown while active) and its clock.
+
+    ``menu_available`` tells whether the login showed the bar's menu button: a
+    normal web user without allowed screens gets it hidden, and every read and
+    write through the main menu raises MenuNotAvailable then. The clock is left
+    out of ==, as it changes by itself: two reads compare equal when only the
+    clock moved on.
+    """
 
     energy_saving: bool
     error: bool
     emergency_stop: bool
-    clock_text: str | None  # e.g. "Wo, 01/01\n09:30", as shown
+    clock_text: str | None = field(compare=False)  # e.g. "Wo, 01/01\n09:30"
+    menu_available: bool = True
 
 
 @dataclass(frozen=True)
 class ItmInfo:
-    """Firmware, regional settings and clock of the iTM."""
+    """Firmware, regional settings and clock of the iTM.
+
+    The clock fields (``clock``, ``clock_text``, ``read_at``) are left out of ==, as
+    they change by themselves.
+    """
 
     version: str | None  # e.g. "1.32.00"
     build: str | None  # the build date line, as shown
@@ -255,10 +274,11 @@ class ItmInfo:
     time_24h: bool | None
     temperature_unit: str | None  # "°C" or "°F"
     decimal_separator: str | None  # "." or ","
-    clock: datetime | None  # the iTM's clock, as read
-    clock_text: str | None
+    clock: datetime | None = field(compare=False)  # the iTM's clock, as read
+    clock_text: str | None = field(compare=False)
     dst_enabled: bool | None
-    read_at: datetime | None = None  # local time when the clock was read
+    # local time when the clock was read
+    read_at: datetime | None = field(default=None, compare=False)
 
     @property
     def clock_offset(self) -> float | None:
@@ -369,6 +389,27 @@ class CalendarRule:
 
 
 @dataclass(frozen=True)
+class CalendarRuleValues:
+    """A calendar row as numbers, independent of the display language."""
+
+    month: int  # 1-12, 0 for every month
+    day: int | None  # a date rule: the day of the month
+    week: int | None  # or a weekday rule: the nth week of the month, 5 for the last
+    weekday: int | None  # 0 = Sunday .. 6 = Saturday
+    special: str  # the special day it runs: "Ex1".."Ex5"
+
+
+@dataclass(frozen=True)
+class CalendarOptions:
+    """The editor's option lists for a calendar row's words, in the iTM's order."""
+
+    months: tuple[str, ...] = ()  # Jan .. Dec, then every month
+    weeks: tuple[str, ...] = ()  # 1st .. 4th, then the last
+    weekdays: tuple[str, ...] = ()  # Sunday .. Saturday
+    patterns: tuple[str, ...] = ()  # Ex1 .. Ex5
+
+
+@dataclass(frozen=True)
 class ScheduleProgram:
     """A schedule program as its editor shows it."""
 
@@ -383,6 +424,10 @@ class ScheduleProgram:
     special: dict[str, tuple[ScheduleEvent, ...]] = field(default_factory=dict)
     calendar: tuple[CalendarRule, ...] = ()
     special_names: tuple[str, ...] = ()  # Ex1..Ex5 as named (read_schedule)
+    # The period as ((month, day), (month, day)), from the combos' positions.
+    period_dates: tuple[tuple[int, int], tuple[int, int]] | None = None
+    # Per row of calendar: its values, or None where its words can't be read.
+    calendar_values: tuple[CalendarRuleValues | None, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -392,6 +437,9 @@ class ScheduleDay:
     program: str
     day: str  # as shown, e.g. "01/01(Wo)"
     events: tuple[ScheduleEvent, ...]
+
+
+_WEB_SOURCE = "Web:"
 
 
 @dataclass(frozen=True)
@@ -408,6 +456,25 @@ class HistoryEntry:
     address: str
     point_id: str
     code: str
+
+    @property
+    def source_kind(self) -> str | None:
+        """Tell who made the entry, from its source column.
+
+        "web" for ``Web:<user>`` (the web UI), "itm" for an empty source (seen for
+        the iTM's own management entries; the panel and wall remote not seen
+        yet), None for anything else (see source).
+        """
+        if self.source.startswith(_WEB_SOURCE):
+            return "web"
+        return "itm" if not self.source.strip() else None
+
+    @property
+    def source_user(self) -> str | None:
+        """Return the web user of a ``Web:<user>`` source, else None."""
+        if not self.source.startswith(_WEB_SOURCE):
+            return None
+        return self.source.removeprefix(_WEB_SOURCE).strip() or None
 
 
 @dataclass(frozen=True)
@@ -454,8 +521,21 @@ def _combo_value(state: UIState, screen: int, part: int) -> int | None:
     return nums[idx] if idx is not None and 0 <= idx < len(nums) else None
 
 
-def indicators_from_screen(state: UIState) -> ItmIndicators:
-    """Read the main menu bar's indicators and clock (open in every session)."""
+def indicators_from_screen(
+    state: UIState, *, menu_available: bool = True
+) -> ItmIndicators:
+    """Read the main menu bar's indicators and clock (open in every session).
+
+    Args:
+    ----
+        state: The session's UI state.
+        menu_available: Whether the login showed the menu button.
+
+    Returns:
+    -------
+        The indicators.
+
+    """
     s = ScreenID.MAINMENU
     return ItmIndicators(
         energy_saving=state.visible(s, MM_ENERGY_SAVING)
@@ -465,6 +545,7 @@ def indicators_from_screen(state: UIState) -> ItmIndicators:
         emergency_stop=state.visible(s, MM_EMERGENCY_STOP)
         and state.get(s, MM_EMERGENCY_STOP, "VISIBLED") is not None,
         clock_text=_text(state, s, MM_CLOCK, "LABEL"),
+        menu_available=menu_available,
     )
 
 
@@ -744,11 +825,8 @@ def event_from_action(event: ScheduleEvent) -> ScheduleEvent:
         if (power := power_from_label(token)) is not None and "power" not in values:
             values["power"] = PowerState(power)
             continue
-        if (mode := mode_from_label(token)) is not None and "mode" not in values:
+        if (mode := event_mode_from_label(token)) is not None and "mode" not in values:
             values["mode"], values["mode_label"] = mode, token
-            continue
-        if "setpoint" in token.lower() and "mode" not in values:
-            values["mode"], values["mode_label"] = "setpoint", token
             continue
         extra.setdefault(token, "")
     # A lock whose key is unknown: fall back to the order the iTM lists them in
@@ -821,12 +899,7 @@ def event_from_screen(state: UIState, event: ScheduleEvent) -> ScheduleEvent:
     if _included(state, EVT_MODE):
         label = _combo_text(state, EVT_MODE_COMBO)
         values["mode_label"] = label
-        mode = mode_from_label(label)
-        # The event's mode list has one more option than a unit's: a setpoint-only
-        # event (shown as "Setpoint" in every language seen so far).
-        values["mode"] = mode or (
-            "setpoint" if label and "setpoint" in label.lower() else None
-        )
+        values["mode"] = event_mode_from_label(label)
     if _included(state, EVT_SETPOINT):
         if state.get(s, EVT_SETPOINT_SHIFT, "CHECK_STATE") == 1:
             values["setpoint_shift"] = _combo_text(state, EVT_SETPOINT_SHIFT_COMBO)
@@ -848,7 +921,7 @@ def event_from_screen(state: UIState, event: ScheduleEvent) -> ScheduleEvent:
     time_text = _text(state, s, EVT_TIME)
     target = _text(state, s, EVT_TARGET)
     if time_text:
-        values["time"] = time_text
+        values["time"] = time_of_day(time_text)
     if target:
         values["target"] = target
     return replace(event, **values)
@@ -885,6 +958,146 @@ def _period_from_editor(state: UIState) -> tuple[str, str] | None:
     return (begin, end)
 
 
+def _period_number(state: UIState, part: int, size: int) -> int | None:
+    """Return a period combo's choice as a number: its value, or its position."""
+    s = MenuScreen.SCHEDULE_EDITOR
+    idx = state.get(s, part, "SINGLE_SELIDX")
+    nums = state.get(s, part, "COMBO_NUMS")
+    options = nums or state.get(s, part, "COMBO_STRS") or []
+    if idx is None or not 0 <= idx < len(options):
+        return None
+    if nums:
+        return int(nums[idx])
+    if len(options) == size:
+        return int(idx) + 1
+    text = str(options[idx]).strip()
+    if text.isdigit():
+        return int(text)
+    if size == MONTHS:
+        return calendar_month(text) or None
+    return None
+
+
+def _period_date(
+    state: UIState, month_part: int, day_part: int
+) -> tuple[int, int] | None:
+    month = _period_number(state, month_part, MONTHS)
+    day = _period_number(state, day_part, MONTH_DAYS)
+    return None if month is None or day is None else (month, day)
+
+
+def _period_dates_from_editor(
+    state: UIState,
+) -> tuple[tuple[int, int], tuple[int, int]] | None:
+    """Read the editor's period combos as ((month, day), (month, day))."""
+    begin = _period_date(state, SE_PERIOD[0], SE_PERIOD[1])
+    end = _period_date(state, SE_PERIOD[2], SE_PERIOD[3])
+    return None if begin is None or end is None else (begin, end)
+
+
+def _fold(text: str) -> str:
+    return "".join(text.split()).casefold()
+
+
+def _position(options: tuple[str, ...], text: str, size: int) -> int | None:
+    """Return where a text stands in an option list of the expected size."""
+    folded = [_fold(o) for o in options]
+    key = _fold(text)
+    if len(folded) != size or key not in folded:
+        return None
+    return folded.index(key)
+
+
+def _rule_month(text: str, options: CalendarOptions) -> int | None:
+    index = _position(options.months, text, MONTHS + 1)
+    if index is not None:
+        return (index + 1) % (MONTHS + 1)
+    text = text.strip()
+    if text.isdigit():
+        return int(text) if 1 <= int(text) <= MONTHS else None
+    return calendar_month(text)
+
+
+def _rule_day(
+    text: str, options: CalendarOptions
+) -> tuple[int | None, int | None, int | None] | None:
+    """Return (day, None, None) for a date, (None, week, weekday) for a weekday."""
+    text = text.strip()
+    if text.isdigit():
+        return int(text), None, None
+    key = _fold(text)
+    if len(options.weeks) == WEEKS and len(options.weekdays) == WEEKDAYS:
+        for nth, nth_text in enumerate(options.weeks, start=1):
+            for day, day_text in enumerate(options.weekdays):
+                words = _fold(nth_text), _fold(day_text)
+                if key in (words[0] + words[1], words[1] + words[0]):
+                    return None, nth, day
+    week_text, _, weekday_text = text.rpartition(" ")
+    week, weekday = calendar_week(week_text), calendar_weekday(weekday_text)
+    if week is None or weekday is None:
+        return None
+    return None, week, weekday
+
+
+def _rule_special(
+    text: str, names: tuple[str, ...], options: CalendarOptions
+) -> str | None:
+    index = _position(options.patterns, text, SPECIAL_DAYS)
+    if index is not None:
+        return f"Ex{index + 1}"
+    text = text.strip()
+    if _SPECIAL_KEY.match(text):
+        return text
+    if text in names[:SPECIAL_DAYS]:
+        return f"Ex{names.index(text) + 1}"
+    return None
+
+
+def calendar_rule_values(
+    rule: CalendarRule,
+    names: tuple[str, ...] = (),
+    options: CalendarOptions | None = None,
+) -> CalendarRuleValues | None:
+    """Read a calendar row as numbers.
+
+    Each word is looked up by its position in the editor's option lists when they
+    are given, else in the English tables of ``lang``.
+
+    Args:
+    ----
+        rule: The row as shown.
+        names: The special days as named (Ex1..Ex5 unless renamed).
+        options: The editor's option lists, as the iTM sent them.
+
+    Returns:
+    -------
+        The row's values, or None when a word is in neither.
+
+    """
+    options = options or CalendarOptions()
+    month = _rule_month(rule.month, options)
+    day = _rule_day(rule.day, options)
+    special = _rule_special(rule.pattern, names, options)
+    if month is None or day is None or special is None:
+        return None
+    return CalendarRuleValues(month, *day, special)
+
+
+def _calendar_options(state: UIState) -> CalendarOptions:
+    """Return the calendar tab's option lists, as far as the editor sent them."""
+
+    def strings(part: int) -> tuple[str, ...]:
+        options = state.get(MenuScreen.SCHEDULE_EDITOR, part, "COMBO_STRS") or ()
+        return tuple(html.unescape(str(o)) for o in options)
+
+    return CalendarOptions(
+        months=strings(SE_CAL_DATE_MONTH) or strings(SE_CAL_WEEK_MONTH),
+        weeks=strings(SE_CAL_WEEK),
+        weekdays=strings(SE_CAL_WEEKDAY),
+        patterns=strings(SE_CAL_PATTERN),
+    )
+
+
 def program_from_editor(state: UIState) -> ScheduleProgram:
     """Read the editor's properties tab and whatever pattern bars it has shown."""
     s = MenuScreen.SCHEDULE_EDITOR
@@ -898,12 +1111,17 @@ def program_from_editor(state: UIState) -> ScheduleProgram:
     special_slots = {
         f"Ex{i + 1}": _slots_from_bar(state.get(s, part, "TIMELINE_BAR"))
         for i, part in enumerate(SE_SPECIAL_BARS)
-        if state.get(s, part, "TIMELINE_BAR")
+        if state.get(s, part, "TIMELINE_BAR") is not None
     }
     calendar = tuple(
         CalendarRule(*row[:3])
         for row in _rows(state, s, SE_CALENDAR_LIST)
         if len(row) >= 3
+    )
+    options = _calendar_options(state)
+    names = tuple(
+        html.unescape(str(state.get(s, part, "LABEL") or f"Ex{i + 1}"))
+        for i, part in enumerate(SE_SPECIAL_RADIOS)
     )
     return ScheduleProgram(
         name=_text(state, s, SE_NAME) or "",
@@ -912,6 +1130,10 @@ def program_from_editor(state: UIState) -> ScheduleProgram:
         weekly_slots=weekly_slots,
         special_slots=special_slots,
         calendar=calendar,
+        period_dates=_period_dates_from_editor(state) if period else None,
+        calendar_values=tuple(
+            calendar_rule_values(rule, names, options) for rule in calendar
+        ),
     )
 
 

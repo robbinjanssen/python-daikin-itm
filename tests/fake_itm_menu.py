@@ -24,10 +24,20 @@ HISTORY_DATE_ID = 20
 class MenuMixin(ScheduleMixin, SystemMixin):
     """The main menu bar, the main menu and its screens."""
 
+    def _bar_delta(self) -> list[tuple[int, str, Any]]:
+        """Return the main menu bar's parts that differ from what the client shows."""
+        delta = [
+            (p, t, v) for p, t, v in self._menu_bar() if self.bar_shown.get((p, t)) != v
+        ]
+        self.bar_shown.update({(p, t): v for p, t, v in delta})
+        return delta
+
     def _menu_bar(self) -> list[tuple[int, str, Any]]:
         shown = 1 if self.errors else 0
+        hidden = [(0, "VISIBLED", 0)] if self.normal_user else []
         return [
-            (6, "LABEL", "Tue, 31/12\n09:00"),
+            *hidden,
+            (6, "LABEL", self.bar_clock),
             (16, "VISIBLED", 1 if self.energy_saving else 0),
             (18, "VISIBLED", shown),
             (19, "VISIBLED", shown),
@@ -41,6 +51,8 @@ class MenuMixin(ScheduleMixin, SystemMixin):
         """Route an event of the main menu bar, the menu list or a menu screen."""
         screen, part, event = ev["screen"], ev["part"], ev["event"]
         if screen == 0 and part == 0:
+            if self.normal_user:
+                return []
             self.menu_open = True
             tabs = ["Automatic Ctrl.", "System Settings", "Operation Mgmt."]
             return [
@@ -370,7 +382,6 @@ class MenuMixin(ScheduleMixin, SystemMixin):
                 (15, "ENABLED", 0),
                 (16, "ENABLED", 0),
             ]
-            self.history_page = 0
             progress = [
                 19,
                 11,
@@ -459,6 +470,10 @@ class MenuMixin(ScheduleMixin, SystemMixin):
                 self.history_loading = False
                 return [("DLG_UPDATE", 800, [19, 11, 50], [])]
             return [("DLG_CLOSE", 800, [19, 11], [])]
+        if event == 6:  # CANCEL_PROG (the reply is a guess: not recorded live)
+            self.history_loading = False
+            self.history_cancelled += 1
+            return [("DLG_CLOSE", 800, [19, 11], [])]
         if part in {3, 4, 5, 6} and event == 1:
             (self.history_classes.add if number else self.history_classes.discard)(part)
             return [("UPDATE", 800, [], [(part, "CHECK_STATE", number)])]
@@ -515,6 +530,10 @@ class MenuMixin(ScheduleMixin, SystemMixin):
         return self.history_page > 0
 
     def _polling(self, _ev: dict[str, Any]) -> list[Update]:
+        """Deliver what changed on the main menu bar, and the loaded history."""
+        return [("UPDATE", 0, [], self._bar_delta()), *self._history_loaded()]
+
+    def _history_loaded(self) -> list[Update]:
         """Deliver the history once it has loaded."""
         if 800 not in self.open_screens or self.history_loading:
             return []

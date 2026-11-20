@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from daikin_itm import PowerState, ReadOnlyError, RemoteLock
+from daikin_itm import ItmCommandError, PowerState, ReadOnlyError, RemoteLock
 from daikin_itm.lang import lock_from_label, on_off
 from daikin_itm.models import (
     MODES,
@@ -176,6 +176,74 @@ async def test_fetch_unit_settings(itm: FakeITM) -> None:
     assert settings.flags["Thermostat Status"] == "ON"
     assert itm.dialog is None
     assert itm.session is None
+
+
+async def test_fetch_thermostat_status(itm: FakeITM) -> None:
+    """Every indoor unit's thermostat status is read, in one login."""
+    itm.units[0].thermo_on = True
+    itm.units[1].thermo_on = False
+    status = await FakeClient(itm).fetch_thermostat_status()
+    assert list(status) == [u.name for u in itm.units]
+    assert status[itm.units[0].name] is True
+    assert status[itm.units[1].name] is False
+    assert itm.logins == 1
+    assert itm.session is None
+    assert itm.dialog is None
+
+
+async def test_fetch_thermostat_status_names(itm: FakeITM) -> None:
+    """Only the named units are read; an empty selection reads none."""
+    itm.units[1].thermo_on = True
+    c = FakeClient(itm)
+    name = itm.units[1].name
+    assert await c.fetch_thermostat_status([name, name]) == {name: True}
+    assert await c.fetch_thermostat_status(iter([itm.units[0].name])) == {
+        itm.units[0].name: False
+    }
+    assert itm.logins == 2
+    assert not await c.fetch_thermostat_status([])
+    assert itm.logins == 2
+
+
+async def test_fetch_thermostat_status_string_is_refused(itm: FakeITM) -> None:
+    """A string is not split into names; nothing is sent."""
+    with pytest.raises(ItmCommandError, match="not the string '1:1-04'"):
+        await FakeClient(itm).fetch_thermostat_status("1:1-04")
+    assert itm.requests == []
+
+
+async def test_fetch_thermostat_status_zone_is_refused(itm: FakeITM) -> None:
+    """A zone has no thermostat: refused before any Details screen is read."""
+    c = FakeClient(itm, zone_path=("Building",))
+    with pytest.raises(ItmCommandError, match=r"\['Indoor units'\] are zones"):
+        await c.fetch_thermostat_status(["Indoor units"])
+    assert not any(r["screen"] == 4 and r["part"] == 7 for r in itm.requests)
+    assert itm.session is None
+    assert not await c.fetch_thermostat_status()
+
+
+async def test_fetch_thermostat_status_unknown_icon(itm: FakeITM) -> None:
+    """A unit with an icon this client doesn't know is read by default as well."""
+    itm.units[2].icon_id = 2999
+    itm.units[2].thermo_on = True
+    status = await FakeClient(itm).fetch_thermostat_status()
+    assert status == {"1:1-00": False, "1:1-04": False, "1:1-09": True}
+
+
+async def test_fetch_thermostat_status_unknown_name(itm: FakeITM) -> None:
+    """An unknown name is refused like in the other per-unit reads, and logs out."""
+    with pytest.raises(ItmCommandError, match="not found here"):
+        await FakeClient(itm).fetch_thermostat_status([itm.units[0].name, "nope"])
+    assert itm.session is None
+
+
+async def test_fetch_thermostat_status_other_points(itm: FakeITM) -> None:
+    """Ventilation units and analog inputs have none; the default skips them."""
+    vent = FakeClient(itm, zone_path=("Building", "Ventilation"))
+    assert not await vent.fetch_thermostat_status()
+    assert await vent.fetch_thermostat_status(["Vent 1"]) == {"Vent 1": None}
+    analog = FakeClient(itm, zone_path=("Building", "Analog"))
+    assert await analog.fetch_thermostat_status(["Alarm 1"]) == {"Alarm 1": None}
 
 
 def test_power_state_from_panel() -> None:

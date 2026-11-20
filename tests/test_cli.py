@@ -10,7 +10,9 @@ import json
 import os
 import signal
 import stat
-from typing import TYPE_CHECKING, Any, ClassVar
+from dataclasses import replace
+from pathlib import Path
+from typing import Any, ClassVar
 
 import aiohttp
 import pytest
@@ -18,18 +20,19 @@ import pytest
 from daikin_itm import Capabilities, ItmClient, ItmError
 from daikin_itm import cli as itm_cli
 from daikin_itm.cli_common import safe as _safe
+from daikin_itm.menu import ScheduleEvent
+from daikin_itm.schedule_cli import _difference, _pair_events
 
 from .export_archive import history_archive
 from .fake_exports import FakeExportsITM
-from .fake_itm import FakeGroup, FakeITM
+from .fake_itm import FakeAnalog, FakeGroup, FakeITM
 from .fake_schedule import FakeScheduleITM
 from .fake_system_edit import FakeSystemEditITM
 from .fake_zones import FakeZonesITM
 
-if TYPE_CHECKING:
-    from pathlib import Path
-
 HOST = "fake-host"
+ZONE = "Building/Indoor units"
+ZONE_PATH = ("Building", "Indoor units")
 
 
 class CliClient(ItmClient):
@@ -121,7 +124,7 @@ def test_status_reads_and_caches_capabilities(
     assert out[3].split()[:3] == ["1:1-09", "-", "Stop"]
     assert detail_requests(itm) == 3
     cache = json.loads((tmp_path / "cache" / "units.json").read_text(encoding="utf-8"))
-    assert cache[HOST]["1:1-04"]["description"] == "AC 05"
+    assert cache[HOST]["zones"][ZONE]["1:1-04"]["description"] == "AC 05"
     assert stat.S_IMODE((tmp_path / "cache").stat().st_mode) == 0o700
 
     run("status")
@@ -182,6 +185,15 @@ def test_setpoint(itm: FakeITM, capsys: pytest.CaptureFixture[str]) -> None:
     run("setpoint", "1:1-04", "22")
     assert capsys.readouterr().out == "1:1-04: setpoint now 22\n"
     assert itm.units[1].setpoint == 22
+
+
+def test_setpoint_when_stopped(
+    itm: FakeITM, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A stopped unit's setpoint goes through the dialog when asked."""
+    run("setpoint", "1:1-09", "20", "--when-stopped", "dialog")
+    assert capsys.readouterr().out == "1:1-09: setpoint now 20\n"
+    assert (itm.units[2].setpoint, itm.units[2].running) == (20, False)
 
 
 def test_caps(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -300,9 +312,15 @@ def test_error_message_is_sanitized(itm: FakeITM) -> None:
         (TimeoutError(), "TimeoutError"),
     ],
 )
-def test_unreachable(itm: FakeITM, error: Exception, reason: str) -> None:
+def test_unreachable(
+    itm: FakeITM, error: Exception, reason: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Network errors say the iTM could not be reached, and why."""
-    itm.fail_next = error
+
+    def unreachable(_body: str) -> str:
+        raise error
+
+    monkeypatch.setattr(itm, "handle", unreachable)
     with pytest.raises(SystemExit) as exc:
         run("status")
     assert exc.value.code == f"error: could not reach the iTM at {HOST}: {reason}"
@@ -385,46 +403,58 @@ def test_unusable_cache_is_ignored(
     cache = tmp_path / "units.json"
     cache.write_text("[]", encoding="utf-8")
     monkeypatch.setattr(itm_cli, "UNITS_CACHE", cache)
-    assert itm_cli._load_caps(HOST) == {}
-    itm_cli._save_caps(HOST, {})
-    assert json.loads(cache.read_text(encoding="utf-8")) == {HOST: {}}
+    assert itm_cli._load_caps(HOST, ZONE_PATH) == {}
+    itm_cli._save_caps(HOST, ZONE_PATH, {})
+    assert json.loads(cache.read_text(encoding="utf-8")) == {
+        HOST: {"zones": {ZONE: {}}}
+    }
 
 
 # -- helpers ---------------------------------------------------------------------------
 
 
 def test_load_caps(tmp_path: Path) -> None:
-    """The cache gives the capabilities of one host's units, zones as a tuple."""
-    assert itm_cli._load_caps(HOST) == {}
+    """The cache gives the capabilities of one host's zone, zones as a tuple."""
+    assert itm_cli._load_caps(HOST, ZONE_PATH) == {}
     caps = {
         "a": Capabilities("a", {"cool": "Cool"}, fan_speed=True, zones=("x", "y")),
     }
+    other = {"b": Capabilities("b", {}, fan_speed=False)}
     (tmp_path / "cache").mkdir()
-    itm_cli._save_caps(HOST, caps)
-    itm_cli._save_caps("other", {})
-    assert itm_cli._load_caps(HOST) == caps
-    assert itm_cli._load_caps("other") == {}
-    assert itm_cli._load_caps("unknown") == {}
+    itm_cli._save_caps(HOST, ZONE_PATH, caps)
+    itm_cli._save_caps(HOST, ("Building",), other)
+    itm_cli._save_caps("other", ZONE_PATH, {})
+    assert itm_cli._load_caps(HOST, ZONE_PATH) == caps
+    assert itm_cli._load_caps(HOST, ("Building",)) == other
+    assert itm_cli._load_caps(HOST, ()) == {}
+    assert itm_cli._load_caps("other", ZONE_PATH) == {}
+    assert itm_cli._load_caps("unknown", ZONE_PATH) == {}
+    assert not list((tmp_path / "cache").glob(".units.json-*"))
 
 
 @pytest.mark.parametrize(
     "content",
-    ["{not json", json.dumps({HOST: {"a": {"unexpected": 1}}})],
+    [
+        "{not json",
+        json.dumps({HOST: {"zones": {ZONE: {"a": {"unexpected": 1}}}}}),
+        json.dumps({HOST: {"zones": {ZONE: ["a"]}}}),
+        json.dumps({HOST: {"1:1-04": {"name": "1:1-04"}}}),
+    ],
 )
 def test_load_caps_bad_cache(tmp_path: Path, content: str) -> None:
-    """A corrupt or outdated cache is ignored."""
+    """A corrupt cache, or one written before it was kept per zone, is ignored."""
     (tmp_path / "cache").mkdir()
     (tmp_path / "cache" / "units.json").write_text(content, encoding="utf-8")
-    assert itm_cli._load_caps(HOST) == {}
+    assert itm_cli._load_caps(HOST, ZONE_PATH) == {}
 
 
 def test_save_caps_replaces_corrupt_cache(tmp_path: Path) -> None:
     """Saving over a corrupt cache starts a new one."""
     (tmp_path / "cache").mkdir()
     (tmp_path / "cache" / "units.json").write_text("{not json", encoding="utf-8")
-    itm_cli._save_caps(HOST, {})
+    itm_cli._save_caps(HOST, ZONE_PATH, {})
     data = (tmp_path / "cache" / "units.json").read_text(encoding="utf-8")
-    assert json.loads(data) == {HOST: {}}
+    assert json.loads(data) == {HOST: {"zones": {ZONE: {}}}}
 
 
 @pytest.mark.parametrize(
@@ -479,6 +509,50 @@ def test_status_list_view(itm: FakeITM, capsys: pytest.CaptureFixture[str]) -> N
     assert itm.list_shown is False
 
 
+def test_status_thermostat(itm: FakeITM, capsys: pytest.CaptureFixture[str]) -> None:
+    """Status reads the thermostat status only when asked, in the units' walk."""
+    itm.units[0].thermo_on = True
+    run("status")
+    out = capsys.readouterr().out
+    assert "thermo" not in out
+    sent = len(itm.requests)
+    run("status")
+    plain = len(itm.requests) - sent
+    capsys.readouterr()
+    logins, sent = itm.logins, len(itm.requests)
+    run("status", "--thermostat")
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].split()[-2:] == ["thermo", "error"]
+    assert lines[1].split()[-2:] == ["21.0", "on"]
+    assert lines[2].split()[-1] == "off"
+    assert itm.logins - logins == 1
+    assert len(itm.requests) - sent == plain + 2 * len(itm.units)
+    logins = itm.logins
+    run("status", "--view", "list", "--thermostat")
+    assert capsys.readouterr().out.splitlines()[1].split()[-1] == "on"
+    assert itm.logins - logins == 1
+
+
+def test_status_of_a_normal_user(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A normal web user's units are at the top level: status works without --zone."""
+    fake = FakeITM(normal_user=True)
+    fake.units[0].thermo_on = True
+    monkeypatch.setattr(CliClient, "itm", fake)
+    itm_cli.main(["--host", HOST, "status", "--thermostat"])
+    out = capsys.readouterr().out.splitlines()
+    assert [line.split()[0] for line in out[1:4]] == ["1:1-00", "1:1-04", "1:1-09"]
+    assert out[1].split()[-1] == "on"
+
+
+def test_status_one_login(itm: FakeITM, capsys: pytest.CaptureFixture[str]) -> None:
+    """Status reads the units and the capabilities in one login."""
+    run("status", "--thermostat", "--refresh")
+    assert "Office" in capsys.readouterr().out
+    assert itm.logins == 1
+
+
 def test_status_warns_about_unknown_mode_labels(
     itm: FakeITM, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -511,6 +585,52 @@ def test_read_only_option(itm: FakeITM) -> None:
     assert itm.units[1].setpoint == 23
 
 
+def test_history_uses_the_units_cache(
+    itm: FakeITM, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A unit the cache knows needs no capability read; another one refreshes it."""
+    run("caps")
+    capsys.readouterr()
+    before = detail_requests(itm)
+    run("history", "--day", "2025-01-01", "--unit", "AC 05")
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 3
+    assert detail_requests(itm) == before
+    itm.units[1].description = "Hall"
+    run("history", "--day", "2025-01-01", "--unit", "Hall")
+    assert len(capsys.readouterr().out.splitlines()) == 3
+    assert detail_requests(itm) == before + len(itm.units)
+
+
+def test_save_caps_replaces_the_file_whole(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A write that fails leaves the old cache and no temporary file behind."""
+    (tmp_path / "cache").mkdir()
+    caps = {"a": Capabilities("a", {}, fan_speed=False)}
+    itm_cli._save_caps(HOST, ZONE_PATH, caps)
+    cache = tmp_path / "cache" / "units.json"
+    before = cache.read_text(encoding="utf-8")
+
+    def refuse(_self: Path, _target: Path) -> Path:
+        msg = "disk full"
+        raise OSError(msg)
+
+    def refuse_unlink(_self: Path, **_kw: object) -> None:
+        msg = "read-only"
+        raise OSError(msg)
+
+    monkeypatch.setattr(Path, "replace", refuse)
+    with pytest.raises(OSError, match="disk full"):
+        itm_cli._save_caps(HOST, ("Building",), caps)
+    assert cache.read_text(encoding="utf-8") == before
+    assert [p.name for p in cache.parent.iterdir()] == ["units.json"]
+    monkeypatch.setattr(Path, "unlink", refuse_unlink)
+    with pytest.raises(OSError, match="disk full") as err:
+        itm_cli._save_caps(HOST, ("Building",), caps)
+    assert "clean-up failed as well" in "".join(err.value.__notes__)
+
+
 def test_load_caps_with_unknown_labels(tmp_path: Path) -> None:
     """Cached capabilities keep the unknown labels as a tuple."""
     cache = tmp_path / "units.json"
@@ -518,11 +638,15 @@ def test_load_caps_with_unknown_labels(tmp_path: Path) -> None:
         json.dumps(
             {
                 HOST: {
-                    "a": {
-                        "name": "a",
-                        "mode_labels": {},
-                        "fan_speed": False,
-                        "unknown_labels": ["Chauffe-eau"],
+                    "zones": {
+                        ZONE: {
+                            "a": {
+                                "name": "a",
+                                "mode_labels": {},
+                                "fan_speed": False,
+                                "unknown_labels": ["Chauffe-eau"],
+                            }
+                        }
                     }
                 }
             }
@@ -531,7 +655,9 @@ def test_load_caps_with_unknown_labels(tmp_path: Path) -> None:
     )
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(itm_cli, "UNITS_CACHE", cache)
-        assert itm_cli._load_caps(HOST)["a"].unknown_labels == ("Chauffe-eau",)
+        assert itm_cli._load_caps(HOST, ZONE_PATH)["a"].unknown_labels == (
+            "Chauffe-eau",
+        )
 
 
 def test_points(itm: FakeITM, capsys: pytest.CaptureFixture[str]) -> None:
@@ -540,6 +666,11 @@ def test_points(itm: FakeITM, capsys: pytest.CaptureFixture[str]) -> None:
     run("--zone", "Building/Analog", "points", "--details")
     out = capsys.readouterr().out
     assert "Alarm 1        analog       ALARM    1:1-00 Suction Temp. <= 30.0 °C" in out
+    itm.analog.append(FakeAnalog("Alarm 2", value=None))
+    run("--zone", "Building/Analog", "points", "--values")
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].split()[-2:] == ["21.25", "°C"]
+    assert lines[1].split()[-1] == "-"
     run("--zone", "Building/Ventilation", "points")
     assert capsys.readouterr().out.split()[:4] == ["Vent", "1", "ventilation", "Start"]
     run("points")
@@ -615,6 +746,17 @@ def test_menu_commands(itm: FakeITM, capsys: pytest.CaptureFixture[str]) -> None
     assert capsys.readouterr().out.strip() == "no auto changeover groups"
 
 
+def test_history_of_a_unit_one_login(
+    itm: FakeITM, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`history --unit` reads the units' names and the history in one login."""
+    for day in ((), ("--day", "2024-12-31")):
+        logins = itm.logins
+        run("history", *day, "--unit", "1:1-04")
+        assert "note:" not in capsys.readouterr().err
+        assert itm.logins - logins == 1
+
+
 def test_schedule_commands(itm: FakeITM, capsys: pytest.CaptureFixture[str]) -> None:
     """The schedule commands print a program and a day."""
     run("schedule", "Always")
@@ -637,6 +779,139 @@ def test_schedule_commands(itm: FakeITM, capsys: pytest.CaptureFixture[str]) -> 
     assert out.splitlines()[0] == "Always: 02/01(Thu)"
     assert "18:00 Indoor units         zone         Stop" in out
     assert itm.open_screens == set()
+
+
+def test_schedule_on_a_date(itm: FakeITM, capsys: pytest.CaptureFixture[str]) -> None:
+    """`itm schedule NAME --on DATE` prints the events computed for that date."""
+    run("schedule", "Always", "--on", "2025-01-01")
+    out = capsys.readouterr().out.splitlines()
+    assert out[1] == "  2025-01-01: Ex1 (calendar)"
+    assert out[2].split()[:2] == ["08:00", "1:1-00"]
+    assert len(out) == 3
+    run("schedule", "Always", "--on", "2025-01-02")
+    out = capsys.readouterr().out.splitlines()
+    assert out[1] == "  2025-01-02: Thursday"
+    assert [line.split()[0] for line in out[2:]] == ["06:00", "18:00"]
+    run("schedule", "Always", "--on", "2025-01-04")
+    assert capsys.readouterr().out.splitlines()[1:] == [
+        "  2025-01-04: Saturday",
+        "    no events",
+    ]
+    run("schedule", "Program G", "--on", "2025-01-06")
+    assert "  2025-01-06: outside the period" in capsys.readouterr().out
+    assert not any(r["screen"] == 102 for r in itm.requests)
+    with pytest.raises(SystemExit, match="leave out --no-events"):
+        run("schedule", "Always", "--on", "2025-01-01", "--no-events")
+    with pytest.raises(SystemExit, match="YYYY-MM-DD"):
+        run("schedule", "Always", "--on", "2025-13-01")
+    with pytest.raises(SystemExit):
+        run("schedule", "Always", "--on", "2025-01-01", "--enable")
+    itm.calendar_rows = [["Janvier", "1", "Ex1"]]
+    with pytest.raises(SystemExit, match="unreadable calendar rule"):
+        run("schedule", "Always", "--on", "2025-01-01")
+
+
+def test_schedule_compare_agrees(
+    itm: FakeITM, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--compare` prints both sides and agrees when the overview follows the rules."""
+    itm.overview_follows_calendar = True
+    run("schedule", "Always", "--on", "2025-01-02", "--compare")
+    out = capsys.readouterr().out.splitlines()
+    assert out[0] == "Always: enabled, all year"
+    assert out[1] == ("  2025-01-02: Thursday; the iTM's day overview shows 02/01(Thu)")
+    assert out[2].split() == ["time", "target", "computed", "day", "overview"]
+    assert out[3].split() == ["06:00", "Indoor", "units", "Start", "Start"]
+    assert out[4].split() == ["18:00", "Indoor", "units", "Stop", "Stop"]
+    assert out[-1] == "agree: the computed events match the day overview"
+    assert itm.logins == 1
+    assert itm.open_screens == set()
+    run("schedule", "Always", "--on", "2025-01-01", "--compare")
+    out = capsys.readouterr().out.splitlines()
+    assert out[1].startswith("  2025-01-01: Ex1 (calendar);")
+    assert out[3].split() == ["08:00", "1:1-00", "Start", "Start"]
+    assert out[-1].startswith("agree:")
+    run("schedule", "Program G", "--on", "2025-01-06", "--compare")
+    out = capsys.readouterr().out.splitlines()
+    assert out[1].startswith("  2025-01-06: outside the period;")
+    assert out[2].startswith("  the day overview leaves the period out")
+    assert out[-1] == "agree: the computed events match the day overview"
+
+
+def test_schedule_compare_differs(
+    itm: FakeITM, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--compare` lists the differences and exits 1 when the sides disagree."""
+    assert not itm.overview_follows_calendar
+    with pytest.raises(SystemExit) as exc:
+        run("schedule", "Always", "--on", "2025-01-01", "--compare")
+    assert exc.value.code == 1
+    out = capsys.readouterr().out.splitlines()
+    assert out[3].endswith("Start         only in the day overview")
+    assert out[4].split()[:2] == ["08:00", "1:1-00"]
+    assert out[4].endswith("only computed")
+    assert out[5].endswith("Stop          only in the day overview")
+    assert out[-1] == (
+        "differ: 3 difference(s) between the computed events and the day overview"
+    )
+
+
+def test_schedule_compare_refusals(
+    itm: FakeITM, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--compare` needs --on, refuses the past and says when the overview ends."""
+    with pytest.raises(SystemExit, match="--compare needs --on"):
+        run("schedule", "Always", "--compare")
+    with pytest.raises(SystemExit, match="--compare needs --on"):
+        run("schedule", "Always", "--enable", "--compare")
+    with pytest.raises(SystemExit, match=r"2024-12-31 is in the past.*2025-01-01"):
+        run("schedule", "Always", "--on", "2024-12-31", "--compare")
+    assert not any(r["screen"] in {102, 104} for r in itm.requests)
+    itm.overview_reach = 2
+    run("schedule", "Always", "--on", "2025-01-03", "--compare")
+    capsys.readouterr()
+    with pytest.raises(SystemExit, match="disabled"):
+        run("schedule", "Always", "--on", "2025-01-04", "--compare")
+    itm.clock_text = ""
+    with pytest.raises(SystemExit, match="clock could not be read"):
+        run("schedule", "Always", "--on", "2025-01-04", "--compare")
+
+
+def test_schedule_compare_differences() -> None:
+    """Events pair by time and target; an action differs only when both show one."""
+    event = ScheduleEvent(
+        time="06:00", target="Zone", target_kind="zone", action="Start"
+    )
+    stop = replace(event, action="Stop")
+    blank = replace(event, action="")
+    assert _difference(event, event) == ""
+    assert _difference(event, stop) == "action differs"
+    assert _difference(blank, stop) == ""
+    assert _difference(event, None) == "only computed"
+    assert _difference(None, event) == "only in the day overview"
+    later = replace(event, time="07:00")
+    pairs = _pair_events((later, event, event), (event,))
+    assert [(key, a is None, b is None) for key, a, b in pairs] == [
+        (("06:00", "Zone"), False, False),
+        (("06:00", "Zone"), False, True),
+        (("07:00", "Zone"), False, True),
+    ]
+
+
+def test_schedule_on_a_renamed_special_day(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A renamed special day is shown by its name, with its key in the pattern list."""
+    fake = FakeScheduleITM()
+    monkeypatch.setattr(CliClient, "itm", fake, raising=False)
+    run("schedule-edit", "Always", "rename-special", "Ex1", "Holiday")
+    capsys.readouterr()
+    run("schedule", "Always", "--on", "2025-01-01")
+    assert "  2025-01-01: Holiday (calendar)" in capsys.readouterr().out
+    run("schedule", "Always")
+    out = capsys.readouterr().out
+    assert "  Holiday (Ex1)" in out
+    assert "calendar: Jan 1 -> Holiday" in out
 
 
 def test_setback_and_overtime_writes(
@@ -801,6 +1076,8 @@ def test_schedule_edit_command(
     month, day, _, pattern = rule.split(":", 1)[1].split()
     run("schedule-edit", "Always", "delete-rule", month, day, pattern)
     assert rule not in capsys.readouterr().out
+    run("schedule-edit", "Always", "add-rule", "3", "--date", "all-7")
+    assert "Every 7" in capsys.readouterr().out
     with pytest.raises(SystemExit):
         run("schedule-edit", "Always", "period", "May")
     with pytest.raises(SystemExit):
@@ -948,6 +1225,19 @@ def test_email_and_confirm_commands(
     assert "dry run" in capsys.readouterr().out
 
 
+def test_email_show_one_login(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`itm email` reads the addresses and the server settings in one login."""
+    fake = FakeSystemEditITM()
+    monkeypatch.setattr(CliClient, "itm", fake, raising=False)
+    run("email")
+    out = capsys.readouterr().out
+    assert "e-mail:" in out
+    assert "e-mail server:" in out
+    assert fake.logins == 1
+
+
 def test_schedule_copy_commands(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1028,6 +1318,51 @@ def test_ppd_and_export_commands(
         run("export", "energy")
     with pytest.raises(SystemExit):
         run("export", "history", "--start", "2025-13-01", "--end", "2025-01-01")
+
+
+def test_export_files_are_never_overwritten_or_followed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A download keeps what is there, follows no link and needs an expected name."""
+    fake = FakeExportsITM()
+    monkeypatch.setattr(CliClient, "itm", fake, raising=False)
+
+    async def get(_self: Any, path: str) -> bytes:
+        return path.encode()
+
+    monkeypatch.setattr(CliClient, "_get_bytes", get)
+    monkeypatch.chdir(tmp_path)
+    run("export", "setup")
+    (named,) = tmp_path.glob("setup_*.csv")
+    assert named.stat().st_mode & 0o777 == 0o600
+    out = tmp_path / "setup.bin"
+    out.write_bytes(b"kept")
+    with pytest.raises(SystemExit, match="exists; pass --force"):
+        run("export", "setup", "--out", str(out))
+    assert fake.job == 1
+    assert out.read_bytes() == b"kept"
+    run("export", "setup", "--out", str(out), "--force")
+    assert out.read_bytes().endswith(b".csv")
+    target = tmp_path / "target"
+    target.write_bytes(b"target")
+    link = tmp_path / "link.bin"
+    link.symlink_to(target)
+    with pytest.raises(SystemExit, match="exists"):
+        run("export", "setup", "--out", str(link))
+    with pytest.raises(SystemExit, match="symbolic link"):
+        run("export", "setup", "--out", str(link), "--force")
+    with pytest.raises(SystemExit, match="exists"):
+        run("backup", "--out", str(out))
+    assert target.read_bytes() == b"target"
+    fake.download_uri = f"/sdlfs/WebExport/{named.name}"
+    with pytest.raises(SystemExit, match="exists"):
+        run("export", "setup")
+    fake.download_uri = "/sdlfs/WebExport/run.sh"
+    with pytest.raises(SystemExit, match="choose a name with --out"):
+        run("export", "setup")
+    assert not (tmp_path / "run.sh").exists()
+    run("export", "setup", "--out", str(tmp_path / "run.sh"))
+    assert (tmp_path / "run.sh").exists()
 
 
 def test_trace_holds_no_credentials(tmp_path: Path) -> None:

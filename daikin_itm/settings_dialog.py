@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import contextlib
+import math
 from typing import TYPE_CHECKING, Any
 
 from ._bases import SessionCore
+from ._util import cleanup_after as _cleanup_after
 from ._util import run_to_completion as _run_to_completion
-from .exceptions import ItmCommandError
+from .exceptions import ItmCommandError, NotOffered, SetpointOutOfRange
 from .models import (
     AIRFLOW_DIRECTIONS,
     AIRFLOW_ICONS,
@@ -43,10 +44,13 @@ from .models import (
     D_POWER_CHECK,
     D_POWER_START,
     D_POWER_STOP,
+    D_SETPOINT_BUTTON,
+    D_SETPOINT_CHECK,
     D_VENT_AMOUNT,
     D_VENT_AMOUNT_CHECK,
     D_VENT_MODE,
     D_VENT_MODE_CHECK,
+    DIALOG_SETTING_KEYS,
     DIALOG_SETTINGS,
     DT_CLOSE,
     FAN_ICONS,
@@ -57,6 +61,7 @@ from .models import (
     capabilities_from_dialog,
     details_from_screen,
     dialog_setting_choice,
+    settings_from_dialog,
     status_from_details,
 )
 from .protocol import DataType, EventType, ScreenID
@@ -64,8 +69,13 @@ from .protocol import DataType, EventType, ScreenID
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from .models import Capabilities, DialogSetting
+    from .exceptions import ItmError
+    from .models import Capabilities, DialogSetting, UnitSettings
     from .state import UIState
+
+
+# Never skipped as already done: the dialog offers a reset only while it is due.
+_RESETS = frozenset({"reset_filter_sign", "reset_dust_alarm", "force_dust_alarm_reset"})
 
 
 class SettingsDialogMixin(SessionCore):
@@ -101,6 +111,8 @@ class SettingsDialogMixin(SessionCore):
                     f"save settings: screen {ScreenID.SETTINGS} part {D_OK} event 1"
                 )
                 ok = False
+        if ok:
+            self.change_sent = True
         reply = await self.send(ScreenID.SETTINGS, D_OK if ok else D_CANCEL)
         # OK asks "Instelling uitvoeren?" (apply settings?). The browser answers "Ja"
         # with a CLICK on the dialog's ID (onClickDialog1) and "Nee" with CLICK2
@@ -133,7 +145,7 @@ class SettingsDialogMixin(SessionCore):
         """Tick the operation mode in the settings dialog and pick one."""
         if mode not in caps.mode_labels:
             msg = f"{caps.name}: mode {mode!r} not offered; available: {caps.modes}"
-            raise ItmCommandError(msg)
+            raise NotOffered(msg, name=caps.name, value=mode, options=caps.modes)
         labels = self.state.get(ScreenID.SETTINGS, D_MODE, "COMBO_STRS")
         await self.dialog_click(D_MODE_CHECK, 1)
         await self.dialog_click(D_MODE, labels.index(caps.mode_labels[mode]))
@@ -142,7 +154,7 @@ class SettingsDialogMixin(SessionCore):
         """Tick the fan speed in the settings dialog and cycle to the wanted one."""
         if not caps.fan_speed:
             msg = f"{caps.name}: fan speed cannot be changed on this unit"
-            raise ItmCommandError(msg)
+            raise NotOffered(msg, name=caps.name, value=fan_speed)
         await self.dialog_click(D_FAN_CHECK, 1)
         # The up button cycles low -> medium -> high -> auto -> low; the iTM reports
         # the new icon.
@@ -155,12 +167,20 @@ class SettingsDialogMixin(SessionCore):
         raise ItmCommandError(msg)
 
     async def answer_number(  # pylint: disable=too-many-locals
-        self, button: int, value: float, what: str, screen: int = ScreenID.SETTINGS
+        self,
+        button: int,
+        value: float,
+        what: str,
+        screen: int = ScreenID.SETTINGS,
+        *,
+        out_of_range: Callable[[float, float], ItmError] | None = None,
     ) -> None:
         """Press a "change" button and enter a number in the dialog it opens.
 
         The dialog says which kind of number it takes (type) and its range; the
-        browser sends the value as an int, or as [integer part, thousandths].
+        browser sends the value as an int, or as [integer part, thousandths]. A
+        value outside the range cancels the dialog and raises out_of_range(low,
+        high), or an ItmCommandError.
         """
         reply = await self.send(screen, button)
         dialogs = [
@@ -175,6 +195,8 @@ class SettingsDialogMixin(SessionCore):
         high = d.data[8] + d.data[9] / 1000
         if not low <= value <= high:
             await self.send(d.screen, dialog_id, EventType.CLICK2)
+            if out_of_range is not None:
+                raise out_of_range(low, high)
             msg = f"{what}: {value} outside the iTM's range {low}-{high}"
             raise ItmCommandError(msg)
         whole = int(value)
@@ -202,6 +224,29 @@ class SettingsDialogMixin(SessionCore):
             msg = f"{what}: number input of kind {kind} is not supported"
             raise ItmCommandError(msg)
         await self.wait_for_progress(reply)
+
+    async def set_dialog_setpoint(self, unit: str, value: int) -> None:
+        """Tick the setpoint in the settings dialog and enter it in its number input.
+
+        The input's range (it follows the unit's setpoint limit) counts: a value
+        outside it cancels the input and raises SetpointOutOfRange.
+        """
+        s = ScreenID.SETTINGS
+        if not self.state.visible(s, D_SETPOINT_CHECK):
+            msg = f"{unit}: the settings dialog offers no setpoint"
+            raise NotOffered(msg, name=unit, value=value)
+        await self.dialog_click(D_SETPOINT_CHECK, 1)
+        if self.state.get(s, D_SETPOINT_BUTTON, "ENABLED") == 0:
+            msg = f"{unit}: setpoint: the iTM keeps its control disabled"
+            raise ItmCommandError(msg)
+
+        def out_of_range(low: float, high: float) -> ItmError:
+            allowed = tuple(range(math.ceil(low), math.floor(high) + 1))
+            return SetpointOutOfRange(unit, value, allowed)
+
+        await self.answer_number(
+            D_SETPOINT_BUTTON, value, f"{unit}: setpoint", out_of_range=out_of_range
+        )
 
     async def answer_text(self, screen: int, button: int, text: str, what: str) -> None:
         """Press a "change" button and enter text in the input dialog it opens.
@@ -231,56 +276,98 @@ class SettingsDialogMixin(SessionCore):
             msg = f"{what}: the iTM refused {text!r}: {reply.dialogs()}"
             raise ItmCommandError(msg)
 
-    async def change_unit_settings(self, changes: dict[str, Any]) -> None:
+    async def change_unit_settings(
+        self,
+        changes: dict[str, Any],
+        name: str = "",
+        skipped: set[str] | None = None,
+    ) -> UnitSettings | None:
         """Change the selected unit's locks, overtime and limits, then OK.
 
-        The dialog is cancelled when anything goes wrong.
+        Only the settings the dialog doesn't show yet are changed (a reset always
+        is). When it shows them all, the dialog is cancelled: nothing is written.
+        The dialog is cancelled too when anything goes wrong.
+
+        Args:
+        ----
+            changes: The settings to change, as set_unit_settings takes them.
+            name: The unit's name, for the settings returned.
+            skipped: Gets the settings left as they were, as the dialog showed
+                them already.
+
+        Returns:
+        -------
+            The settings the dialog showed (without the Details status) when it
+            showed every change already, None when the changes were saved.
+
         """
         await self.open_settings()
         try:
-            # Refuse an optional setting the unit doesn't offer before any click.
-            picks = {
-                d.key: dialog_setting_choice(self.state, d, changes[d.key])
-                for d in DIALOG_SETTINGS
-                if changes.get(d.key) is not None
+            shown = settings_from_dialog(name, self.state)
+            asked = {k: v for k, v in changes.items() if k not in _RESETS}
+            todo = {
+                k: v
+                for k, v in changes.items()
+                if k in _RESETS or k in settings_mismatch(shown, asked)
             }
-            for key, check, radios in (
-                ("start_stop_lock", D_LOCK_START_STOP_CHECK, D_LOCK_START_STOP),
-                ("mode_lock", D_LOCK_MODE_CHECK, D_LOCK_MODE),
-                ("setpoint_lock", D_LOCK_SETPOINT_CHECK, D_LOCK_SETPOINT),
-            ):
-                if (lock := changes.get(key)) is None:
-                    continue
-                radio = _lock_radio(key, lock, radios)
-                await self.dialog_click(check, 1)
-                await self.dialog_click(radio)
-            if (overtime := changes.get("overtime")) is not None:
-                await self.dialog_click(D_OVERTIME_CHECK, 1)
-                await self.dialog_click(D_OVERTIME, 0 if overtime else 1)
-            limits = [
-                ("cool_limit", D_COOL_LIMIT, D_COOL_MIN_BUTTON, D_COOL_MAX_BUTTON),
-                ("heat_limit", D_HEAT_LIMIT, D_HEAT_MIN_BUTTON, D_HEAT_MAX_BUTTON),
-            ]
-            if any(changes.get(key) is not None for key, *_ in limits):
-                await self.dialog_click(D_LIMIT_CHECK, 1)
-            for key, combo, min_button, max_button in limits:
-                if (limit := changes.get(key)) is None:
-                    continue
-                await self.dialog_click(combo, 0 if limit.enabled else 1)
-                if limit.enabled and limit.maximum is not None:
-                    await self.answer_number(max_button, limit.maximum, f"{key} max")
-                if limit.enabled and limit.minimum is not None:
-                    await self.answer_number(min_button, limit.minimum, f"{key} min")
-            await self._change_unit_extras(changes)
-            for d in DIALOG_SETTINGS:
-                if d.key in picks:
-                    await self.set_dialog_setting(d, picks[d.key])
-            await self.close_settings(ok=True)
-        except BaseException:
-            if self.settings_open and self.logged_in:
-                with contextlib.suppress(Exception):
-                    await _run_to_completion(self.close_settings(ok=False))
+            if skipped is not None:
+                skipped.update(changes.keys() - todo.keys())
+            if not todo:
+                await self.close_settings(ok=False)
+                return shown
+            await self._change_in_dialog(todo)
+        except BaseException as err:
+            await self._cancel_after(err)
             raise
+        return None
+
+    async def _change_in_dialog(self, changes: dict[str, Any]) -> None:
+        """Make change_unit_settings' changes in the open dialog, then OK."""
+        # Refuse an optional setting the unit doesn't offer before any click.
+        picks = {
+            d.key: dialog_setting_choice(self.state, d, changes[d.key])
+            for d in DIALOG_SETTINGS
+            if changes.get(d.key) is not None
+        }
+        for key, check, radios in (
+            ("start_stop_lock", D_LOCK_START_STOP_CHECK, D_LOCK_START_STOP),
+            ("mode_lock", D_LOCK_MODE_CHECK, D_LOCK_MODE),
+            ("setpoint_lock", D_LOCK_SETPOINT_CHECK, D_LOCK_SETPOINT),
+        ):
+            if (lock := changes.get(key)) is None:
+                continue
+            radio = _lock_radio(key, lock, radios)
+            await self.dialog_click(check, 1)
+            await self.dialog_click(radio)
+        if (overtime := changes.get("overtime")) is not None:
+            await self.dialog_click(D_OVERTIME_CHECK, 1)
+            await self.dialog_click(D_OVERTIME, 0 if overtime else 1)
+        limits = [
+            ("cool_limit", D_COOL_LIMIT, D_COOL_MIN_BUTTON, D_COOL_MAX_BUTTON),
+            ("heat_limit", D_HEAT_LIMIT, D_HEAT_MIN_BUTTON, D_HEAT_MAX_BUTTON),
+        ]
+        if any(changes.get(key) is not None for key, *_ in limits):
+            await self.dialog_click(D_LIMIT_CHECK, 1)
+        for key, combo, min_button, max_button in limits:
+            if (limit := changes.get(key)) is None:
+                continue
+            await self.dialog_click(combo, 0 if limit.enabled else 1)
+            if limit.enabled and limit.maximum is not None:
+                await self.answer_number(max_button, limit.maximum, f"{key} max")
+            if limit.enabled and limit.minimum is not None:
+                await self.answer_number(min_button, limit.minimum, f"{key} min")
+        await self._change_unit_extras(changes)
+        for d in DIALOG_SETTINGS:
+            if d.key in picks:
+                await self.set_dialog_setting(d, picks[d.key])
+        await self.close_settings(ok=True)
+
+    async def _cancel_after(self, err: BaseException) -> None:
+        """Cancel the dialog, if still open, while err goes on (see cleanup_after)."""
+        if self.settings_open and self.logged_in:
+            await _cleanup_after(
+                err, lambda: _run_to_completion(self.close_settings(ok=False))
+            )
 
     async def _change_unit_extras(self, changes: dict[str, Any]) -> None:
         """Airflow direction, ventilation mode/amount and the resets, if asked."""
@@ -316,11 +403,11 @@ class SettingsDialogMixin(SessionCore):
         disabled = self.state.get(s, check, "ENABLED") == 0
         if not self.state.visible(s, check) or disabled or not options:
             msg = f"{what.replace('_', ' ')}: not offered by this unit"
-            raise ItmCommandError(msg)
+            raise NotOffered(msg, value=value)
         wanted = [o.casefold() for o in options]
         if value.strip().casefold() not in wanted:
             msg = f"{what.replace('_', ' ')}: {value!r} not offered: {options}"
-            raise ItmCommandError(msg)
+            raise NotOffered(msg, value=value, options=options)
         await self.dialog_click(check, 1)
         await self.dialog_click(combo, wanted.index(value.strip().casefold()))
 
@@ -354,7 +441,7 @@ class SettingsDialogMixin(SessionCore):
         s = ScreenID.SETTINGS
         if not self.state.visible(s, D_AIRFLOW_CHECK):
             msg = "this unit has no adjustable airflow direction"
-            raise ItmCommandError(msg)
+            raise NotOffered(msg, value=direction)
         await self.dialog_click(D_AIRFLOW_CHECK, 1)
         current = AIRFLOW_ICONS.get(self.state.get(s, D_AIRFLOW_ICON, "ICONID"))
         if current is None:
@@ -384,6 +471,7 @@ class SettingsDialogMixin(SessionCore):
         power: bool | None,
         mode: str | None,
         fan_speed: str | None,
+        setpoint: int | None = None,
     ) -> None:
         """Change the selected unit through its settings dialog.
 
@@ -398,11 +486,11 @@ class SettingsDialogMixin(SessionCore):
                 await self.set_dialog_mode(caps, mode)
             if fan_speed is not None:
                 await self.set_dialog_fan_speed(caps, fan_speed)
+            if setpoint is not None:
+                await self.set_dialog_setpoint(unit, setpoint)
             await self.close_settings(ok=True)
-        except BaseException:
-            if self.settings_open and self.logged_in:
-                with contextlib.suppress(Exception):
-                    await _run_to_completion(self.close_settings(ok=False))
+        except BaseException as err:
+            await self._cancel_after(err)
             raise
 
     async def _with_details(
@@ -432,6 +520,65 @@ class SettingsDialogMixin(SessionCore):
         return await self._with_details(analog_details_from_screen)
 
 
+def settings_mismatch(result: UnitSettings, changes: dict[str, Any]) -> dict[str, Any]:
+    """Return the asked changes the settings don't show, with what they show.
+
+    Args:
+    ----
+        result: The settings as read (back).
+        changes: The settings asked for, as set_unit_settings takes them.
+
+    Returns:
+    -------
+        The asked settings that differ, each with the value shown.
+
+    """
+    shown = {
+        "start_stop_lock": result.remote_locks.start_stop,
+        "mode_lock": result.remote_locks.mode,
+        "setpoint_lock": result.remote_locks.setpoint,
+        "overtime": result.overtime,
+        "airflow_direction": result.airflow_direction,
+        "ventilation_mode": result.ventilation_mode,
+        "ventilation_amount": result.ventilation_amount,
+        # A reset shows as the dialog no longer offering it.
+        "reset_filter_sign": not result.filter_sign_resettable,
+        "reset_dust_alarm": not result.dust_alarm_resettable,
+        "force_dust_alarm_reset": not result.dust_alarm_resettable,
+    }
+    wrong: dict[str, Any] = {}
+    for key, value in changes.items():
+        have = shown.get(key)
+        if key in {"ventilation_mode", "ventilation_amount"}:
+            if str(have or "").strip().casefold() != str(value).strip().casefold():
+                wrong[key] = have
+        elif key in shown and have != value:
+            wrong[key] = have
+        elif key in {"cool_limit", "heat_limit"}:
+            got = getattr(result, key)
+            if got.enabled != value.enabled or (
+                value.enabled
+                and any(
+                    want is not None and have != want
+                    for want, have in (
+                        (value.minimum, got.minimum),
+                        (value.maximum, got.maximum),
+                    )
+                )
+            ):
+                wrong[key] = got
+        elif key in DIALOG_SETTING_KEYS:
+            have = getattr(result, key)
+            same = (
+                str(have or "").strip().casefold() == str(value).strip().casefold()
+                if isinstance(value, str)
+                else have == value
+            )
+            if not same:
+                wrong[key] = have
+    return wrong
+
+
 def _lock_radio(key: str, lock: RemoteLock, radios: tuple[int, ...]) -> int:
     """Return the radio part for a lock value, refusing one the dialog lacks."""
     order = (
@@ -441,5 +588,5 @@ def _lock_radio(key: str, lock: RemoteLock, radios: tuple[int, ...]) -> int:
     )
     if lock not in order:
         msg = f"{key}: {lock} is not offered"
-        raise ItmCommandError(msg)
+        raise NotOffered(msg, value=lock, options=order)
     return radios[order.index(lock)]

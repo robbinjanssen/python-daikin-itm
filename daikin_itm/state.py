@@ -20,6 +20,9 @@ class UIState:
     def __init__(self) -> None:
         """Start without any open screens."""
         self.screens: dict[int, dict[tuple[int, str], Any]] = {}
+        # The values the client set itself (screen, part, type), until the iTM
+        # sends that part or closes its screen.
+        self._local: set[tuple[int, int, str]] = set()
 
     def apply(self, updates: list[ScreenUpdate]) -> None:
         """Merge the screen updates of a reply.
@@ -32,10 +35,12 @@ class UIState:
         for s in updates:
             if s.update == "CLOSE":
                 self.screens.pop(s.screen, None)
+                self._local = {k for k in self._local if k[0] != s.screen}
             elif s.parts or s.update in {"OPEN", "SHOW", "UPDATE", "RELOAD"}:
                 parts = self.screens.setdefault(s.screen, {})
                 for p in s.parts:
                     parts[p.part, p.type] = p.value
+                    self._local.discard((s.screen, p.part, p.type))
 
     def select_locally(self, screen: int, part: int, index: int) -> None:
         """Mirror a combobox/spinbox selection like the browser updates its control.
@@ -50,12 +55,36 @@ class UIState:
         parts = self.screens.get(screen)
         if parts is not None and (part, "SINGLE_SELIDX") in parts:
             parts[part, "SINGLE_SELIDX"] = index
+            self._local.add((screen, part, "SINGLE_SELIDX"))
 
     def set_check(self, screen: int, part: int, *, on: bool) -> None:
         """Keep a checkbox's state after ticking it: the iTM doesn't echo it."""
         parts = self.screens.get(screen)
         if parts is not None:
             parts[part, "CHECK_STATE"] = int(on)
+            self._local.add((screen, part, "CHECK_STATE"))
+
+    def picked(self, screen: int) -> set[tuple[int, str]]:
+        """Return the parts of an open screen that show the client's own pick.
+
+        The iTM never echoes a pick, so such a value only says what the client
+        asked for, not what the iTM took, until the iTM sends that part again.
+
+        Args:
+        ----
+            screen: The screen.
+
+        Returns:
+        -------
+            The (part, type) keys still holding a pick.
+
+        """
+        parts = self.screens.get(screen, {})
+        return {
+            (part, ptype)
+            for s, part, ptype in self._local
+            if s == screen and (part, ptype) in parts
+        }
 
     def get(self, screen: int, part: int, ptype: str, default: Any = None) -> Any:
         """Return the last known value of a part.

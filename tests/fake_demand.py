@@ -97,6 +97,14 @@ def _num(value: float) -> str:
     return f"{value:g}"
 
 
+# Each graph tab's graph and combos with their options.
+GRAPH_TABS: tuple[tuple[int, tuple[tuple[int, list[str]], ...]], ...] = (
+    (2, ((4, ["2025"]), (6, ["01"]), (8, ["01"]))),
+    (12, ((14, ["2025"]), (16, ["01"]))),
+    (19, ((21, ["2025"]),)),
+)
+
+
 def _graph() -> dict[str, Any]:
     return {
         "vaxis": [("0", 0), ("100", 0)],
@@ -144,6 +152,9 @@ class FakeDemandITM(FakeITM):  # pylint: disable=too-many-instance-attributes,to
         self.dm_pending: dict[str, Any] = {}
         self.dm_dialog: tuple[str, int, Callable[[Any], list[Update]]] | None = None
         self.picker_for: tuple[int, int] | None = None
+        # The graphs' tab picked last, and in which session: the graphs open on it
+        # again in that session (the pessimistic reading of the iTM).
+        self.graph_tab: tuple[str | None, int] = (None, 0)
 
     # -- helpers ----------------------------------------------------------------------
     def _menu_bar(self) -> list[tuple[int, str, Any]]:
@@ -479,18 +490,26 @@ class FakeDemandITM(FakeITM):  # pylint: disable=too-many-instance-attributes,to
 
     # -- graphs (3303) and their data (3304-3306) -------------------------------------
     def _graph_parts(self) -> list[tuple[int, str, Any]]:
-        parts: list[tuple[int, str, Any]] = [
-            (1, "TAB_NAME", ["Daily", "Monthly", "Yearly"])
-        ]
-        parts.extend((graph, "BARLINE_GRAPH", _graph()) for graph in (2, 12, 19))
-        for combo, options in ((4, ["2025"]), (6, ["01"]), (8, ["01"])):
-            parts += [(combo, "COMBO_STRS", options), (combo, "SINGLE_SELIDX", 0)]
-        for combo, options in ((14, ["2025"]), (16, ["01"]), (21, ["2025"])):
+        """Open on the tab picked last in this session, sending only its parts."""
+        session, tab = self.graph_tab
+        if session != self.session:
+            tab = 0
+        names = (1, "TAB_NAME", ["Daily", "Monthly", "Yearly"])
+        return [names, *self._graph_tab_parts(tab)]
+
+    @staticmethod
+    def _graph_tab_parts(tab: int) -> list[tuple[int, str, Any]]:
+        graph, combos = GRAPH_TABS[tab]
+        parts: list[tuple[int, str, Any]] = [(graph, "BARLINE_GRAPH", _graph())]
+        for combo, options in combos:
             parts += [(combo, "COMBO_STRS", options), (combo, "SINGLE_SELIDX", 0)]
         return parts
 
     def _on_3303(self, ev: dict[str, Any]) -> list[Update]:
         part = ev["part"]
+        if part == 1 and ev["event"] == 8:  # TAB_SELECT
+            self.graph_tab = (self.session, ev["number"])
+            return self._update(3303, self._graph_tab_parts(ev["number"]))
         if part in DATA_SCREENS:
             screen = DATA_SCREENS[part]
             rows = _rows([["00:30", "12.5"], ["01:00", "13.0"]])
