@@ -201,11 +201,13 @@ changing it.
     public write calls before it sends or reads anything, and by the session's
     `require_writable()` as a backstop. `_own_session()` refuses as well: it is
     a login of its own (a write block of another task it waits for instead).
-- **A kept session** (`ItmClient.kept_session()`, EXPERIMENTAL, simulated iTM
-  only) is a `_SharedBlock` with `kept` set, held for a polling client's
-  lifetime: the same `_session()`, start position, `back_to_start`, `at_start`
-  and `no_way_back` rules, and the session lock held for the whole block (use a
-  dedicated administrator account). What differs:
+- **A kept session** (`ItmClient.kept_session()`; validated on one real iTM:
+  2 hours of reads, 20 idle minutes with the keep-alive, a 60-75 s network
+  drop, unit, zone and menu writes read back over 3 rounds; an iTM restart on
+  the simulated iTM only) is a `_SharedBlock` with `kept` set, held for a
+  polling client's lifetime: the same `_session()`, start position,
+  `back_to_start`, `at_start` and `no_way_back` rules, and the session lock
+  held for the whole block (use a dedicated administrator account). What differs:
   - Keep alive: a background task (`_keep_alive`) sends one POLLING when no
     request was sent for `keep_alive` seconds (`last_used`, set after each call
     and poll; the iTM ends an idle session after 4-5 minutes). It holds the
@@ -220,11 +222,11 @@ changing it.
     or another error: a new login, after `_release_saved_session`. A call that
     raises half way ends the login as in a shared session. `max_seconds` is the
     block's `max_age` (logged at INFO).
-  - Writes are allowed with `allow_experimental` (`_writable()` raises
-    `ExperimentalError` otherwise, the session's `require_writable()` too, a dry
-    run is allowed); `_own_session()` stays refused. They take the usual paths
-    and read back in the kept session, never from a pick: `UIState` marks the
-    values the client set itself (`select_locally`, `set_check`) until the iTM
+  - Writes are allowed (a write not validated yet still needs
+    `allow_experimental`, through `_experimental()`); `_own_session()` stays
+    refused. They take the usual paths and read back in the kept session,
+    never from a pick: `UIState` marks the values the client set itself
+    (`select_locally`, `set_check`) until the iTM
     sends that part or closes its screen (`picked()`). Showing another point
     does not clear a mark: the iTM sends a part only when the new point's value
     differs from what it takes the client to show, and whether that is the pick
@@ -253,16 +255,18 @@ changing it.
     another client. `_writable()` allows writes in it, the session's
     `require_writable()` too (`_Session.writing`).
   - Other calls of the client, from any task, use it and take turns on its
-    lock; a write among them joins it (`writers`), and the block logs out and
-    lets go of the session lock (`_end_write`, under `_run_to_completion`)
-    when the last write returns. A joining write never needs the session lock
-    while holding a unit lock, so a zone write (session, then unit locks) and a
-    unit write (unit lock, then session) can't deadlock. `shared_session()`,
+    lock; a write among them joins it (`writers`), and so does the background
+    check of a write without confirm (`_watch`), and the block logs out and
+    lets go of the session lock (`_leave_write`, `_end_write` under
+    `_run_to_completion`) when the last write or check is done. A joining
+    write never needs the session lock while holding a unit lock, so a zone
+    write (session, then unit locks) and a unit write (unit lock, then
+    session) can't deadlock. `shared_session()`,
     `kept_session()` and `_own_session()` don't join a write block
     (`_joinable()`): they wait for the session lock, so a shared session still
     refuses writes and a kept one keeps its own rules.
   - Inside a kept or shared block `_write_session()` does nothing: a write uses
-    the kept login (with `allow_experimental`) or is refused.
+    the kept login or is refused.
   - Left out on purpose (a login of their own for the read-back, as before):
     `set_network` (the address may change), `set_language` and `set_region` (a
     display setting may apply only to the next login), `set_own_settings`
@@ -316,17 +320,32 @@ changing it.
     shows; `_zone_write` found every member done) or part of it (`change` sent
     the rest and `skipped` returns a test for what it left out: `apply`'s
     `left`, `change_unit_settings(skipped=...)`; a zone's members not
-    written), is checked by `_unchanged` in the same call, login and unit
-    locks, with or without confirm: it reads (`_until`) for `verify_timeout`
-    (at most `confirm_timeout`, at least one read) until what was left out
-    moves away (`kept` fails); then `again(last)` sends only what was left out
-    and differs now (`change` runs again with `left`; a zone write sends to the
-    members left out that lack something), once, counted and budgeted as any
-    write, and `later` confirms the whole write, also without confirm
-    (`NotConfirmed`; no third write, so no loop). Without a move: what was read
-    last when nothing was sent; otherwise `later()` with confirm, and `None`
-    without, the part sent left in `_unconfirmed` (registered before the
-    window, so an error or a cancellation in it keeps it). A write that sends
+    written), is checked by `_unchanged` (`_Left`: the name, the units the
+    rest was sent to, every unit of the write, the call's unit locks) in the
+    write's login and unit locks: `_verify` reads (`_until`) for
+    `verify_timeout` (at most `confirm_timeout`, at least one read) until what
+    was left out moves away (`kept` fails); then `again(last)` sends only what
+    was left out and differs now (`change` runs again with `left`; a zone
+    write sends to the members left out that lack something), once, counted
+    and budgeted as any write (no third write, so no loop). With confirm the
+    call runs `_verify` itself and `later` confirms a write after all
+    (`NotConfirmed`); without a move it returns what was read last when
+    nothing was sent, otherwise `later()`. Without confirm the call returns at
+    once (`shown`: what the write read, or `None` when the rest was sent, that
+    part registered in `_unconfirmed` first, so an error or a cancellation
+    keeps it) and `_watch` runs `_verify` in a background task
+    (`ItmClient._watches`): it takes over the unit locks (`locks.pop_all()`)
+    and, in a write block, counts as one more writer, so the block's login
+    stays for its reads and is logged out when it is done (`_leave_write`); a
+    write after all is left in `_unconfirmed` for every unit of the write,
+    not confirmed. `_watching` releases the locks, then leaves the block; an
+    error is logged and noted (`_note_error`), never raised. `close()`
+    cancels the tasks and waits for their clean-up (`_end_watches`;
+    `_stop_watches` under `_run_to_completion`, so a `close()` cancelled
+    meanwhile still finishes it, after a `sleep(0)` so a task not started yet
+    runs its clean-up); leaving `kept_session()` waits for them first (cancels
+    them after an error or a cancellation in the block, or when its exit is
+    cancelled), then closes the block. A write that sends
     everything isn't watched; a dry run returns at once. A unit write is a
     `change(s)` closure handed to `_write_unit` with its check (`_Check`: the
     later, a read, the test), a zone write `needs` and a `send(s, lacks)`
@@ -563,8 +582,9 @@ changing it.
   the client starts relying on more of the iTM.
 - `tests/test_kept_session.py` covers the kept session: keep-alive against the
   simulator's idle expiry (`FakeITM.idle_timeout` by `FakeITM.clock`), recovery,
-  `max_age`, cancellation, other clients, calls from other tasks, and writes;
-  with `FakeITM.sticky_picks` or `FakeITM.forgets_picks` and
+  `max_age` (by moving the block's `since`, not by sleeping), cancellation,
+  other clients, calls from other tasks, and writes; with
+  `FakeITM.sticky_picks` or `FakeITM.forgets_picks` and
   `FakeUnit.ignores_writes` a pick the unit didn't take stays on the client's
   panel (with `forgets_picks` also when another point with the same value is
   shown), and the tests show the read-back doesn't take it for the result.
@@ -574,7 +594,9 @@ changing it.
   no other point to send the pick over), another account's change during the
   check, another client of the user waiting for the whole write, cancellation
   (during the check and while waiting for the session), calls from other
-  tasks, and the guards (read only, experimental, the opt-ins).
+  tasks, and the guards (read only, experimental, the opt-ins). A test whose
+  logins depend on another task joining the write holds the write's check
+  until it has (`Gated`), never on timing.
 - `tests/test_shared_session.py` runs every public read alone and inside a
   shared session and compares the results, and calls every other public
   coroutine inside one to see it refused. A new read needs its arguments in
@@ -597,17 +619,20 @@ changing it.
 - `tests/test_unchanged_writes.py` covers never writing an unchanged value and
   never losing one, for every unit and zone write, with and without confirm:
   another client's change on its way (`FakeITM.change_elsewhere`,
-  `changed_elsewhere`) overruled by one write sent after it, the truly
-  unchanged write (no write, one login, returns after the window), a change
-  that still wins (`NotConfirmed` after exactly one write), a write that
-  changes everything returning at once without confirm, partial skips
-  (`apply` mode and setpoint, power and mode; `set_unit_settings` with one of
-  two locks shown: the write after all sends only the part left out), zone
-  writes per unit (only the units that lack it, each with only what it lacks,
-  a race on a unit left out, the zone's panel when every unit lacks the same
-  or the zone holds other points, the budget of a unit left out, a unit left
-  out missing from a read of the check), a dry run,
-  no answer, cancellation, the budget and a kept session.
+  `changed_elsewhere`) overruled by one write sent after it, the truly unchanged
+  write (no write, one login, returns after the window), a change that still
+  wins (`NotConfirmed` after exactly one write), a write that changes everything
+  returning at once without confirm, the background check without confirm
+  (returns at once, one write after all, nothing after the window, the next
+  write to the unit waiting for it, `close()` (also cancelled), a kept session's
+  exit and its error or cancellation, errors noted in `session_info` and not
+  raised; `_checked` waits for it), partial skips (`apply` mode and setpoint,
+  power and mode; `set_unit_settings` with one of two locks shown: the write
+  after all sends only the part left out), zone writes per unit (only the units
+  that lack it, each with only what it lacks, a race on a unit left out, the
+  zone's panel when every unit lacks the same or the zone holds other points,
+  the budget of a unit left out, a unit left out missing from a read of the
+  check), a dry run, no answer, cancellation, the budget and a kept session.
 - `tests/test_write_accounting.py` covers the write counts and budgets
   (`writes_sent`, `on_write`, the hour and day windows, a zone write per
   member), the writes that change nothing (`set_unit_settings`, the zone

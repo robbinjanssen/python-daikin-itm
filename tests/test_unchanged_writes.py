@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
@@ -188,23 +189,32 @@ def _ticks(itm: FakeITM, start: int, end: int) -> set[int]:
     }
 
 
-@pytest.mark.parametrize("confirm", [True, False])
+async def _checked(c: ItmClient) -> None:
+    """Wait until the client's background checks are done."""
+    assert c._watches
+    await c._end_watches(cancel=False)
+    assert not c._watches
+
+
+async def _settled(c: ItmClient) -> None:
+    """Let every check left to the next write run, as that write would."""
+    while c._unconfirmed:
+        await c._settle(next(iter(c._unconfirmed)))
+
+
 @pytest.mark.parametrize("name", sorted(CASES))
-async def test_a_change_coming_in_is_overruled(
-    itm: FakeITM, name: str, *, confirm: bool
-) -> None:
+async def test_a_change_coming_in_is_overruled(itm: FakeITM, name: str) -> None:
     """Another client's change shows after the write found its own value: sent anyway.
 
     The write's own read still showed the value asked for, so nothing was sent;
     the check then sees the other change arrive and sends the write after all,
-    once, to the unit that moved, and returns it confirmed, in the same login,
-    with or without confirm.
+    once, to the unit that moved, and returns it confirmed, in the same login.
     """
     case = CASES[name]
     c = _client(itm, case)
     target = itm.units[0]
     itm.change_elsewhere(target, 4, **case.elsewhere)
-    result = await case.call(c, confirm=confirm)
+    result = await case.call(c, confirm=True)
     assert result is not None
     assert all(case.ours(u) for u in itm.units)
     assert _writes(itm) == 1
@@ -221,16 +231,13 @@ async def test_a_change_coming_in_is_overruled(
         assert isinstance(result, Unit)
 
 
-@pytest.mark.parametrize("confirm", [True, False])
 @pytest.mark.parametrize("name", sorted(CASES))
-async def test_truly_unchanged_writes_nothing(
-    itm: FakeITM, name: str, *, confirm: bool
-) -> None:
+async def test_truly_unchanged_writes_nothing(itm: FakeITM, name: str) -> None:
     """Nothing comes in: no write, the value read last after the window, one login."""
     case = CASES[name]
     c = _client(itm, case, verify_timeout=0.1)
     start = time.monotonic()
-    result = await case.call(c, confirm=confirm)
+    result = await case.call(c, confirm=True)
     assert time.monotonic() - start >= 0.1
     assert result is not None
     if name == "set_unit_settings":
@@ -243,11 +250,8 @@ async def test_truly_unchanged_writes_nothing(
     assert _pollings(itm) >= 2
 
 
-@pytest.mark.parametrize("confirm", [True, False])
 @pytest.mark.parametrize("name", sorted(CASES))
-async def test_still_overruled_after_the_write(
-    itm: FakeITM, name: str, *, confirm: bool
-) -> None:
+async def test_still_overruled_after_the_write(itm: FakeITM, name: str) -> None:
     """The other change keeps winning: NotConfirmed after exactly one write."""
     case = CASES[name]
     c = _client(itm, case, confirm_timeout=0.3, verify_timeout=0.3)
@@ -255,7 +259,7 @@ async def test_still_overruled_after_the_write(
     itm.change_elsewhere(target, 4, **case.elsewhere)
     target.ignores_writes = True
     with pytest.raises(NotConfirmed) as err:
-        await case.call(c, confirm=confirm)
+        await case.call(c, confirm=True)
     assert err.value.last_seen is not None
     assert not case.ours(target)
     assert _writes(itm) == 1
@@ -314,7 +318,7 @@ async def test_no_answer_while_checking(itm: FakeITM) -> None:
 
     c = Unanswered(itm, confirm_interval=0.001, verify_timeout=0.05)
     with pytest.raises(NotConfirmed) as err:
-        await c.set_mode(UNIT, "heat", confirm=False)
+        await c.set_mode(UNIT, "heat")
     assert err.value.last_seen is None
     assert isinstance(err.value.__cause__, aiohttp.ClientConnectionError)
     assert _writes(itm) == 0
@@ -328,12 +332,11 @@ async def test_window_at_most_confirm_timeout(itm: FakeITM) -> None:
     assert 0.1 <= time.monotonic() - start < 5
 
 
-@pytest.mark.parametrize("confirm", [True, False])
-async def test_cancelled_while_checking(itm: FakeITM, *, confirm: bool) -> None:
+async def test_cancelled_while_checking(itm: FakeITM) -> None:
     """A cancellation during the check goes on; nothing is left behind."""
     c = _client(itm, CASES["set_unit_settings"], confirm_timeout=30, verify_timeout=30)
     task = asyncio.create_task(
-        c.set_unit_settings(UNIT, setpoint_lock=RemoteLock.ALLOWED, confirm=confirm)
+        c.set_unit_settings(UNIT, setpoint_lock=RemoteLock.ALLOWED)
     )
     await _wait(lambda: _pollings(itm) >= 2)
     task.cancel()
@@ -353,19 +356,16 @@ async def test_zone_write_after_all_needs_budget(itm: FakeITM) -> None:
     assert _writes(itm) == 1
     itm.change_elsewhere(itm.units[0], 4, setpoint=23)
     with pytest.raises(WriteBudgetExceeded):
-        await c.set_zone_setpoint(ZONE, 22, confirm=False)
+        await c.set_zone_setpoint(ZONE, 22)
     assert _writes(itm) == 1
 
 
-@pytest.mark.parametrize("confirm", [True, False])
-async def test_in_a_kept_session(itm: FakeITM, *, confirm: bool) -> None:
+async def test_in_a_kept_session(itm: FakeITM) -> None:
     """The check and the write after all use the kept login."""
     c = _client(itm, CASES["set_unit_settings"])
     itm.change_elsewhere(itm.units[0], 4, lock_setpoint=2)
     async with c.kept_session(keep_alive=None):
-        result = await c.set_unit_settings(
-            UNIT, setpoint_lock=RemoteLock.ALLOWED, confirm=confirm
-        )
+        result = await c.set_unit_settings(UNIT, setpoint_lock=RemoteLock.ALLOWED)
     assert result is not None
     assert result.remote_locks.setpoint == RemoteLock.ALLOWED
     assert itm.units[0].lock_setpoint == 0
@@ -425,11 +425,8 @@ def _partial(itm: FakeITM, case: Partial) -> FakeUnit:
     return target
 
 
-@pytest.mark.parametrize("confirm", [True, False])
 @pytest.mark.parametrize("name", sorted(PARTIALS))
-async def test_partial_skip_is_overruled(
-    itm: FakeITM, name: str, *, confirm: bool
-) -> None:
+async def test_partial_skip_is_overruled(itm: FakeITM, name: str) -> None:
     """The part shown already moves away after the write: written after all, once.
 
     The write after all sends only that part.
@@ -438,7 +435,7 @@ async def test_partial_skip_is_overruled(
     c = _client(itm, CASES["set_mode"])
     target = _partial(itm, case)
     itm.change_elsewhere(target, 4, **case.elsewhere)
-    assert await case.call(c, confirm=confirm) is not None
+    assert await case.call(c, confirm=True) is not None
     assert itm.changed_elsewhere
     writes = _write_indexes(itm)
     assert len(writes) == 2
@@ -449,11 +446,8 @@ async def test_partial_skip_is_overruled(
     assert not c._unconfirmed
 
 
-@pytest.mark.parametrize("confirm", [True, False])
 @pytest.mark.parametrize("name", sorted(PARTIALS))
-async def test_partial_skip_still_overruled(
-    itm: FakeITM, name: str, *, confirm: bool
-) -> None:
+async def test_partial_skip_still_overruled(itm: FakeITM, name: str) -> None:
     """The other change keeps winning: NotConfirmed after one write after all."""
     case = PARTIALS[name]
     c = _client(itm, CASES["set_mode"], confirm_timeout=0.3, verify_timeout=0.3)
@@ -461,7 +455,7 @@ async def test_partial_skip_still_overruled(
     itm.change_elsewhere(target, 2, **case.elsewhere)
     target.ignores_writes = True
     with pytest.raises(NotConfirmed):
-        await case.call(c, confirm=confirm)
+        await case.call(c, confirm=True)
     assert _writes(itm) == 2
     assert _first_write(itm) < itm.changed_elsewhere[0]
     assert not c._unconfirmed
@@ -481,36 +475,43 @@ async def test_partial_skip_nothing_comes_in(itm: FakeITM, name: str) -> None:
 
 
 @pytest.mark.parametrize("name", sorted(PARTIALS))
-async def test_partial_skip_without_confirm_waits_the_window(
+async def test_partial_skip_without_confirm_returns_at_once(
     itm: FakeITM, name: str
 ) -> None:
-    """confirm=False: the window is waited; what was sent is left to the next write."""
+    """confirm=False: the part that differs is sent and the call returns at once.
+
+    The part left out is watched in the background; the next write to the
+    unit waits for that, then for the part sent to show.
+    """
     case = PARTIALS[name]
     c = _client(itm, CASES["set_mode"], verify_timeout=0.2)
     target = _partial(itm, case)
-    start = time.monotonic()
     assert await case.call(c, confirm=False) is None
-    assert time.monotonic() - start >= 0.2
     assert _writes(itm) == 1
     assert set(c._unconfirmed) == {UNIT}
+    assert c._unit_lock(UNIT).locked()
+    assert c._watches
     await c.set_unit_settings(UNIT, mode_lock=RemoteLock.FORBIDDEN)
+    assert not c._watches
     assert not c._unconfirmed
     assert case.ours(target)
 
 
-async def test_partial_cancelled_without_confirm_keeps_the_sent_check(
+async def test_partial_close_during_the_watch_keeps_the_sent_check(
     itm: FakeITM,
 ) -> None:
-    """Cancelled in the window: the part sent stays for the next write to check."""
+    """The client closed in the window: the part sent stays for the next write."""
     c = _client(itm, CASES["set_mode"], confirm_timeout=30, verify_timeout=30)
     _partial(itm, PARTIALS["apply mode and setpoint"])
-    task = asyncio.create_task(c.apply(UNIT, mode="heat", setpoint=21, confirm=False))
-    await _wait(lambda: _writes(itm) == 1 and UNIT in c._unconfirmed)
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    assert await c.apply(UNIT, mode="heat", setpoint=21, confirm=False) is None
+    await _wait(lambda: _pollings(itm) >= 2)
+    await c.close()
+    assert not c._watches
     assert set(c._unconfirmed) == {UNIT}
     assert not c._unit_lock(UNIT).locked()
+    assert itm.session is None
+    assert c._writing is None
+    assert _writes(itm) == 1
 
 
 async def test_full_write_is_not_watched(itm: FakeITM) -> None:
@@ -540,7 +541,10 @@ async def test_zone_writes_only_the_members_that_differ(
     c = _zone_client(itm, verify_timeout=0.2)
     start = time.monotonic()
     result = await c.set_zone_setpoint(ZONE, 21, confirm=confirm)
-    assert time.monotonic() - start >= 0.2
+    if confirm:
+        assert time.monotonic() - start >= 0.2
+    else:
+        await _checked(c)
     assert _writes(itm) == 1
     assert dict(c.writes_sent) == {other.name: 1}
     assert all(u.setpoint == 21 for u in itm.units)
@@ -552,14 +556,13 @@ async def test_zone_writes_only_the_members_that_differ(
         assert set(c._unconfirmed) == {other.name}
 
 
-@pytest.mark.parametrize("confirm", [True, False])
-async def test_zone_partial_skip_is_overruled(itm: FakeITM, *, confirm: bool) -> None:
+async def test_zone_partial_skip_is_overruled(itm: FakeITM) -> None:
     """A member left out moves away after the write: it is written after all, once."""
     first, other = itm.units[0], itm.units[1]
     other.setpoint = 23
     c = _zone_client(itm)
     itm.change_elsewhere(first, 6, setpoint=24)
-    assert await c.set_zone_setpoint(ZONE, 21, confirm=confirm) is not None
+    assert await c.set_zone_setpoint(ZONE, 21) is not None
     writes = _write_indexes(itm)
     assert len(writes) == 2
     assert writes[0] < itm.changed_elsewhere[0] < writes[1]
@@ -568,10 +571,7 @@ async def test_zone_partial_skip_is_overruled(itm: FakeITM, *, confirm: bool) ->
     assert not c._unconfirmed
 
 
-@pytest.mark.parametrize("confirm", [True, False])
-async def test_zone_partial_skip_still_overruled(
-    itm: FakeITM, *, confirm: bool
-) -> None:
+async def test_zone_partial_skip_still_overruled(itm: FakeITM) -> None:
     """The other change keeps winning on a member left out: NotConfirmed, no loop."""
     first, other = itm.units[0], itm.units[1]
     other.setpoint = 23
@@ -579,7 +579,7 @@ async def test_zone_partial_skip_still_overruled(
     itm.change_elsewhere(first, 6, setpoint=24)
     first.ignores_writes = True
     with pytest.raises(NotConfirmed):
-        await c.set_zone_setpoint(ZONE, 21, confirm=confirm)
+        await c.set_zone_setpoint(ZONE, 21)
     assert _writes(itm) == 2
     assert first.setpoint == 24
 
@@ -694,3 +694,342 @@ async def test_zone_write_after_all_writes_only_units_left_out(itm: FakeITM) -> 
     assert writes[0] < itm.changed_elsewhere[0] < writes[1]
     assert dict(c.writes_sent) == {first.name: 1, other.name: 1}
     assert all(u.setpoint == 21 for u in itm.units)
+
+
+# -- without confirm: the check runs in the background -------------------------------
+
+
+@pytest.mark.parametrize("name", sorted(CASES))
+async def test_without_confirm_returns_at_once(itm: FakeITM, name: str) -> None:
+    """Nothing sent, nothing waited for: the check runs on after the call returned.
+
+    It holds the unit lock and the write's login; closing the client cancels
+    it and logs that login out.
+    """
+    case = CASES[name]
+    c = _client(itm, case, verify_timeout=30, confirm_timeout=30)
+    start = time.monotonic()
+    result = await case.call(c, confirm=False)
+    assert time.monotonic() - start < 1
+    assert result is not None
+    assert _writes(itm) == 0
+    assert c._watches
+    assert c._unit_lock(UNIT).locked()
+    await _wait(lambda: _pollings(itm) >= 2)
+    assert itm.session is not None
+    await c.close()
+    assert not c._watches
+    assert itm.session is None
+    assert c._writing is None
+    assert not c._lock.locked()
+    assert not c._unit_lock(UNIT).locked()
+    assert itm.logins == 1
+    assert _writes(itm) == 0
+    assert not c._unconfirmed
+
+
+@pytest.mark.parametrize("name", sorted(CASES))
+async def test_without_confirm_nothing_comes_in(itm: FakeITM, name: str) -> None:
+    """The background check reads for the window in the write's login, then ends."""
+    case = CASES[name]
+    c = _client(itm, case, verify_timeout=0.1)
+    start = time.monotonic()
+    assert await case.call(c, confirm=False) is not None
+    await _checked(c)
+    assert time.monotonic() - start >= 0.1
+    assert _writes(itm) == 0
+    assert not c.writes_sent
+    assert not c._unconfirmed
+    assert itm.logins == 1
+    assert itm.session is None
+    assert c._writing is None
+    assert _pollings(itm) >= 2
+    sent = len(itm.requests)
+    await asyncio.sleep(0.05)
+    assert len(itm.requests) == sent
+
+
+@pytest.mark.parametrize("name", sorted(CASES))
+async def test_without_confirm_a_change_coming_in_is_overruled(
+    itm: FakeITM, name: str
+) -> None:
+    """The background check sees the other change and writes once; ours is final.
+
+    The write after all is left to the next write to check, as any write
+    without confirm.
+    """
+    case = CASES[name]
+    c = _client(itm, case)
+    target = itm.units[0]
+    itm.change_elsewhere(target, 4, **case.elsewhere)
+    assert await case.call(c, confirm=False) is not None
+    assert _writes(itm) == 0
+    await _checked(c)
+    assert _writes(itm) == 1
+    assert _first_write(itm) > itm.changed_elsewhere[0]
+    assert dict(c.writes_sent) == {UNIT: 1}
+    assert itm.logins == 1
+    assert itm.session is None
+    members = {u.name for u in itm.units} if case.zone else {UNIT}
+    assert set(c._unconfirmed) == members
+    await _settled(c)
+    assert all(case.ours(u) for u in itm.units)
+    assert c.session_info.last_error is None
+
+
+@pytest.mark.parametrize("name", sorted(CASES))
+async def test_without_confirm_still_overruled(
+    itm: FakeITM, name: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The other change keeps winning: one write; the next write logs, never raises."""
+    case = CASES[name]
+    c = _client(itm, case, confirm_timeout=0.3, verify_timeout=0.3)
+    target = itm.units[0]
+    itm.change_elsewhere(target, 4, **case.elsewhere)
+    target.ignores_writes = True
+    assert await case.call(c, confirm=False) is not None
+    await _checked(c)
+    assert _writes(itm) == 1
+    assert dict(c.writes_sent) == {UNIT: 1}
+    await _settled(c)
+    assert not case.ours(target)
+    assert any(r.levelno == logging.WARNING for r in caplog.records)
+
+
+async def test_next_write_waits_for_the_check(itm: FakeITM) -> None:
+    """A write to the unit during the check waits for it, then for its write after all.
+
+    It joins the write's login meanwhile.
+    """
+    c = _client(itm, CASES["set_mode"], verify_timeout=30, confirm_timeout=30)
+    itm.change_elsewhere(itm.units[0], 6, mode="Cool")
+    assert await c.set_mode(UNIT, "heat", confirm=False) is not None
+    result = await c.apply(UNIT, fan_speed="high")
+    assert result is not None
+    assert (result.mode, result.fan_speed) == ("heat", "high")
+    assert not c._watches
+    writes = _write_indexes(itm)
+    assert len(writes) == 2
+    assert writes[0] > itm.changed_elsewhere[0]
+    assert _ticks(itm, 0, writes[0]) == {D_MODE_CHECK}
+    assert _ticks(itm, writes[0], writes[1]) == {D_FAN_CHECK}
+    assert dict(c.writes_sent) == {UNIT: 2}
+    assert not c._unconfirmed
+    assert itm.logins == 1
+    assert itm.session is None
+
+
+async def test_check_error_is_recorded_not_raised(
+    itm: FakeITM, caplog: pytest.LogCaptureFixture
+) -> None:
+    """No read of the background check gets an answer: logged and noted, not raised."""
+    failing = [True]
+
+    class Unanswered(FakeClient):
+        """The reads of the unit get no answer while failing is set."""
+
+        async def fetch_unit(self, name: str) -> Unit:
+            if failing[0]:
+                raise aiohttp.ClientConnectionError(name)
+            return await super().fetch_unit(name)
+
+    c = Unanswered(itm, confirm_interval=0.001, verify_timeout=0.05)
+    assert await c.set_mode(UNIT, "heat", confirm=False) is not None
+    await _checked(c)
+    error = c.session_info.last_error
+    assert error is not None
+    assert error.startswith("NotConfirmed")
+    assert any("left out failed" in r.getMessage() for r in caplog.records)
+    assert itm.session is None
+    assert not c._unit_lock(UNIT).locked()
+    assert not c._unconfirmed
+    failing[0] = False
+    assert await c.set_fan_speed(UNIT, "high") is not None
+    assert _writes(itm) == 1
+
+
+async def test_partial_check_error_leaves_the_sent_part(itm: FakeITM) -> None:
+    """An error in a partial write's check: the next write settles the part sent."""
+    failing = [False]
+
+    class Unanswered(FakeClient):
+        """The reads of the unit get no answer while failing is set."""
+
+        async def fetch_unit(self, name: str) -> Unit:
+            if failing[0]:
+                raise aiohttp.ClientConnectionError(name)
+            return await super().fetch_unit(name)
+
+    c = Unanswered(itm, confirm_interval=0.001, verify_timeout=0.05)
+    target = _partial(itm, PARTIALS["apply mode and setpoint"])
+    failing[0] = True
+    assert await c.apply(UNIT, mode="heat", setpoint=21, confirm=False) is None
+    await _checked(c)
+    assert c.session_info.last_error is not None
+    assert set(c._unconfirmed) == {UNIT}
+    failing[0] = False
+    assert await c.set_fan_speed(UNIT, "high") is not None
+    assert not c._unconfirmed
+    assert target.mode == "Heat"
+
+
+async def test_budget_in_the_check_is_recorded(itm: FakeITM) -> None:
+    """A write after all over the budget: nothing sent, noted, the next call works."""
+    c = _client(itm, CASES["set_zone_setpoint"], max_writes_per_unit_per_hour=1)
+    assert await c.set_zone_setpoint(ZONE, 22) is not None
+    itm.change_elsewhere(itm.units[0], 4, setpoint=23)
+    assert await c.set_zone_setpoint(ZONE, 22, confirm=False) is not None
+    await _checked(c)
+    error = c.session_info.last_error
+    assert error is not None
+    assert error.startswith("WriteBudgetExceeded")
+    assert _writes(itm) == 1
+    assert not c._unconfirmed
+    assert len(await c.fetch_zone_units(ZONE)) == len(itm.units)
+
+
+@pytest.mark.parametrize("name", sorted(PARTIALS))
+async def test_partial_without_confirm_is_overruled(itm: FakeITM, name: str) -> None:
+    """The part left out moves away: the background check sends only that, once."""
+    case = PARTIALS[name]
+    c = _client(itm, CASES["set_mode"])
+    target = _partial(itm, case)
+    itm.change_elsewhere(target, 4, **case.elsewhere)
+    assert await case.call(c, confirm=False) is None
+    assert _writes(itm) == 1
+    await _checked(c)
+    writes = _write_indexes(itm)
+    assert len(writes) == 2
+    assert writes[1] > itm.changed_elsewhere[0]
+    assert _ticks(itm, writes[0], writes[1]) == {case.left_out}
+    assert c.writes_sent[UNIT] == 2
+    assert set(c._unconfirmed) == {UNIT}
+    await _settled(c)
+    assert case.ours(target)
+
+
+async def test_zone_partial_without_confirm_is_overruled(itm: FakeITM) -> None:
+    """A member left out moves away: written after all in the background, once."""
+    first, other = itm.units[0], itm.units[1]
+    other.setpoint = 23
+    c = _zone_client(itm)
+    itm.change_elsewhere(first, 6, setpoint=24)
+    assert await c.set_zone_setpoint(ZONE, 21, confirm=False) is None
+    assert _writes(itm) == 1
+    await _checked(c)
+    writes = _write_indexes(itm)
+    assert len(writes) == 2
+    assert writes[0] < itm.changed_elsewhere[0] < writes[1]
+    assert dict(c.writes_sent) == {first.name: 1, other.name: 1}
+    assert set(c._unconfirmed) == {u.name for u in itm.units}
+    await _settled(c)
+    assert all(u.setpoint == 21 for u in itm.units)
+
+
+async def test_kept_session_exit_waits_for_the_check(itm: FakeITM) -> None:
+    """Leaving a kept session lets the check finish in the kept login, then logs out."""
+    c = _client(itm, CASES["set_unit_settings"])
+    itm.change_elsewhere(itm.units[0], 4, lock_setpoint=2)
+    async with c.kept_session(keep_alive=None):
+        result = await c.set_unit_settings(
+            UNIT, setpoint_lock=RemoteLock.ALLOWED, confirm=False
+        )
+        assert result is not None
+        assert _writes(itm) == 0
+    assert not c._watches
+    assert _writes(itm) == 1
+    assert _first_write(itm) > itm.changed_elsewhere[0]
+    assert itm.logins == 1
+    assert itm.session is None
+    assert not c._unit_lock(UNIT).locked()
+    await _settled(c)
+    assert itm.units[0].lock_setpoint == 0
+
+
+async def test_kept_session_error_cancels_the_check(itm: FakeITM) -> None:
+    """A kept session left by an error cancels the check, then logs out."""
+    c = _client(itm, CASES["set_mode"], verify_timeout=30, confirm_timeout=30)
+
+    async def hold() -> None:
+        async with c.kept_session(keep_alive=None):
+            assert await c.set_mode(UNIT, "heat", confirm=False) is not None
+            await _wait(lambda: _pollings(itm) >= 2)
+            msg = "caller"
+            raise RuntimeError(msg)
+
+    with pytest.raises(RuntimeError):
+        await hold()
+    assert not c._watches
+    assert itm.session is None
+    assert c._kept is None
+    assert not c._lock.locked()
+    assert not c._unit_lock(UNIT).locked()
+    assert _writes(itm) == 0
+
+
+async def test_kept_session_exit_cancelled_while_waiting(itm: FakeITM) -> None:
+    """Cancelled while the exit waits for the check: it is cancelled, the exit ends."""
+    c = _client(itm, CASES["set_mode"], verify_timeout=30, confirm_timeout=30)
+    waiting = asyncio.Event()
+    end_watches = c._end_watches
+
+    async def watched(*, cancel: bool) -> None:
+        waiting.set()
+        await end_watches(cancel=cancel)
+
+    c._end_watches = watched  # type: ignore[method-assign]
+
+    async def hold() -> None:
+        async with c.kept_session(keep_alive=None):
+            assert await c.set_mode(UNIT, "heat", confirm=False) is not None
+
+    task = asyncio.create_task(hold())
+    await waiting.wait()
+    await _wait(lambda: _pollings(itm) >= 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not c._watches
+    assert itm.session is None
+    assert c._kept is None
+    assert not c._lock.locked()
+    assert not c._unit_lock(UNIT).locked()
+
+
+async def test_close_right_after_the_call(itm: FakeITM) -> None:
+    """A check cancelled before it ran a step still lets go of its lock and login."""
+    c = _client(itm, CASES["set_mode"], verify_timeout=30, confirm_timeout=30)
+    assert await c.set_mode(UNIT, "heat", confirm=False) is not None
+    await c.close()
+    assert not c._watches
+    assert itm.session is None
+    assert c._writing is None
+    assert not c._lock.locked()
+    assert not c._unit_lock(UNIT).locked()
+
+
+async def test_close_cancelled_still_ends_the_check(itm: FakeITM) -> None:
+    """close() cancelled at its first step: the check still ends and logs out."""
+    c = _client(itm, CASES["set_mode"], verify_timeout=30, confirm_timeout=30)
+    assert await c.set_mode(UNIT, "heat", confirm=False) is not None
+    await _wait(lambda: _pollings(itm) >= 2)
+    closing = asyncio.create_task(c.close())
+    await asyncio.sleep(0)
+    closing.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await closing
+    assert not c._watches
+    assert itm.session is None
+    assert c._writing is None
+    assert not c._lock.locked()
+    assert not c._unit_lock(UNIT).locked()
+
+
+async def test_without_a_write_block(itm: FakeITM) -> None:
+    """Without confirm_in_session the background check reads in logins of its own."""
+    c = _client(itm, CASES["set_mode"], verify_timeout=0.05, confirm_in_session=False)
+    assert await c.set_mode(UNIT, "heat", confirm=False) is not None
+    await _checked(c)
+    assert itm.logins > 1
+    assert itm.session is None
+    assert _writes(itm) == 0

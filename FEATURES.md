@@ -48,11 +48,13 @@ button. On one real iTM every read in the check gave the same result inside a bl
 alone (read only, `itm check shared-session`); `ROADMAP.md` lists what is still to check.
 Clients of the same iTM and user in one process taking turns on its session
 (`other_client_timeout`, `SessionInUse`) are tested against the simulated iTM
-only as well. So is `kept_session()` (experimental): one login kept for a polling
-client's lifetime, with a keep-alive POLLING, a new login after the iTM ended the
-session, and writes (with `allow_experimental`) read back in that session from
-the dialog opened anew or a panel value only once the iTM sent it again (else a
-new login).
+only as well. `kept_session()` keeps one login for a polling client's lifetime,
+with a keep-alive POLLING, a new login after the iTM ended the session, and writes
+read back in that session from the dialog opened anew or a panel value only once
+the iTM sent it again (else a new login). It was validated on one real iTM (reads
+for two hours, idling with the keep-alive, a network drop of 60-75 s, unit, zone
+and menu writes read back over three rounds); a restart of the iTM is tested
+against the simulated iTM only.
 A write and the reads that check it share one login (`confirm_in_session`, on
 by default), read back the same way; seen on one real iTM (in a kept session)
 for power, mode, fan speed, the setpoint lock, a zone's fan speed and the
@@ -74,7 +76,8 @@ The unit and zone writes on screens 4 and 7 never send a value the iTM
 already shows (`set_unit_settings` changes only the settings the dialog
 doesn't show yet; a zone write reads its points first and, when its units lack
 different things, writes them one by one with only what each lacks), then read
-what they left out for `verify_timeout`, with or without confirm, and write it
+what they left out for `verify_timeout` (with confirm before they return,
+without in a background task after they returned at once), and write it
 after all, once, when another change on its way moves it (on a real iTM such a
 skipped write lost to another account's change made just before; the check is
 not validated there yet), count the changes they send per unit

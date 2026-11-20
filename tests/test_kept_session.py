@@ -5,9 +5,9 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-import inspect
 import logging
 import time
+from typing import Any
 
 import aiohttp
 import pytest
@@ -26,7 +26,7 @@ from daikin_itm.protocol import ScreenID
 
 from .fake_itm import FakeITM, FakeZone
 from .test_client import FakeClient, confirmed, is_logout
-from .test_shared_session import WRITE_ARGUMENTS, _made_up, _writes
+from .test_experimental import GUARDED
 
 IDLE_TIMEOUT = 270.0
 POLLING = 4
@@ -240,16 +240,17 @@ async def test_max_age(itm: FakeITM, caplog: pytest.LogCaptureFixture) -> None:
     """A login older than max_age is replaced by a new one."""
     c = FakeClient(itm)
     with caplog.at_level(logging.INFO, logger="daikin_itm.client"):
-        async with c.kept_session(max_age=0.05):
+        async with c.kept_session(max_age=3600):
             await c.fetch_units()
             await c.fetch_units()
             assert itm.logins == 1
-            await asyncio.sleep(0.06)
+            assert c._kept is not None
+            c._kept.since -= 3601
             assert len(await c.fetch_units()) == 3
             await c.fetch_units()
     assert itm.logins == 2
     assert any(
-        r.getMessage() == "kept session open for more than 0.05 s; logging in again"
+        r.getMessage() == "kept session open for more than 3600 s; logging in again"
         and r.levelno == logging.INFO
         for r in caplog.records
     )
@@ -353,8 +354,8 @@ async def test_shared_session_inside_joins(itm: FakeITM) -> None:
 
 
 async def test_writes_in_the_block(itm: FakeITM) -> None:
-    """With allow_experimental the unit writes run and confirm in the one login."""
-    c = FakeClient(itm)
+    """Unit writes run and confirm in the one login, without allow_experimental."""
+    c = FakeClient(itm, allow_experimental=False)
     async with c.kept_session():
         await c.fetch_units()
         assert confirmed(await c.set_setpoint("1:1-04", 22)).setpoint == 22
@@ -398,54 +399,27 @@ async def test_writes_keep_their_spacing(itm: FakeITM) -> None:
     assert itm.units[1].setpoint == 22
 
 
-async def test_write_needs_allow_experimental(itm: FakeITM) -> None:
-    """Without allow_experimental a write is refused before anything is sent."""
-    c = FakeClient(itm, allow_experimental=False)
-    async with c.kept_session():
-        await c.fetch_units()
-        sent = len(itm.requests)
-        with pytest.raises(ExperimentalError, match="kept session"):
-            await c.set_setpoint("1:1-04", 21)
-        assert len(itm.requests) == sent
-        assert len(await c.fetch_units()) == 3
-    assert itm.units[1].setpoint == 23
-    dry = FakeClient(itm, allow_experimental=False, dry_run=True)
-    async with dry.kept_session():
-        assert await dry.set_setpoint("1:1-04", 21) is None
-    assert dry.planned
-    assert itm.units[1].setpoint == 23
-
-
-async def test_session_of_the_block_refuses_without_the_opt_in(itm: FakeITM) -> None:
-    """The kept session itself refuses a pick without allow_experimental."""
+async def test_session_of_the_block_writes_without_the_opt_in(itm: FakeITM) -> None:
+    """The kept session itself sends a pick without allow_experimental."""
     c = FakeClient(itm, allow_experimental=False)
     async with c.kept_session(), c._session() as s:
         await s.open_zone(c.zone_path)
         await s.select_by_name("1:1-04")
-        with pytest.raises(ExperimentalError):
-            await s.choose(P_SETPOINT, 0)
-    assert not any(r["screen"] == 4 and r["part"] == 11 for r in itm.requests)
+        await s.choose(P_SETPOINT, 0)
+    assert any(r["screen"] == 4 and r["part"] == 11 for r in itm.requests)
 
 
-@pytest.mark.parametrize("name", _writes())
-async def test_every_write_needs_the_opt_in(itm: FakeITM, name: str) -> None:
-    """Every write is refused in the block without allow_experimental, unsent."""
+@pytest.mark.parametrize(("method", "args", "kwargs"), GUARDED)
+async def test_experimental_write_needs_the_opt_in(
+    itm: FakeITM, method: str, args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> None:
+    """A write not validated yet is still refused inside without the opt-in, unsent."""
     c = FakeClient(itm, allow_experimental=False)
-    if name in WRITE_ARGUMENTS:
-        args, kwargs = WRITE_ARGUMENTS[name]
-    else:
-        required = [
-            p
-            for p in inspect.signature(getattr(c, name)).parameters.values()
-            if p.default is p.empty
-        ]
-        args = tuple(_made_up(p) for p in required if p.kind is not p.KEYWORD_ONLY)
-        kwargs = {p.name: _made_up(p) for p in required if p.kind is p.KEYWORD_ONLY}
     async with c.kept_session():
         await c.fetch_indicators()
         sent = len(itm.requests)
-        with pytest.raises((ExperimentalError, SharedSessionError)):
-            await getattr(c, name)(*args, **kwargs)
+        with pytest.raises(ExperimentalError):
+            await getattr(c, method)(*args, **kwargs)
         assert len(itm.requests) == sent
     assert itm.logins == 1
 

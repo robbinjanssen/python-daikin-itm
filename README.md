@@ -46,10 +46,12 @@ Changes in behaviour since the previous release:
 - **A write never sends a value the unit shows already, and never loses
   one.** It leaves out what the unit shows (a zone write: the units that show
   it; a zone whose units lack different things is now written unit by unit),
-  then reads what it left out in its login for `verify_timeout` (10 s) before
-  it returns, with or without `confirm`, and writes it after all, once, when
-  another change on its way moves it meanwhile. Such a call takes up to 10 s
-  instead of returning at once. See
+  then reads what it left out in its login for `verify_timeout` (10 s), and
+  writes it after all, once, when another change on its way moves it
+  meanwhile. With `confirm=True` the call does that before it returns (up to
+  10 s more); with `confirm=False` it returns at once and a background task of
+  the client does it (`close()` cancels it, leaving `kept_session()` waits for
+  it). See
   [Writes that change nothing](#writes-that-change-nothing).
 
 ## Datasets
@@ -291,7 +293,7 @@ read-back:
 
 | Method | Changes |
 | :----- | :------ |
-| `set_unit_settings(unit, *, start_stop_lock=None, mode_lock=None, setpoint_lock=None, overtime=None, cool_limit=None, heat_limit=None, confirm=True)` | The wall remote locks (`RemoteLock`), the unit's overtime timer and its cooling/heating setpoint limits (`TempLimit`; min/max are entered in the iTM's number input). Read back with `fetch_unit_settings`, inside the unit's lock; with `confirm=False` it returns `None` and the next write to the unit waits for the change. Settings the dialog already shows are left alone and checked before it returns; when it shows them all nothing is written (see [Writes that change nothing](#writes-that-change-nothing)). |
+| `set_unit_settings(unit, *, start_stop_lock=None, mode_lock=None, setpoint_lock=None, overtime=None, cool_limit=None, heat_limit=None, confirm=True)` | The wall remote locks (`RemoteLock`), the unit's overtime timer and its cooling/heating setpoint limits (`TempLimit`; min/max are entered in the iTM's number input). Read back with `fetch_unit_settings`, inside the unit's lock; with `confirm=False` it returns `None` and the next write to the unit waits for the change. Settings the dialog already shows are left alone and checked (with `confirm=False` in the background); when it shows them all nothing is written (see [Writes that change nothing](#writes-that-change-nothing)). |
 | `set_power_state(unit, state, *, confirm=True)` | `PowerState.ON`, `OFF`, `SETBACK_LOW` or `SETBACK_HIGH` through the operation panel. |
 | `set_unit_settings(unit, *, airflow_direction=…, ventilation_mode=…, ventilation_amount=…, reset_filter_sign=False, reset_dust_alarm=False, force_dust_alarm_reset=False)` | Also through the settings dialog: the airflow direction (`position_0`..`position_4`, `swing`, on units that offer it), a ventilation unit's mode and air volume (by the labels it lists), and resetting a filter sign or dust alarm (offered only while it shows). |
 | `set_unit_settings(unit, *, low_noise=…, outdoor_low_noise=…, capacity=…, reheat=…, leaving_water_cool=…, leaving_water_heat=…, storage_water=…, output_repeat=…, output_repeat_interval=…, analog_output=…, multistate_output=…)` | The optional settings in `UnitSettings`: options by label or value, numbers through the iTM's number input. One the unit doesn't offer is refused before anything in the dialog is clicked (not validated on a real iTM yet). |
@@ -446,7 +448,7 @@ The other constructor arguments are keyword-only:
 | `on_write` | `None` | Called as `on_write(unit, what)` each time a unit or zone write sent its change (a zone write through the zone's panel once for every point of the zone, one written unit by unit once for each unit written; `what` is what was asked, such as `"setpoint 22"`), not for a write that found nothing to change or a dry run. An error it raises is logged. See [Write budget](#write-budget). |
 | `max_writes_per_unit_per_hour` | `None` | Refuse a unit or zone write to a unit that had this many writes sent by this client in the last hour (`WriteBudgetExceeded`, nothing sent); `None`: no limit. See [Write budget](#write-budget). |
 | `max_writes_per_unit_per_day` | `None` | The same for the last 24 hours. |
-| `verify_timeout` | `10.0` | Seconds a write that left out what the unit showed already keeps reading it (at most `confirm_timeout`) before it returns, with or without `confirm`; a value that moves away meanwhile is written after all, once. See [Writes that change nothing](#writes-that-change-nothing). |
+| `verify_timeout` | `10.0` | Seconds a write that left out what the unit showed already keeps reading it (at most `confirm_timeout`): with `confirm=True` before it returns, with `confirm=False` in the background after it returned at once; a value that moves away meanwhile is written after all, once. See [Writes that change nothing](#writes-that-change-nothing). |
 
 A few settings are attributes, which may be changed on a client at any time:
 
@@ -456,7 +458,7 @@ A few settings are attributes, which may be changed on a client at any time:
 | `logout_timeout` | `5.0` | Seconds that logout may take. |
 | `progress_timeout` | `30.0` | Seconds a long list (the history, energy data) may take to load behind the iTM's progress dialog; the history's load is cancelled after it. |
 | `progress_interval` | `0.5` | Seconds between the progress requests meanwhile. |
-| `session_info` | | Read only: what the client knows about its login, for diagnostics, without a request: a `SessionInfo` with `logged_in`, `since`, `logins`, `last_poll`, `last_error` (and `last_error_at`), `kept`, `writing` and `unanswered`. Holds no token. |
+| `session_info` | | Read only: what the client knows about its login, for diagnostics, without a request: a `SessionInfo` with `logged_in`, `since`, `logins`, `last_poll`, `last_error` (and `last_error_at`; also an error of a write's background check, see [Writes that change nothing](#writes-that-change-nothing)), `kept`, `writing` and `unanswered`. Holds no token. |
 | `writes_sent` | | Read only: the changes this client sent to each unit since it was created, by unit name (a read-only mapping). See [Write budget](#write-budget). |
 | `on_write`, `max_writes_per_unit_per_hour`, `max_writes_per_unit_per_day` | constructor | As the constructor arguments. |
 
@@ -481,13 +483,14 @@ A few settings are attributes, which may be changed on a client at any time:
 | `set_mode(unit, mode, *, confirm=True)` | Change the operation mode. |
 | `set_fan_speed(unit, fan_speed, *, confirm=True)` | Change the fan speed. |
 | `shared_session(max_seconds=30.0)` | An `async with` block in which the reads share one login instead of one each, see [Several reads in one login](#several-reads-in-one-login). Reads only; observed read only on one real iTM (see `ROADMAP.md` for what is still to check). |
-| `kept_session(*, keep_alive=60.0, max_age=10800.0)` | **Experimental.** An `async with` block that keeps one login for every call inside it, for as long as it lasts (a polling client's lifetime), kept alive by a POLLING when idle; writes inside need `allow_experimental=True`. See [One login for a polling client](#one-login-for-a-polling-client-experimental). Tested against the simulated iTM only. |
+| `kept_session(*, keep_alive=60.0, max_age=10800.0)` | An `async with` block that keeps one login for every call inside it, for as long as it lasts (a polling client's lifetime), kept alive by a POLLING when idle; writes are allowed inside (an [experimental](#experimental-functions) write still needs `allow_experimental=True`). See [One login for a polling client](#one-login-for-a-polling-client). Validated on one real iTM; an iTM restart is tested against the simulated iTM only. |
 | `release_saved_session()` | Log out a session a previous run left behind; returns `True` if there was one. Every call does this before logging in. A saved token the iTM answers with an HTTP error or an unreadable reply is dropped (with a warning) and left to the iTM's own timeout. |
 
 By default, a write returns the `Unit` as read back once a read shows the
 change (or raises `NotConfirmed`, an `ItmCommandError`, after `confirm_timeout`). With
-`confirm=False` it returns `None` right after the write (unless it left out
-something the unit showed already, see
+`confirm=False` it returns `None` right after the write (or, when the unit
+showed everything already, what the write read; what it left out is checked
+in the background, see
 [Writes that change nothing](#writes-that-change-nothing)); the next write to
 the same unit first waits until that change shows, so it
 can't overtake it, unless a read meanwhile showed it: `fetch_unit`, `fetch_units` (icon view),
@@ -567,11 +570,10 @@ layout setup, a schedule's calendar copy).
   `kept_session()` opened meanwhile, `fetch_own_settings()`, and other clients
   of the same user wait until it ends (`SessionInUse` after their
   `other_client_timeout`).
-- Inside a [`kept_session()`](#one-login-for-a-polling-client-experimental) a
-  write uses that login (with `allow_experimental=True`); inside a
-  `shared_session()` it is refused, as before. `read_only`, the experimental
-  guard and the other opt-ins still refuse before anything is sent, and a dry
-  run takes one login.
+- Inside a [`kept_session()`](#one-login-for-a-polling-client) a write uses
+  that login; inside a `shared_session()` it is refused, as before.
+  `read_only`, the experimental guard and the other opt-ins still refuse before
+  anything is sent, and a dry run takes one login.
 - `confirm_timeout`, `confirm_interval`, the per-unit lock, `min_write_interval`
   and `confirm=False` work as before; a write with `confirm=False` is checked by
   the next write to the unit, in that write's login.
@@ -607,37 +609,50 @@ reached the unit, 3-8 s after it was sent, so another client's change sent
 just before may not show yet (seen on a real iTM: a remote lock changed by one
 account and asked back to its old value by another account a moment later was
 skipped as unchanged, and the first change won). So every write that left
-something out, with or without `confirm`, reads it again before it returns:
-every `confirm_interval` for `verify_timeout` seconds (10 by default, at most
-`confirm_timeout`, at least one read), in its own login and under the unit's
-lock (a zone write: its members'). When a read shows a value it left out moved
-away, it writes that value after all, once (only what it left out and what
-differs then; counted, spaced and refused by a spent budget like any write),
-and confirms the whole write, also with `confirm=False`: `NotConfirmed`, with
-the last read in `last_seen`, when it still doesn't hold. It never writes a
-third time, so two clients that keep asking for different values can't loop.
-When no read of the check gets an answer it raises `NotConfirmed` with
-`last_seen` `None`.
+something out reads it again: every `confirm_interval` for `verify_timeout`
+seconds (10 by default, at most `confirm_timeout`, at least one read), in the
+write's login and under the unit's lock (a zone write: its members'). When a
+read shows a value it left out moved away, it writes that value after all,
+once (only what it left out and what differs then; counted, spaced and
+refused by a spent budget like any write). It never writes a third time, so
+two clients that keep asking for different values can't loop.
 
-The cost is time: a call that left something out takes `verify_timeout` (about
-five reads with the defaults, each a POLLING and the panel or the dialog) and
-holds the unit's lock and the login meanwhile, also with `confirm=False`. A
-write that changes everything it asks isn't held up. What a write returns:
+With `confirm=True` the call checks before it returns, and confirms a write
+after all: `NotConfirmed`, with the last read in `last_seen`, when it still
+doesn't hold; `NotConfirmed` with `last_seen` `None` when no read of the check
+gets an answer. Such a call takes `verify_timeout` longer (about five reads
+with the defaults, each a POLLING and the panel or the dialog).
+
+With `confirm=False` the call returns at once (the part that differs sent, as
+before) and a background task of the client checks what it left out, the same
+way: it reads for no longer than `verify_timeout`, writes a value that moved
+after all, once, and ends. Meanwhile it holds the unit's lock (the next write
+to that unit waits for it) and the write's login (the client's other calls use
+that login meanwhile, and the login ends once the task is done; a
+`shared_session()` or `kept_session()` opened meanwhile waits for it; inside
+`kept_session()` it uses the kept login). A write after all is not confirmed in
+the background: the next write to the unit checks it first, as after any
+`confirm=False` write. An error in the task (no read gets an answer, a spent
+budget, a lost reply) is logged and noted in `session_info.last_error`, never
+raised into another call; a part sent stays for the next write to check.
+`close()` (and leaving `async with ItmClient`) cancels a task still running and
+logs its login out before it returns; leaving `kept_session()` waits for it
+(and cancels it when the block raised or was cancelled), then logs out. What a
+write returns:
 
 | What happened | `confirm=True` | `confirm=False` |
 | :------------ | :------------- | :-------------- |
 | Everything sent | Confirmed, as before | `None` right away, as before |
-| Nothing sent, nothing moved | What it read last, after `verify_timeout` | The same |
-| Part sent, nothing moved | Confirmed, after `verify_timeout` | `None` after `verify_timeout`; the next write to the unit checks the part sent, as after any `confirm=False` write |
-| A value left out moved | Written after all, once, and confirmed | The same |
+| Nothing sent, nothing moved | What it read last, after `verify_timeout` | What the write read, right away; checked in the background |
+| Part sent, nothing moved | Confirmed, after `verify_timeout` | `None` right away; the part left out checked in the background, the part sent by the next write to the unit |
+| A value left out moved | Written after all, once, and confirmed | Written after all, once, by the background check; checked by the next write to the unit |
 
 The default covers the 8 s seen at most plus one read; a shorter
 `verify_timeout` misses a change that arrives later. The check costs no unit
 write and no extra login (with `confirm_in_session=False` each read logs in by
 itself, as a check of a change sent does). A dry run checks nothing and doesn't
-wait. Inside `kept_session()` the check uses the kept login. A call cancelled
-during the check stops (`CancelledError`); a part it sent with `confirm=False`
-is still checked by the next write to the unit.
+wait. A call cancelled during the check (with `confirm=True`) stops
+(`CancelledError`).
 
 These comparisons and the check are tested against the simulated iTM only; the
 reads and writes they use are the validated ones, except a zone's unit written
@@ -783,7 +798,7 @@ return alone before relying on it.
   block ends (see [Sessions](#sessions)); a client in another process would
   still log the block's session out as one left behind, or be refused.
 
-#### One login for a polling client (experimental)
+#### One login for a polling client
 
 `kept_session()` keeps one login for every call inside it, across calls and
 across time: for a client such as Home Assistant that polls for as long as it
@@ -797,11 +812,17 @@ async with client.kept_session():
         await asyncio.sleep(60)
 ```
 
-**Experimental: tested against the simulated iTM only.** What it builds on was
-seen on one real iTM with a dedicated administrator account: an idle session
-ended after between 4 and 5 minutes, a session polled every 30 s lasted an hour,
-its unit reads matched a fresh read by another account, and a change made by
-another account showed in its next read.
+**Validated on one real iTM** (firmware Ver1.32.00, temporary administrator
+accounts): reads every minute for two hours matched another account's fresh
+reads; 20 idle minutes with the 60 s keep-alive kept one login; a network drop
+of 60 to 75 seconds (connections refused, then hanging) didn't end the session;
+and writes read back in the kept session matched another account's fresh reads
+over three rounds: power, mode, fan speed, the setpoint lock, the setpoint in
+heating and cooling with the unit running and stopped, a zone write, menu
+writes, and writes another account overruled. **Not seen on a real iTM: a
+restart of the iTM.** Its recovery is the one after the idle timeout, which was
+seen (the iTM ended the session, the next call logged in again); a restart is
+tested against the simulated iTM only.
 
 - Reads work as in a [shared session](#several-reads-in-one-login): after every
   call the session goes back to where a login starts, before the next one the
@@ -823,24 +844,23 @@ another account showed in its next read.
   token again and goes on with it if the iTM still knows it. A call that loses
   its answer half way raises and ends the login; its token stays in the
   `SessionStore` when the logout gets no answer either, and is released before
-  the next login. What a real iTM does after a network drop or its own restart
-  has not been seen yet.
+  the next login. A network drop of 60 to 75 seconds didn't end the session on
+  a real iTM; a restart of the iTM is tested against the simulated iTM only.
 - `max_age` (3 hours by default) is how long one login may be used; the next
   call after that logs in again.
-- **Writes** inside the block need `allow_experimental=True`; without it they
-  raise `ExperimentalError` before anything is sent (a dry run is allowed).
-  They take the same way as outside (the unit lock, `min_write_interval`,
-  `confirm_timeout` and `confirm_interval`) and read their result back in this
-  session, the way every write reads back in its own login (see
+- **Writes** are allowed inside the block; a write not validated on a real iTM
+  yet (see [Experimental functions](#experimental-functions)) still needs
+  `allow_experimental=True`, as outside. They take the same way as outside
+  (the unit lock, `min_write_interval`, `confirm_timeout` and
+  `confirm_interval`) and read their result back in this session, the way every write reads back in its own login (see
   [Writes and logins](#writes-and-logins)): only from what the iTM sent again,
   never from the client's own pick. The iTM sends a picked value over for
   another point only when that point's value differs from what it takes the
   client to show, which may be the pick or the value before it; a pick it
   doesn't send over that way (all other points show the same value) ends the
   login, and the read-back logs in again: such a write costs one extra login.
-  The experimental part is writing in a login held for hours, seen on a real
-  iTM for a few rounds only. `fetch_own_settings()` and `set_own_settings()`,
-  which log in by themselves, stay refused (`SharedSessionError`).
+  `fetch_own_settings()` and `set_own_settings()`, which log in by themselves,
+  stay refused (`SharedSessionError`).
 - **One user, held for the whole block.** The session lock is held from the
   start of the block to its end: other clients of the same iTM and user in the
   process wait (`SessionInUse` after their `other_client_timeout`), and the
@@ -896,10 +916,7 @@ job, the test e-mail, web server port, remote management and network changes,
 setting a web user's allowed screens, °F and
 the decimal comma in `set_region`, and the
 settings dialog's ventilation, reset, low noise, capacity, reheat, water and
-output settings in `set_unit_settings`. Every write inside a
-[`kept_session()`](#one-login-for-a-polling-client-experimental) block is
-experimental too: a login held for hours with writes in it has been seen on a
-real iTM for a few rounds only.
+output settings in `set_unit_settings`.
 
 They refuse with `ExperimentalError` before anything is sent, unless the client
 is created with `ItmClient(..., allow_experimental=True)` (`itm --experimental`
@@ -923,7 +940,7 @@ well. Reads are never guarded.
 | `ItmCommandError` | The iTM answered a command with a dialog, the UI was not as expected, or a change was not confirmed in time. |
 | `ReadOnlyError` | A write was asked of a client created with `read_only=True` (subclass of `ItmCommandError`); nothing was sent. |
 | `SharedSessionError` | A write, or a call that logs in by itself, was asked inside a `shared_session()` block, or a call that logs in by itself inside a `kept_session()` block (subclass of `ItmCommandError`); nothing was sent. |
-| `ExperimentalError` | A write not validated on a real iTM yet, or any write inside a `kept_session()` block, was asked without `allow_experimental=True`; nothing was sent. See [Experimental functions](#experimental-functions). |
+| `ExperimentalError` | A write not validated on a real iTM yet was asked without `allow_experimental=True`; nothing was sent. See [Experimental functions](#experimental-functions). |
 | `UnitStopped` | A setpoint for a stopped unit or zone, which the iTM would ignore (subclass of `ItmCommandError`); `.name` names it. The change was not sent. |
 | `NotOffered` | The unit or zone doesn't offer what was asked: a power state, an operation mode, fan speed control, a settings dialog option, a wall remote lock value, an airflow direction (subclass of `ItmCommandError`); `.value` is what was asked, `.options` what it offers (empty when it offers none), `.name` the unit or zone where known. Nothing was changed. |
 | `SetpointOutOfRange` | The unit does not accept the setpoint (subclass of `NotOffered`). The allowed setpoints depend on the unit and its operation mode; the ones it accepts now are in `.allowed` (and `.options`). |
@@ -957,8 +974,8 @@ not after a timeout.
   open: every call logs in, works and logs out, also on errors and
   cancellation; a write and the reads that check it share that login
   ([Writes and logins](#writes-and-logins)); only inside a [`shared_session()`](#several-reads-in-one-login)
-  block the reads share one login, which ends with the block, and an
-  experimental [`kept_session()`](#one-login-for-a-polling-client-experimental)
+  block the reads share one login, which ends with the block, and a
+  [`kept_session()`](#one-login-for-a-polling-client)
   keeps one login for as long as its block lasts. If a logout isn't
   confirmed, the latest page token is kept in the
   `SessionStore` so the next run can release the session. The CLI writes the

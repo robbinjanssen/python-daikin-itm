@@ -21,7 +21,6 @@ from ._util import cleanup as _cleanup
 from ._util import cleanup_after as _cleanup_after
 from .changeover import ChangeoverSessionMixin
 from .exceptions import (
-    ExperimentalError,
     ItmCommandError,
     ItmError,
     LoginRejected,
@@ -250,7 +249,7 @@ class _Session(
         self.restarting = False
         # A shared_session() block's session: reads only, see ItmClient._writable.
         self.shared = False
-        # A kept_session() block's session: writes only with allow_experimental.
+        # A kept_session() block's session: writes allowed.
         self.kept = False
         # A write block's session (confirm_in_session): writes allowed.
         self.writing = False
@@ -762,9 +761,6 @@ class _Session(
         if self.shared and not (self.kept or self.writing):
             msg = "a shared session only reads; write outside the block"
             raise SharedSessionError(msg)
-        if self.kept and not (self._client.dry_run or self._client.allow_experimental):
-            msg = "a write in a kept session is experimental; pass allow_experimental"
-            raise ExperimentalError(msg)
 
     async def choose(self, part: int, index: int, *, confirm: bool = False) -> None:
         """Pick an option of an operation panel control.

@@ -4,10 +4,10 @@ The iTM allows one web session per user, so this client never keeps one open: ev
 public method logs in, does its work and logs out (also on errors and cancellation).
 A write and its read-back share that login (``confirm_in_session``). Only inside
 ``shared_session()`` the reads share one login, which ends with the block;
-``kept_session()`` (experimental) keeps that login alive for a polling client's
-lifetime. The page token is handed to a SessionStore after every reply,
-so a session left behind by a crash can be released on the next login instead of
-blocking the user until the iTM times it out.
+``kept_session()`` keeps that login alive for a polling client's lifetime. The page
+token is handed to a SessionStore after every reply, so a session left behind by a
+crash can be released on the next login instead of blocking the user until the iTM
+times it out.
 """
 
 from __future__ import annotations
@@ -390,8 +390,8 @@ class SessionInfo:  # pylint: disable=too-many-instance-attributes
         logins: How many logins this client made.
         last_poll: When the last POLLING got its answer (UTC), the kept session's
             keep-alive included.
-        last_error: The last error a call or keep-alive poll raised (its type and
-            message), or None.
+        last_error: The last error a call, keep-alive poll or background check
+            of a write without confirm raised (its type and message), or None.
         last_error_at: When it was raised (UTC).
         kept: A kept_session() block is open.
         writing: A write block (confirm_in_session) is open.
@@ -422,8 +422,8 @@ class _SharedBlock:  # pylint: disable=too-few-public-methods,too-many-instance-
         # One call at a time, also from tasks started inside the block.
         self.lock = asyncio.Lock()
         self.closed = False
-        # A kept_session(): writes allowed with allow_experimental, a POLLING
-        # when idle, recovery by the same token.
+        # A kept_session(): writes allowed, a POLLING when idle, recovery by the
+        # same token.
         self.kept = False
         self.last_used = 0.0
         # The POLLING before the current call got no answer: keep the session.
@@ -433,6 +433,20 @@ class _SharedBlock:  # pylint: disable=too-few-public-methods,too-many-instance-
         self.writing = False
         self.writers = 0
         self.held: contextlib.AsyncExitStack | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class _Left:
+    """What a write left out because the unit showed it, for ItmClient._unchanged.
+
+    name: the unit or zone written; sent: the units the rest was sent to;
+    watched: every unit the write is about; locks: the call's unit locks.
+    """
+
+    name: str
+    sent: list[str]
+    watched: list[str]
+    locks: contextlib.AsyncExitStack
 
 
 class _UserLock:  # pylint: disable=too-few-public-methods
@@ -740,12 +754,18 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
             max_writes_per_unit_per_day: The same for the last 24 hours.
             verify_timeout: Seconds a unit or zone write keeps reading the
                 values it left out because the unit showed them already (every
-                confirm_interval, at most confirm_timeout, at least one read)
-                before it returns, with or without confirm: another change on
-                its way may still move them. When one moves away, it is
-                written after all, once, and confirmed in the same call
-                (NotConfirmed when it still doesn't hold). A write that
-                changes everything it was asked isn't held up by it.
+                confirm_interval, at most confirm_timeout, at least one read):
+                another change on its way may still move them. When one moves
+                away, it is written after all, once. With confirm the call
+                reads them before it returns and confirms a write after all
+                (NotConfirmed when it still doesn't hold). Without, it returns
+                at once and a background task reads them, in the write's login
+                and holding the unit's lock (the next write to the unit waits
+                for it); a write after all is checked by the next write to the
+                unit, and an error is logged and noted in session_info, never
+                raised. close() cancels the task, leaving kept_session() waits
+                for it. A write that changes everything it was asked isn't
+                held up by it.
 
         Raises:
         ------
@@ -774,8 +794,7 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
         self._owns_http = session is None
         self._store: SessionStore = store or MemorySessionStore()
         self.zone_path = tuple(zone_path)
-        self.commit_delay = commit_delay
-        self.min_write_interval = min_write_interval
+        self.commit_delay, self.min_write_interval = commit_delay, min_write_interval
         # Changes take a few seconds to reach the unit over the Daikin bus; a write is
         # only done once a read of what the iTM sends shows it. Sending the next
         # change before that can make the iTM drop one of them.
@@ -830,6 +849,8 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
         self._logins = 0
         self._last_poll: datetime | None = None
         self._last_error: tuple[str, datetime] | None = None
+        # The background checks of what a write without confirm left out.
+        self._watches: set[asyncio.Task[None]] = set()
 
     @property
     def session_info(self) -> SessionInfo:
@@ -981,7 +1002,13 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
         return urlsplit(self._base).scheme.lower() == "http"
 
     async def close(self) -> None:
-        """Close the aiohttp session if the client created it."""
+        """Close the client: stop its background checks, close its aiohttp session.
+
+        A check of what a write without confirm left out that still runs is
+        cancelled; its login is logged out before this returns. The aiohttp
+        session is closed only if the client created it.
+        """
+        await self._end_watches(cancel=True)
         if self._owns_http and self._http is not None:
             await self._http.close()
             self._http = None
@@ -1221,12 +1248,12 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
     ) -> AsyncIterator[None]:
         """Keep one login for every call inside the block, for as long as it lasts.
 
-        EXPERIMENTAL. For a client that polls for its whole lifetime, such as
-        Home Assistant: every call reuses one login, across calls and across time,
-        instead of a login and logout (and two history entries) per poll. Reads
-        work as in shared_session(): between two calls the session goes back to
-        where a login starts, and a call that raises, or a read that only a new
-        login undoes (the units' list and the layout view, a value entered in a
+        For a client that polls for its whole lifetime, such as Home Assistant:
+        every call reuses one login, across calls and across time, instead of a
+        login and logout (and two history entries) per poll. Reads work as in
+        shared_session(): between two calls the session goes back to where a
+        login starts, and a call that raises, or a read that only a new login
+        undoes (the units' list and the layout view, a value entered in a
         dialog, service mode), ends the login; the next call logs in again.
 
         The iTM ends a session after 4 to 5 idle minutes. When no request was
@@ -1239,18 +1266,24 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
         token (as release_saved_session does). A login older than max_age is
         replaced as well.
 
-        Writes are allowed inside, only with allow_experimental (ExperimentalError
-        before anything is sent otherwise); the calls that log in by themselves
-        (the user's own settings) stay refused (SharedSessionError). A write
-        takes the same way as outside the block (per-unit lock,
+        Writes are allowed inside; a write not validated on a real iTM yet still
+        needs allow_experimental, as outside the block, and the calls that log in
+        by themselves (the user's own settings) stay refused (SharedSessionError).
+        A write takes the same way as outside the block (per-unit lock,
         min_write_interval, confirm_timeout and confirm_interval) and reads its
         result back in this session, as a write with confirm_in_session does in
         its own: from screens the iTM sends again (the dialog opened anew, a
         panel value the iTM sent again while other icons were shown), never from
         the client's own picks, which the iTM doesn't echo; a pick it doesn't
         send again ends the login instead, so such a write costs one extra login.
-        Writes in a login held for hours are not validated on a real iTM beyond
-        a few rounds yet, hence experimental.
+
+        Validated on one real iTM: reads every minute for two hours matched
+        another account's fresh reads; 20 idle minutes with the keep-alive kept
+        one login; a network drop of 60 to 75 seconds didn't end the session; and
+        unit, zone and menu writes, also writes another account overruled, read
+        back in the kept session matched fresh reads. A restart of the iTM is
+        tested against the simulated iTM only (it recovers as after the idle
+        timeout, which was seen on the real one).
 
         Unlike shared_session(), the block belongs to the client: while it is
         open, every call of this client uses it, from whichever task (they take
@@ -1258,8 +1291,11 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
         it. The session lock is held for the whole block: other clients of this
         iTM and user in the process wait (SessionInUse after their
         other_client_timeout), and the user can't log in elsewhere. Use a
-        dedicated administrator account for it. Leaving the block (also on errors
-        and cancellation) stops the background task and logs out.
+        dedicated administrator account for it. Leaving the block first waits
+        for the background check of a write without confirm still under way
+        (see verify_timeout; after an error or a cancellation in the block it
+        is cancelled instead), then stops the keep-alive task and logs out,
+        also on errors and cancellation.
 
         Args:
         ----
@@ -1288,14 +1324,20 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
             keeper = None
             if keep_alive is not None:
                 keeper = asyncio.create_task(self._keep_alive(block, keep_alive))
+            failed = True
 
-            async def end() -> None:
+            async def close() -> None:
                 block.closed = True
                 self._kept = None
                 await _run_to_completion(self._end_kept(block, keeper))
 
+            async def end() -> None:
+                async with _cleanup(close):
+                    await self._end_watches(cancel=failed)
+
             async with _cleanup(end):
                 yield
+                failed = False
 
     async def _end_kept(
         self, block: _SharedBlock, keeper: asyncio.Task[None] | None
@@ -1497,7 +1539,8 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
 
         The block belongs to the client: other calls of the client join it (and
         take turns), a write among them too, and it ends, with a logout, when the
-        last write in it returns (also on errors and cancellation). A kept or
+        last write in it returns (also on errors and cancellation), or when the
+        background check a write without confirm left in it is done. A kept or
         shared block of the call comes first: inside kept_session() a write uses
         that, and inside shared_session() it is refused as before. With
         confirm_in_session off this does nothing.
@@ -1513,17 +1556,17 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
             block = self._writing = _SharedBlock(self, math.inf)
             block.writing = True
         block.writers += 1
-
-        async def end() -> None:
-            block.writers -= 1
-            if not block.writers:
-                block.closed = True
-                if self._writing is block:
-                    self._writing = None
-                await _run_to_completion(self._end_write(block))
-
-        async with _cleanup(end):
+        async with _cleanup(functools.partial(self._leave_write, block)):
             yield
+
+    async def _leave_write(self, block: _SharedBlock) -> None:
+        """Leave a write block; the last write (or check) in it logs it out."""
+        block.writers -= 1
+        if not block.writers:
+            block.closed = True
+            if self._writing is block:
+                self._writing = None
+            await _run_to_completion(self._end_write(block))
 
     async def _end_write(self, block: _SharedBlock) -> None:
         """Log a write block's session out, then let go of the session lock."""
@@ -1659,20 +1702,13 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
             msg = "the client is read-only"
             raise ReadOnlyError(msg)
         block = self._shared()
-        if block is None or block.writing:
+        if block is None or block.writing or block.kept:
             return
-        if not block.kept:
-            msg = (
-                "a shared session only reads (a change is verified in a fresh "
-                "session); write outside the block"
-            )
-            raise SharedSessionError(msg)
-        if not self.dry_run and not self.allow_experimental:
-            msg = (
-                "a write inside a kept session (a login held for hours): "
-                "not validated on a real iTM yet; pass allow_experimental=True"
-            )
-            raise ExperimentalError(msg)
+        msg = (
+            "a shared session only reads (a change is verified in a fresh "
+            "session); write outside the block"
+        )
+        raise SharedSessionError(msg)
 
     def _require_opt_in(self, *, allowed: bool, flag: str, why: str) -> None:
         """Refuse a risky write unless its opt-in is passed (a dry run is allowed).
@@ -2092,15 +2128,16 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
         The last eleven are offered only by some units (see DIALOG_SETTINGS); one the
         unit doesn't offer is refused before anything in the dialog is clicked. A
         setting the dialog already shows is left as it is (a reset never is) and
-        read until verify_timeout has passed, with or without confirm: when
-        another change on its way moves it away, it is written after all, once,
-        and confirmed (see ItmClient).
+        read until verify_timeout has passed (without confirm in the
+        background): when another change on its way moves it away, it is
+        written after all, once (see ItmClient).
 
         Returns:
         -------
             The unit's settings as read back; as read last when nothing differed
-            (as the dialog showed them in a dry run). None in a dry run (that
-            changes something), when not confirmed, or when nothing was asked.
+            (as the write read them without confirm or in a dry run). None in a
+            dry run (that changes something), when not confirmed and something
+            was sent, or when nothing was asked.
 
         """
         changes: dict[str, Any] = {
@@ -2776,7 +2813,8 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
         """
         later, _, holds = check
         self._check_budget([unit])
-        async with self._unit_lock(unit):
+        async with contextlib.AsyncExitStack() as locks:
+            await locks.enter_async_context(self._unit_lock(unit))
             self._check_budget([unit])
             await self._settle(unit)
             self._check_budget([unit])
@@ -2800,13 +2838,17 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
                     await change(s)
 
             return await self._unchanged(
-                unit, [unit], check, kept, again, shown=shown, confirm=confirm
+                _Left(unit, [unit], [unit], locks),
+                check,
+                kept,
+                again,
+                shown=shown,
+                confirm=confirm,
             )
 
     async def _unchanged(  # noqa: PLR0913  # pylint: disable=too-many-arguments
         self,
-        name: str,
-        units: list[str],
+        left: _Left,
         check: _Check[_T],
         kept: Callable[[_T], bool],
         again: Callable[[_T], Awaitable[None]],
@@ -2816,21 +2858,57 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
     ) -> _T | None:
         """Check what a write left out because the unit showed it; send it after all.
 
+        With confirm the call checks it (_verify) before it returns. Without,
+        it returns at once and a background task (_watch) checks it, holding
+        the unit locks (left.locks: the call's, handed over) and the write
+        block's login until it is done. shown: what the unit showed when
+        nothing was sent; None when the rest was sent, for left.sent, whose
+        check is left to the next write to them without confirm (registered
+        first, so an error or a cancellation keeps it).
+
+        Returns
+        -------
+            With confirm what _verify returns. Without: shown (None when the
+            rest was sent).
+
+        """
+        if self.dry_run:
+            return shown
+        later = check[0]
+        if shown is None and not confirm:
+            self._unconfirmed.update(dict.fromkeys(left.sent, later))
+        verify = functools.partial(
+            self._verify, left, check, kept, again, shown=shown, confirm=confirm
+        )
+        if confirm:
+            return await verify()
+        self._watch(left.name, verify, left.locks.pop_all())
+        return shown
+
+    async def _verify(  # noqa: PLR0913  # pylint: disable=too-many-arguments
+        self,
+        left: _Left,
+        check: _Check[_T],
+        kept: Callable[[_T], bool],
+        again: Callable[[_T], Awaitable[None]],
+        *,
+        shown: _T | None,
+        confirm: bool,
+    ) -> _T | None:
+        """Read what a write left out for verify_timeout; send it after all if it moves.
+
         The iTM shows another client's change only once it reached the unit
         (3-8 s), so what was left out is read every confirm_interval for
         verify_timeout (at most confirm_timeout, at least one read), in the
-        same login and unit locks, with or without confirm. When it moves away
-        (kept fails), again sends it after all, once (counted and budgeted as
-        any write), and later confirms the whole write, also without confirm.
-        shown: what the unit showed when nothing was sent; None when the rest
-        was sent: that part is confirmed after the window (left to the next
-        write to units without confirm, as any write's).
+        write's login and unit locks. When it moves away (kept fails), again
+        sends it after all, once (counted and budgeted as any write); with
+        confirm, later then confirms the whole write; without, that check is
+        left to the next write to left.watched.
 
         Returns
         -------
             The value read last when nothing was sent and nothing moved; the
-            write as confirmed; None without confirm when the rest was sent and
-            nothing moved, or in a dry run that sent something.
+            write as confirmed; None without confirm when something was sent.
 
         Raises
         ------
@@ -2839,30 +2917,29 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
             WriteBudgetExceeded: The write after all is over the budget.
 
         """
-        if self.dry_run:
-            return shown
         later = check[0]
 
         def moved(value: Any) -> bool:
             return not kept(value)
 
-        if shown is None and not confirm:
-            self._unconfirmed.update(dict.fromkeys(units, later))
         checked: tuple[_T | None, Exception | None] = await self._until(
             check[1], moved, min(self.verify_timeout, self.confirm_timeout)
         )
         last, error = checked
         if last is None:
-            msg = f"{name}: could not check what it showed already: {error!r}"
-            raise _not_confirmed(msg, name, None, error) from error
+            msg = f"{left.name}: could not check what it showed already: {error!r}"
+            raise _not_confirmed(msg, left.name, None, error) from error
         if kept(last):
             if shown is not None:
                 return last
             return await later() if confirm else None
         _LOGGER.info(
-            "%s: another change came in after the read; writing after all", name
+            "%s: another change came in after the read; writing after all", left.name
         )
         await again(last)
+        if not confirm:
+            self._unconfirmed.update(dict.fromkeys(left.watched, later))
+            return None
         try:
             result = await later()
         except ItmCommandError:
@@ -2870,6 +2947,78 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
             raise
         self._forget(later)
         return result
+
+    def _watch(
+        self,
+        name: str,
+        run: Callable[[], Awaitable[object]],
+        held: contextlib.AsyncExitStack,
+    ) -> None:
+        """Run a check in the background, holding the unit locks and the write block.
+
+        A write block the call runs in stays open (as one more writer) until
+        the check is done, so the check reads in its login and the block logs
+        out only then.
+        """
+        block = self._shared()
+        if block is not None and block.writing:
+            block.writers += 1
+        else:
+            block = None
+        task = asyncio.create_task(self._watching(name, run, held, block))
+        self._watches.add(task)
+        task.add_done_callback(self._watches.discard)
+
+    async def _watching(
+        self,
+        name: str,
+        run: Callable[[], Awaitable[object]],
+        held: contextlib.AsyncExitStack,
+        block: _SharedBlock | None,
+    ) -> None:
+        """Run a background check; release its unit locks, then leave its write block.
+
+        An error is logged and noted for session_info, never raised: no call
+        waits for it. What it sent stays in _unconfirmed for the next write.
+        """
+        steps = [] if block is None else [functools.partial(self._leave_write, block)]
+        try:
+            async with _cleanup(*steps), held:
+                await run()
+        except Exception as err:  # pylint: disable=broad-exception-caught
+            _LOGGER.warning(
+                "%s: the check of what was left out failed: %s",
+                name,
+                err,
+                exc_info=True,
+            )
+            self._note_error(err)
+
+    async def _end_watches(self, *, cancel: bool) -> None:
+        """Wait until the background checks are done; with cancel, cancel them first.
+
+        Cancelled meanwhile, it still cancels them and waits until they have
+        released their locks and logged out, then raises the cancellation.
+        """
+        while self._watches:
+            tasks = set(self._watches)
+            if cancel:
+                await _run_to_completion(self._stop_watches(tasks))
+                continue
+            try:
+                await asyncio.wait(tasks)
+            except asyncio.CancelledError:
+                await _run_to_completion(self._stop_watches(tasks))
+                raise
+
+    @staticmethod
+    async def _stop_watches(tasks: set[asyncio.Task[None]]) -> None:
+        """Cancel background checks and wait until they are done."""
+        # A task cancelled before its first step would skip its clean-up.
+        await asyncio.sleep(0)
+        for task in tasks:
+            task.cancel()
+        await asyncio.wait(tasks)
 
     # -- whole zones ------------------------------------------------------------------
     @asynccontextmanager
@@ -3040,8 +3189,7 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
                     await write(lacking(last, left))
 
                 return await self._unchanged(
-                    zone,
-                    written,
+                    _Left(zone, written, members, stack),
                     (later, read, holds),
                     kept,
                     again,

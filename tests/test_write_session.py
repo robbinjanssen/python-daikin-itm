@@ -210,14 +210,29 @@ async def test_zone_member_not_taking_the_write_is_caught(
     assert not c._lock.locked()
 
 
+class Gated(FakeClient):
+    """A client whose checks of a write wait until the test opens the gate."""
+
+    def __init__(self, itm: FakeITM, **kw: Any) -> None:
+        """Create the client with its gate closed."""
+        super().__init__(itm, **kw)
+        self.gate = asyncio.Event()
+
+    async def fetch_unit(self, name: str) -> Unit:
+        """Read a unit once the gate is open."""
+        await self.gate.wait()
+        return await super().fetch_unit(name)
+
+
 async def test_other_client_waits_for_the_whole_check(itm: FakeITM) -> None:
     """The session lock is held from the write until its last check has logged out."""
-    c = FakeClient(itm, host="itm.test", confirm_interval=0.01)
+    c = Gated(itm, host="itm.test", confirm_interval=0.01)
     other = FakeClient(itm, host="itm.test", other_client_timeout=0.02)
     write = asyncio.create_task(c.set_setpoint("1:1-04", 22))
     await _wait(lambda: c._writing is not None and c._writing.session is not None)
     with pytest.raises(SessionInUse):
         await other.fetch_units()
+    c.gate.set()
     assert confirmed(await write).setpoint == 22
     assert itm.logins == 1
     assert len(await other.fetch_units()) == 3
@@ -318,12 +333,16 @@ async def test_unconfirmed_write_settles_in_the_next_ones_login(itm: FakeITM) ->
 
 async def test_other_tasks_join_the_block(itm: FakeITM) -> None:
     """A read and a write from other tasks use the write's login meanwhile."""
-    c = FakeClient(itm, confirm_interval=0.01)
+    c = Gated(itm, confirm_interval=0.01)
     outside = contextvars.Context()
     write = asyncio.create_task(c.set_setpoint("1:1-04", 22))
     await _wait(lambda: c._writing is not None and c._writing.session is not None)
     read = asyncio.create_task(c.fetch_units(), context=outside)
     other = asyncio.create_task(c.set_setpoint("1:1-00", 22), context=outside)
+    await _wait(
+        lambda: read.done() and c._writing is not None and c._writing.writers == 2
+    )
+    c.gate.set()
     await asyncio.gather(write, read, other)
     assert len(read.result()) == 3
     assert itm.logins == 1
@@ -394,17 +413,12 @@ async def test_refusal_doesnt_wait_for_another_client(itm: FakeITM) -> None:
     assert itm.logins == 1
 
 
-async def test_kept_session_writes_unchanged(itm: FakeITM) -> None:
-    """Inside kept_session() a write uses the kept login and its opt-in."""
+async def test_kept_session_writes_in_the_kept_login(itm: FakeITM) -> None:
+    """Inside kept_session() a write uses the kept login, without allow_experimental."""
     c = FakeClient(itm, allow_experimental=False)
     async with c.kept_session():
-        with pytest.raises(ExperimentalError, match="kept session"):
-            await c.set_setpoint("1:1-04", 22)
+        assert confirmed(await c.set_setpoint("1:1-04", 22)).setpoint == 22
         assert c._writing is None
-    allowed = FakeClient(itm)
-    async with allowed.kept_session():
-        assert confirmed(await allowed.set_setpoint("1:1-04", 22)).setpoint == 22
-        assert allowed._writing is None
     assert itm.logins == 1
 
 
