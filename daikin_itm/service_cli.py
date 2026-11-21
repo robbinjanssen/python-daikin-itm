@@ -464,7 +464,8 @@ def _add_demand_commands(sub: Any) -> None:
     dm.add_argument(
         "--allow-service-change",
         action="store_true",
-        help="pulse/interlock: needed (installer settings; ITM_SERVICE_PASSWORD)",
+        help="pulse/interlock: needed, a --dry-run too (installer settings; "
+        "ITM_SERVICE_PASSWORD)",
     )
     es = sub.add_parser("energy-saving", help="show, suspend or resume energy saving")
     es.add_argument(
@@ -476,7 +477,7 @@ def _add_demand_commands(sub: Any) -> None:
     es.add_argument(
         "--allow-service-change",
         action="store_true",
-        help="disable: needed (a service write; ITM_SERVICE_PASSWORD)",
+        help="disable: needed, a --dry-run too (a service write; ITM_SERVICE_PASSWORD)",
     )
 
 
@@ -499,7 +500,7 @@ def _add_service_edit_commands(sub: Any) -> None:
     sv.add_argument(
         "--allow-service-change",
         action="store_true",
-        help="needed for run-layout and r32-port (unless --dry-run)",
+        help="needed for run-layout and r32-port (a --dry-run too)",
     )
     lc = sub.add_parser(
         "leakcheck",
@@ -536,13 +537,13 @@ def _add_service_edit_commands(sub: Any) -> None:
     lc.add_argument(
         "--allow-leakage-check",
         action="store_true",
-        help="start/stop: needed; a check cools the whole refrigerant system for "
-        "about 3 hours under maintenance",
+        help="start/stop: needed (a --dry-run too); a check cools the whole "
+        "refrigerant system for about 3 hours under maintenance",
     )
     lc.add_argument(
         "--allow-service-change",
         action="store_true",
-        help="register/schedule/copy: needed (unless --dry-run)",
+        help="register/schedule/copy: needed (a --dry-run too)",
     )
     pw = sub.add_parser(
         "password",
@@ -559,7 +560,7 @@ def _add_service_edit_commands(sub: Any) -> None:
     pw.add_argument(
         "--allow-password-change",
         action="store_true",
-        help="needed (unless --dry-run): a mistake can lock the touch panel",
+        help="needed (a --dry-run too): a mistake can lock the touch panel",
     )
 
 
@@ -591,7 +592,8 @@ def _add_emgstop_command(sub: Any) -> None:
     es.add_argument(
         "--allow-safety-change",
         action="store_true",
-        help="enable/disable/release: needed, they change a safety function",
+        help="enable/disable/release: needed (a --dry-run too), they change a "
+        "safety function",
     )
     es.add_argument("--input", action="append", help="set: an input point (repeat)")
     es.add_argument("--output", action="append", help="set: an output point (repeat)")

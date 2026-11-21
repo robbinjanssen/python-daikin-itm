@@ -126,7 +126,8 @@ def test_list_names_the_reads_without_contacting_the_itm(
         "fetch_energy_navigator[more]",
     } <= names
     assert "fetch_schedule  (one per schedule program, found by fetch_schedules)" in out
-    assert {"fetch_password_settings", "export_setup"} <= set(LEFT_OUT)
+    assert "fetch_password_settings" in LEFT_OUT
+    assert not any(name.startswith(("export_", "run_")) for name in names)
     for name in LEFT_OUT:
         assert name not in names
         assert any(line.startswith(f"not included: {name} ") for line in out)
@@ -147,6 +148,23 @@ def test_plan_covers_the_argument_free_reads(command: str) -> None:
     assert planned == set(argument_free_reads()) - left_out
     assert left_out <= set(argument_free_reads())
     assert {item.source for item in plan if isinstance(item, Derived)} <= planned
+
+
+def test_only_the_allowlisted_reads_are_planned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A coroutine outside the allowlist is never run, however harmless it looks."""
+
+    async def export_anything(self: ItmClient) -> None:
+        raise AssertionError(self)
+
+    monkeypatch.setattr(ItmClient, "export_anything", export_anything, raising=False)
+    monkeypatch.setattr(ItmClient, "run_anything", export_anything, raising=False)
+    reads = argument_free_reads()
+    assert "fetch_info" in reads
+    assert "list_zones" in reads
+    assert all(name.startswith("fetch_") or name == "list_zones" for name in reads)
+    assert not {"export_anything", "run_anything", "export_setup"} & set(reads)
 
 
 def test_no_planned_read_ends_the_shared_session() -> None:

@@ -42,7 +42,16 @@ def test_own_settings_command(
     assert "language en" in out
     assert "time 24h, decimal point, icon colour 1" in out
     monkeypatch.setenv("ITM_NEW_PASSWORD", NEW_PASSWORD)
-    run("--dry-run", "own-settings", "--password", "--time", "12h")
+    with pytest.raises(SystemExit, match="allow_password_change"):
+        run("--dry-run", "own-settings", "--password", "--time", "12h")
+    run(
+        "--dry-run",
+        "own-settings",
+        "--password",
+        "--time",
+        "12h",
+        "--allow-password-change",
+    )
     out = capsys.readouterr().out
     assert "dry run" in out
     assert "own password = ***" in out

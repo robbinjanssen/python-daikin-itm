@@ -64,6 +64,7 @@ from .exceptions import (
     VersionMismatch,
     WriteBudgetExceeded,
     WriteOutcomeUnknown,
+    WritesPaused,
     ZoneNotFound,
 )
 from .exports import ExportsMixin
@@ -397,6 +398,9 @@ class SessionInfo:  # pylint: disable=too-many-instance-attributes
         writing: A write block (confirm_in_session) is open.
         unanswered: The last request of the open login got no answer (the next
             call tries the kept session's token again, or logs in anew).
+        writes_paused: The web UI versions (before, now) of a change that
+            pauses writes (pause_writes_on_version_change) until
+            confirm_web_version(); None when writes aren't paused.
 
     """
 
@@ -409,6 +413,7 @@ class SessionInfo:  # pylint: disable=too-many-instance-attributes
     kept: bool
     writing: bool
     unanswered: bool
+    writes_paused: tuple[str, str] | None = None
 
 
 class _SharedBlock:  # pylint: disable=too-few-public-methods,too-many-instance-attributes
@@ -685,7 +690,7 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
 ):
     """Client for the web interface of a Daikin intelligent Touch Manager."""
 
-    def __init__(  # noqa: PLR0913  # pylint: disable=too-many-arguments,too-many-locals
+    def __init__(  # noqa: PLR0913, PLR0915  # pylint: disable=too-many-arguments,too-many-locals,too-many-statements
         # Keyword-only tuning arguments, part of the public API.
         self,
         host: str,
@@ -708,6 +713,7 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
         on_write: Callable[[str, str], None] | None = None,
         max_writes_per_unit_per_hour: int | None = None,
         max_writes_per_unit_per_day: int | None = None,
+        pause_writes_on_version_change: bool = False,
         verify_timeout: float = 10.0,
     ) -> None:
         """Initialize the client.
@@ -731,7 +737,7 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
                 make the change in `planned` instead of sending it, then cancel.
             allow_experimental: Allow the writes not validated on a real iTM yet
                 (tested against the simulated iTM only); without it they raise
-                ExperimentalError before anything is sent, except in a dry run.
+                ExperimentalError before anything is sent, in a dry run too.
             other_client_timeout: Seconds a call waits while another client in this
                 process uses the session of the same iTM and user, before it raises
                 SessionInUse; None waits without limit. Calls of this client wait
@@ -752,6 +758,16 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
                 (WriteBudgetExceeded, nothing sent) to a unit that had this many
                 writes sent by this client in the last hour; None: no limit.
             max_writes_per_unit_per_day: The same for the last 24 hours.
+            pause_writes_on_version_change: When the iTM reports another web UI
+                version than web_version (after a firmware update), refuse every
+                write (WritesPaused, before its change is sent; a dry run too)
+                until confirm_web_version() is called or the iTM reports the
+                version known before again. Reads keep working. The write
+                after all of a write's check (verify_timeout) is paused too:
+                with confirm it raises, in the background check without
+                confirm nothing is sent and the error is noted in
+                session_info. False: the client adopts the new version and
+                goes on.
             verify_timeout: Seconds a unit or zone write keeps reading the
                 values it left out because the unit showed them already (every
                 confirm_interval, at most confirm_timeout, at least one read):
@@ -807,8 +823,8 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
         # the change, records that request in `planned` instead of sending it, and
         # cancels. Nothing on the iTM changes; the write methods return None.
         self.dry_run = dry_run
-        # Writes not validated on a real iTM yet refuse unless this is set (a dry
-        # run is always allowed); see _experimental.
+        # Writes not validated on a real iTM yet refuse unless this is set, in a
+        # dry run too; see _experimental.
         self.allow_experimental = allow_experimental
         self.other_client_timeout = other_client_timeout
         self.confirm_in_session = confirm_in_session
@@ -826,6 +842,9 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
         self.logout_timeout = 5.0
         # Updated automatically if the iTM reports another one.
         self.web_version = WEB_VERSION
+        self.pause_writes_on_version_change = pause_writes_on_version_change
+        # The versions (before, now) of a change that pauses writes.
+        self._version_change: tuple[str, str] | None = None
         # One session at a time for this client; _session_lock adds the user's.
         self._lock = asyncio.Lock()
         # Since when the calls of this client wait for another client.
@@ -876,7 +895,35 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
             kept=kept,
             writing=writing,
             unanswered=unanswered,
+            writes_paused=self._version_change,
         )
+
+    def confirm_web_version(self) -> None:
+        """Resume writes after a web UI version change paused them.
+
+        Call it once the iTM's new version (WritesPaused, session_info) is known
+        to work with this library. Does nothing when writes aren't paused.
+        """
+        if self._version_change is not None:
+            _LOGGER.info(
+                "writes resume with iTM web UI version %r", self._version_change[1]
+            )
+        self._version_change = None
+
+    def _version_changed(self, old: str, new: str) -> None:
+        if not self.pause_writes_on_version_change:
+            return
+        before = old if self._version_change is None else self._version_change[0]
+        if new == before:
+            _LOGGER.warning("back to web UI version %r: writes resume", new)
+            self._version_change = None
+            return
+        self._version_change = (before, new)
+        _LOGGER.warning("writes are paused until confirm_web_version()")
+
+    def _check_paused(self) -> None:
+        if self._version_change is not None:
+            raise WritesPaused(*self._version_change)
 
     @property
     def writes_sent(self) -> Mapping[str, int]:
@@ -1266,9 +1313,10 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
         token (as release_saved_session does). A login older than max_age is
         replaced as well.
 
-        Writes are allowed inside; a write not validated on a real iTM yet still
-        needs allow_experimental, as outside the block, and the calls that log in
-        by themselves (the user's own settings) stay refused (SharedSessionError).
+        Writes are allowed inside, and their dry runs; a write not validated on a
+        real iTM yet still needs allow_experimental, as outside the block (in a
+        dry run too), and the calls that log in by themselves (the user's own
+        settings) stay refused (SharedSessionError).
         A write takes the same way as outside the block (per-unit lock,
         min_write_interval, confirm_timeout and confirm_interval) and reads its
         result back in this session, as a write with confirm_in_session does in
@@ -1701,6 +1749,7 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
         if self.read_only:
             msg = "the client is read-only"
             raise ReadOnlyError(msg)
+        self._check_paused()
         block = self._shared()
         if block is None or block.writing or block.kept:
             return
@@ -1711,25 +1760,45 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
         raise SharedSessionError(msg)
 
     def _require_opt_in(self, *, allowed: bool, flag: str, why: str) -> None:
-        """Refuse a risky write unless its opt-in is passed (a dry run is allowed).
+        """Refuse a risky write unless its opt-in is passed, a dry run too.
 
         Raises
         ------
             ReadOnlyError: The client is read-only.
-            ItmCommandError: The opt-in is off and this is no dry run.
+            ItmCommandError: The opt-in is off.
 
         """
         self._writable()
-        if not self.dry_run and not allowed:
-            msg = f"{why}; use a dry run, or pass {flag}=True"
+        if not allowed:
+            msg = f"{why}; pass {flag}=True"
             raise ItmCommandError(msg)
+
+    def _job(self, what: str) -> None:
+        """Refuse a call that makes the iTM run a job or produce a file, when read only.
+
+        Called at the top of every export, before anything is sent; the backup
+        is a write.
+
+        Args:
+        ----
+            what: What the call makes the iTM do, e.g. "export the history".
+
+        Raises:
+        ------
+            ReadOnlyError: The client is read-only.
+
+        """
+        if self.read_only:
+            msg = f"{what}: the iTM runs a job for it; the client is read-only"
+            raise ReadOnlyError(msg)
 
     def _experimental(self, what: str) -> None:
         """Refuse a write not validated on a real iTM yet, unless allowed.
 
         Called at the top of every such write, before anything is sent. A
-        read-only client refuses first (ReadOnlyError); a dry run is always
-        allowed, so its plan can be seen without the opt-in.
+        read-only client refuses first (ReadOnlyError). A dry run needs the
+        opt-in too: it still sends the steps before the change (row selections,
+        sub-screens, number entries), which are not validated either.
 
         Args:
         ----
@@ -1738,11 +1807,11 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
         Raises:
         ------
             ReadOnlyError: The client is read-only.
-            ExperimentalError: allow_experimental is off and this is no dry run.
+            ExperimentalError: allow_experimental is off.
 
         """
         self._writable()
-        if self.dry_run or self.allow_experimental:
+        if self.allow_experimental:
             return
         msg = (
             f"{what}: not validated on a real iTM yet; pass allow_experimental=True "
@@ -2524,8 +2593,8 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
 
         A wrong address, mask or gateway takes the iTM off the network, and only
         someone at the device can put it back. So unless allow_network_change is
-        True, only a dry run is allowed; a dry run opens each input to check it and
-        cancels it, without entering anything.
+        True, it is refused, a dry run too; a dry run opens each input to check it
+        and cancels it, without entering anything.
 
         Args:
         ----
@@ -2536,7 +2605,7 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
             gateway: The default gateway.
             dns_primary: The primary DNS server.
             dns_secondary: The secondary DNS server.
-            allow_network_change: Really change it (not just a dry run).
+            allow_network_change: Really change it; needed for a dry run too.
 
         Returns:
         -------
@@ -2568,11 +2637,8 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
                 except ValueError as err:
                     msg = f"{key}: {value!r} is not an IPv4 address"
                     raise ItmCommandError(msg) from err
-        if not self.dry_run and not allow_network_change:
-            msg = (
-                "a network change can strand the iTM; use a dry run, or pass "
-                "allow_network_change=True"
-            )
+        if not allow_network_change:
+            msg = "a network change can strand the iTM; pass allow_network_change=True"
             raise ItmCommandError(msg)
         await self._system_write(lambda s: s.set_network(changes))
         if self.dry_run:
@@ -2915,6 +2981,8 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
             NotConfirmed: No read got an answer, or the write after all or
                 what was sent doesn't show.
             WriteBudgetExceeded: The write after all is over the budget.
+            WritesPaused: Writes were paused (a web UI version change) before
+                the write after all; nothing is sent.
 
         """
         later = check[0]
@@ -2936,6 +3004,7 @@ class ItmClient(  # pylint: disable=too-many-instance-attributes,too-many-public
         _LOGGER.info(
             "%s: another change came in after the read; writing after all", left.name
         )
+        self._check_paused()
         await again(last)
         if not confirm:
             self._unconfirmed.update(dict.fromkeys(left.watched, later))

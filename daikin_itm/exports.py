@@ -36,7 +36,7 @@ from ._screens import close as _close
 from ._util import cleanup as _cleanup
 from ._util import ignore as _ignore
 from ._util import one_login
-from .exceptions import ItmCommandError
+from .exceptions import ItmCommandError, ReadOnlyError
 from .menu import MenuScreen
 from .protocol import DataType, EventType
 from .system import MB_ENERGY_EXPORT, MB_PPD, PpdSettings, ppd_from_screen
@@ -177,8 +177,12 @@ async def download(  # pylint: disable=too-many-locals
     ------
         ItmCommandError: The iTM started no job, didn't finish it in time, or the
             file could not be fetched.
+        ReadOnlyError: The client is read-only.
 
     """
+    if s.client.read_only:
+        msg = "an export makes the iTM run a job; the client is read-only"
+        raise ReadOnlyError(msg)
     reply = await s.click(screen, button, "export")
     # The history output asks first ("history output, is this correct?"): Yes.
     confirms = [
@@ -527,7 +531,12 @@ class ExportsMixin(ClientCore):
         -------
             The file's name and contents.
 
+        Raises:
+        ------
+            ReadOnlyError: The client is read-only (nothing is sent).
+
         """
+        self._job("export the history")
         return await self._in_session(
             lambda s: export_history(s, start, end, self._get_bytes)
         )
@@ -543,7 +552,12 @@ class ExportsMixin(ClientCore):
         -------
             The file's name and contents.
 
+        Raises:
+        ------
+            ReadOnlyError: The client is read-only (nothing is sent).
+
         """
+        self._job("export the energy data")
         return await self._in_session(
             lambda s: export_energy_data(s, period, self._get_bytes)
         )
@@ -560,7 +574,12 @@ class ExportsMixin(ClientCore):
         -------
             The file's name and contents.
 
+        Raises:
+        ------
+            ReadOnlyError: The client is read-only (nothing is sent).
+
         """
+        self._job("export the point list")
         return await self._in_session(
             lambda s: export_point_list(s, start, end, self._get_bytes)
         )
@@ -574,7 +593,12 @@ class ExportsMixin(ClientCore):
         -------
             The file's name and contents.
 
+        Raises
+        ------
+            ReadOnlyError: The client is read-only (nothing is sent).
+
         """
+        self._job("export the setup")
         return await self._in_session(lambda s: export_setup(s, self._get_bytes))
 
     async def run_backup(self) -> Download | None:

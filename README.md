@@ -43,6 +43,30 @@ pip install python-daikin-itm
 
 Changes in behaviour since the previous release:
 
+- **A dry run needs the same opt-in as the write.** A dry run of an experimental
+  write, or of a write behind its own allowance (`allow_service_change`,
+  `allow_network_change`, `allow_remote_change`, `allow_restart`,
+  `allow_leakage_check`, `allow_password_change`, `allow_safety_change`,
+  `allow_send`), now raises the same `ExperimentalError` or `ItmCommandError`
+  as the write, before anything is sent. A dry run still sends the steps before
+  the change (row selections, sub-screens, number entries, a service login), and
+  those are not validated either. On the command line `itm --dry-run` on such a
+  command needs `--experimental` or the `--allow-...` flag too. A dry run of a
+  validated write without an allowance needs nothing, inside `kept_session()`
+  as well (writes there need no opt-in of their own).
+- **`read_only` refuses the exports.** `export_history`, `export_energy_data`,
+  `export_point_list`, `export_setup`, `export_leakage_check_results` and
+  `fetch_leakage_check_results` make the iTM run a job and produce a file; a
+  read-only client (`itm --read-only`) now raises `ReadOnlyError` before
+  anything is sent, as it already did for `run_backup`. `itm check` takes its
+  reads from an allowlist (`fetch_*` and `list_zones`), so it never calls one.
+- **New, off by default: `pause_writes_on_version_change`.** After the iTM
+  reports another web UI version, every write raises `WritesPaused` (a dry run
+  too) before its change is sent, until `confirm_web_version()` or until the
+  iTM reports the version known before again; reads keep working. A write
+  after all of a write's check is paused as well: with `confirm=False` the
+  background check sends nothing and notes the error in `session_info`. See
+  [Web UI version](#web-ui-version).
 - **A write never sends a value the unit shows already, and never loses
   one.** It leaves out what the unit shows (a zone write: the units that show
   it; a zone whose units lack different things is now written unit by unit),
@@ -266,21 +290,22 @@ The system screens have writes too, again with a dry run and a read-back:
 | `create_interlock(name)`, `rename_interlock(name, new_name)`, `copy_interlock(name, new_name)`, `set_interlock_enabled(name, *, enabled)`, `delete_interlock(name)`, `set_interlock_setup(name, *, inputs=None, outputs=(), conditions=())` | Interlock programs; the setup of a disabled program: its input points, per input point an `InterlockConditionSpec` (state, mode, comparison, constant or management point, offset, hysteresis, multistate value) and per output tab an `InterlockOutputSpec` (condition, output points, interval, and per output point an `InterlockActionSpec`: power, mode, setpoint, locks). Not seen on a real iTM. |
 | `set_demand_target(power)`, `set_demand_forced_level(level)`, `set_demand_level_setup(control, *, group=None, start_level=None, levels=None, upper_cool=None, lower_heat=None)`, `set_demand_group(control, group, *, members=None, condition=None, resume=None)` | Demand control's target power, forced level (saved when picked), a control's level setup per group and a group's members, condition and resume, each read back. Tested against the simulated iTM only. |
 | `suspend_energy_saving(*, suspend=True)` | Suspends energy saving while it is active, or resumes it (`suspend=False`) while suspended; read back through the main menu bar's indicator. Tested against the simulated iTM only. |
-| `set_web_server_port(port, *, allow_network_change=False)`, `set_remote_management(*, connect, allow_remote_change=False)` | Guarded like `set_network`: a dry run unless explicitly allowed. |
+| `set_web_server_port(port, *, allow_network_change=False)`, `set_remote_management(*, connect, allow_remote_change=False)` | Guarded like `set_network`: refused unless explicitly allowed, a dry run too. |
 | `copy_schedule(...)`, `copy_schedule_day(...)`, `clear_schedule_day(...)`, `copy_schedule_event(...)`, `copy_schedule_calendar(...)` | Copies of programs, days, events and calendars, and clearing a day. |
 | `fetch_ppd(*, start=None, end=None, calculation_day=None)`, `fetch_ppd_advanced()`, `set_ppd_weekday(...)` | Power proportional distribution (needs the iTM's PPD licence for results). |
 | `export_history(start, end)`, `export_energy_data(period)`, `export_point_list(start, end)`, `export_setup()`, `run_backup()` | The iTM's exports, returned as `Download(name, data)`; a real iTM delivers the energy data and the point list as ZIP archives (validated). The history comes as a ZIP archive: Daikin's Windows CSV converter, the raw history (tab-separated text) and the iTM's setup data, including an authentication file, so treat it as sensitive. The iTM serves the file without a session token while it exists, so the library fetches it at once and tells the iTM it is done. `parse_history_export(data)` reads a history archive's records (`HistoryRecord`: time in UTC, event, source, point or user, value) in memory, opening only the history file and the converter settings; codes not seen yet are kept as numbers. `export_setup()` downloads the iTM's configuration (sensitive; validated on a real iTM). `run_backup()` runs the device's backup job (a write: refused by `read_only`, planned in a dry run) and returns the file if the iTM offers one; it follows the web UI's code and is tested against the simulated iTM only. |
 
 The installer's service screens sit behind a service login (the menu's four hidden
 corner buttons, then the service password, which is not a web user's). The library
-reads them; the few writes are a dry run unless `allow_service_change=True`:
+reads them; the few writes, and their dry runs, are refused unless
+`allow_service_change=True`:
 
 | Method | Reads |
 | :----- | :---- |
 | `fetch_service_settings(password)` | Time zone, changeover option per unit, contact, R32 alarm settings, central monitoring, the number of licence keys, dealer options and the energy save mode (`ServiceSettings`). The password is sent once, never stored or logged. |
 | `fetch_point_registrations(password, *, details=False)` | The management point registration (`PointRegistration`: type, name, address and info as listed); with details each point's attributes screen (`PointAttributes`: its label and text fields), opened with Edit and left with Cancel. The list is left with Cancel, its discard confirmation answered with Yes; nothing is added, deleted, loaded, scanned, checked or saved. |
 | `fetch_demand_service_settings(password)` | The power limit control setup the service tab opens (`DemandServiceSettings`: the demand pulse setup or the interlock's input ports) and the ports its port picker offers. |
-| `set_demand_pulse_setup(password, *, input_port1=None, input_port2=None, pulse_coefficient=None, sync_external=None, return_value=None, cutoff_value=None, allow_service_change=False)`, `set_demand_interlock_ports(password, ports, *, allow_service_change=False)`, `disable_energy_saving(password, *, allow_service_change=False)` | Service writes: a dry run unless `allow_service_change=True`, refused by `read_only`, read back. A port `""` clears it. Tested against the simulated iTM only. |
+| `set_demand_pulse_setup(password, *, input_port1=None, input_port2=None, pulse_coefficient=None, sync_external=None, return_value=None, cutoff_value=None, allow_service_change=False)`, `set_demand_interlock_ports(password, ports, *, allow_service_change=False)`, `disable_energy_saving(password, *, allow_service_change=False)` | Service writes: refused unless `allow_service_change=True` (a dry run too), refused by `read_only`, read back. A port `""` clears it. Tested against the simulated iTM only. |
 | `fetch_leakage_check(password, *, details=False)`, `fetch_leakage_check_registration(password, outdoor)`, `fetch_leakage_check_schedule(password, outdoor)` | The leakage check's outdoor units (`LeakageOutdoorUnit`: address, name, type, indoor units, charge, schedule as listed); with details per outdoor unit its registered and unregistered indoor units (`LeakageRegistration`) and its four schedule programs (`LeakageCheckSchedule`, `LeakageCheckProgram`: activation, date and time as shown). Outdoor units are named by name or address. |
 | `export_leakage_check_results(password)`, `fetch_leakage_check_results(password)` | The results file through the export download (`Download`), or parsed (`LeakageCheckResults`: per outdoor unit its check dates and leakage amounts; `last(name)`). |
 | `set_leakage_check_indoor_units(password, outdoor, indoor_units, *, allow_service_change=False)`, `set_leakage_check_schedule(password, outdoor, program, *, activation=None, day=None, at=None, allow_service_change=False)`, `copy_leakage_check_schedule(password, outdoor, targets, *, allow_service_change=False)` | Writes: the indoor units of an outdoor unit's refrigerant system, one schedule program (1-4), the schedule copied to other outdoor units. Read back after a new login (the service login ends the session). |
@@ -441,13 +466,14 @@ The other constructor arguments are keyword-only:
 | `confirm_timeout` | `30.0` | Seconds to wait for a read to show a change. |
 | `confirm_interval` | `2.0` | Seconds between those reads. |
 | `timeout` | `30.0` | Timeout of each HTTP request in seconds. |
-| `read_only` | `False` | Refuse every write with `ReadOnlyError` before anything is sent, for exploring or monitoring an iTM without any risk of changing it. |
+| `read_only` | `False` | Refuse every write, export and the backup with `ReadOnlyError` before anything is sent, for exploring or monitoring an iTM without any risk of changing it. |
 | `allow_experimental` | `False` | Allow the writes not validated on a real iTM yet, see [Experimental functions](#experimental-functions). |
 | `other_client_timeout` | `60.0` | Seconds a call waits while another client in the same process uses the session of the same iTM and user, before it raises `SessionInUse`; `None` waits without limit. Counted from when the client began to wait, so its calls queued meanwhile fail together. See [Sessions](#sessions). |
 | `confirm_in_session` | `True` | Check a write in the login that made it: the write and the reads that confirm it take one login instead of one each. `False` logs in for every one of those reads. See [Writes and logins](#writes-and-logins). |
 | `on_write` | `None` | Called as `on_write(unit, what)` each time a unit or zone write sent its change (a zone write through the zone's panel once for every point of the zone, one written unit by unit once for each unit written; `what` is what was asked, such as `"setpoint 22"`), not for a write that found nothing to change or a dry run. An error it raises is logged. See [Write budget](#write-budget). |
 | `max_writes_per_unit_per_hour` | `None` | Refuse a unit or zone write to a unit that had this many writes sent by this client in the last hour (`WriteBudgetExceeded`, nothing sent); `None`: no limit. See [Write budget](#write-budget). |
 | `max_writes_per_unit_per_day` | `None` | The same for the last 24 hours. |
+| `pause_writes_on_version_change` | `False` | Refuse every write with `WritesPaused` after the iTM reported another web UI version, until `confirm_web_version()`. See [Web UI version](#web-ui-version). |
 | `verify_timeout` | `10.0` | Seconds a write that left out what the unit showed already keeps reading it (at most `confirm_timeout`): with `confirm=True` before it returns, with `confirm=False` in the background after it returned at once; a value that moves away meanwhile is written after all, once. See [Writes that change nothing](#writes-that-change-nothing). |
 
 A few settings are attributes, which may be changed on a client at any time:
@@ -458,7 +484,7 @@ A few settings are attributes, which may be changed on a client at any time:
 | `logout_timeout` | `5.0` | Seconds that logout may take. |
 | `progress_timeout` | `30.0` | Seconds a long list (the history, energy data) may take to load behind the iTM's progress dialog; the history's load is cancelled after it. |
 | `progress_interval` | `0.5` | Seconds between the progress requests meanwhile. |
-| `session_info` | | Read only: what the client knows about its login, for diagnostics, without a request: a `SessionInfo` with `logged_in`, `since`, `logins`, `last_poll`, `last_error` (and `last_error_at`; also an error of a write's background check, see [Writes that change nothing](#writes-that-change-nothing)), `kept`, `writing` and `unanswered`. Holds no token. |
+| `session_info` | | Read only: what the client knows about its login, for diagnostics, without a request: a `SessionInfo` with `logged_in`, `since`, `logins`, `last_poll`, `last_error` (and `last_error_at`; also an error of a write's background check, see [Writes that change nothing](#writes-that-change-nothing)), `kept`, `writing`, `unanswered`, and `writes_paused` (the web UI versions, before and now, while writes are paused; see [Web UI version](#web-ui-version)). Holds no token. |
 | `writes_sent` | | Read only: the changes this client sent to each unit since it was created, by unit name (a read-only mapping). See [Write budget](#write-budget). |
 | `on_write`, `max_writes_per_unit_per_hour`, `max_writes_per_unit_per_day` | constructor | As the constructor arguments. |
 
@@ -633,8 +659,9 @@ that login meanwhile, and the login ends once the task is done; a
 `kept_session()` it uses the kept login). A write after all is not confirmed in
 the background: the next write to the unit checks it first, as after any
 `confirm=False` write. An error in the task (no read gets an answer, a spent
-budget, a lost reply) is logged and noted in `session_info.last_error`, never
-raised into another call; a part sent stays for the next write to check.
+budget, writes paused, a lost reply) is logged and noted in
+`session_info.last_error`, never raised into another call; a part sent stays for
+the next write to check.
 `close()` (and leaving `async with ItmClient`) cancels a task still running and
 logs its login out before it returns; leaving `kept_session()` waits for it
 (and cancels it when the block raised or was cancelled), then logs out. What a
@@ -850,7 +877,9 @@ tested against the simulated iTM only.
   call after that logs in again.
 - **Writes** are allowed inside the block; a write not validated on a real iTM
   yet (see [Experimental functions](#experimental-functions)) still needs
-  `allow_experimental=True`, as outside. They take the same way as outside
+  `allow_experimental=True`, as outside, in a dry run too, and a write behind
+  its own allowance needs that as well; a dry run of any other write needs no
+  opt-in. They take the same way as outside
   (the unit lock, `min_write_interval`, `confirm_timeout` and
   `confirm_interval`) and read their result back in this session, the way every write reads back in its own login (see
   [Writes and logins](#writes-and-logins)): only from what the iTM sent again,
@@ -920,12 +949,33 @@ output settings in `set_unit_settings`.
 
 They refuse with `ExperimentalError` before anything is sent, unless the client
 is created with `ItmClient(..., allow_experimental=True)` (`itm --experimental`
-on the command line). A dry run (`dry_run=True`, `itm --dry-run`) is always
-allowed, so you can see what would be sent without the opt-in. The other guards
-still apply: `read_only` refuses first, and writes that need their own
-allowance (`allow_network_change`, `allow_leakage_check`,
+on the command line). A dry run (`dry_run=True`, `itm --dry-run`) needs the
+opt-in too: it still sends the steps before the change, which are not validated
+either. The other guards still apply: `read_only` refuses first, and writes
+that need their own allowance (`allow_network_change`, `allow_leakage_check`,
 `allow_service_change`, `allow_safety_change`, `allow_send`, ...) need it as
-well. Reads are never guarded.
+well, in a dry run too. Reads are never guarded.
+
+### Web UI version
+
+The login sends the web UI's version string (`client.web_version`, the one this
+library was built against unless set). After a firmware update the iTM asks for
+its new one; the client adopts it, logs a warning and goes on. The part IDs the
+library clicks may have changed with it. With
+`ItmClient(..., pause_writes_on_version_change=True)` every write after such a
+change raises `WritesPaused` before its change is sent (a dry run too; the
+write whose own login found the change stops before its change), while reads
+keep working, until `client.confirm_web_version()` is called or the iTM
+reports the version known before again. To check a
+version the caller knew before (stored at setup, for example), set
+`client.web_version` to it before the first call: the same version is no
+change. `session_info.writes_paused` holds the versions (before, now) while
+writes are paused, for a repair notice. The check of a write that left out
+what the unit showed already (see
+[Writes that change nothing](#writes-that-change-nothing)) writes nothing after
+all while writes are paused: with `confirm=True` the call raises
+`WritesPaused`, without it the background check ends and notes it in
+`session_info.last_error`.
 
 ### Exceptions
 
@@ -938,7 +988,8 @@ well. Reads are never guarded.
 | `SessionEnded` | The iTM ended the session (it answered with a LOGOUT update), e.g. because the token was stale. |
 | `VersionMismatch` | The iTM expects another web UI version string (subclass of `SessionEnded`); carries it in `.version`. |
 | `ItmCommandError` | The iTM answered a command with a dialog, the UI was not as expected, or a change was not confirmed in time. |
-| `ReadOnlyError` | A write was asked of a client created with `read_only=True` (subclass of `ItmCommandError`); nothing was sent. |
+| `ReadOnlyError` | A write, an export or the backup was asked of a client created with `read_only=True` (subclass of `ItmCommandError`); nothing was sent. |
+| `WritesPaused` | A write was asked after the iTM's web UI version changed, by a client created with `pause_writes_on_version_change=True` (subclass of `ItmCommandError`); `.old_version` and `.new_version` name both. Nothing was changed. See [Web UI version](#web-ui-version). |
 | `SharedSessionError` | A write, or a call that logs in by itself, was asked inside a `shared_session()` block, or a call that logs in by itself inside a `kept_session()` block (subclass of `ItmCommandError`); nothing was sent. |
 | `ExperimentalError` | A write not validated on a real iTM yet was asked without `allow_experimental=True`; nothing was sent. See [Experimental functions](#experimental-functions). |
 | `UnitStopped` | A setpoint for a stopped unit or zone, which the iTM would ignore (subclass of `ItmCommandError`); `.name` names it. The change was not sent. |
@@ -1010,7 +1061,8 @@ not after a timeout.
   ([Writes that change nothing](#writes-that-change-nothing)) and can cap writes
   per unit as a guard against a loop ([Write budget](#write-budget)).
 - If the iTM's web UI version changes after a firmware update, the client adopts
-  the version the iTM reports and logs a warning.
+  the version the iTM reports and logs a warning (see
+  [Web UI version](#web-ui-version)).
 
 ## Security notes
 
@@ -1081,7 +1133,7 @@ itm info                  # firmware version, region settings and clock
 itm config                # everything from the menu in one session
 itm system --only network,hardware  # system settings; leave out --only for all
 itm energy --only budget,rules  # the energy navigator, read only
-itm --dry-run energy-edit planned --ratio 5 --month 01/2026=1000  # plan a change
+itm --dry-run --experimental energy-edit planned --ratio 5 --month 01/2026=1000  # plan an experimental change
 itm --dry-run energy-edit rule-day "Rule A" --day monday --range 08:00-18:00/cool=26
 itm changeover --details  # the auto changeover groups
 itm setback / overtime / emgstop / schedules
@@ -1159,7 +1211,7 @@ itm export setup --out setup.bin --force   # replace an existing file (never thr
 itm backup                       # run the device's backup job
 itm zone-members "Zone A" --order AC2 AC1   # put these members first
 itm --trace trace.jsonl status   # record requests (numbers only) and replies (no token; see below)
-itm --read-only status    # --read-only refuses every write before it is sent
+itm --read-only status    # --read-only refuses every write and export before it is sent
 itm check shared-session  # read-only: each read alone and in a shared session, same or different
 itm check reads           # read-only: what an account may read, per read
 itm setpoint 1:1-04 21    # each write returns once the unit shows the change
@@ -1203,7 +1255,8 @@ per indoor unit (`fetch_unit_settings[1]`, ...), numbered because names are not
 printed. The demand control and energy navigator reads are in it, the latter
 twice (`[more]` opens the extra screens too). Left out of both are the reads that
 press a menu button that starts something: `fetch_password_settings` (never read
-on a real iTM yet) and `export_setup` (starts the export job).
+on a real iTM yet). The list takes only `fetch_*` and `list_zones`, so an export,
+the backup or another job is never in it (and `read_only` refuses those anyway).
 Both also leave out `fetch_analog_values`, which reads only a zone holding
 nothing but analog inputs. `shared-session`
 also leaves out what can't run in a block: `fetch_layout` (ends the shared

@@ -71,6 +71,7 @@ from .exceptions import (
     VersionMismatch,
     WriteBudgetExceeded,
     WriteOutcomeUnknown,
+    WritesPaused,
     ZoneNotFound,
 )
 from .history_export import (
@@ -301,6 +302,7 @@ __all__ = [
     "WebUserScreens",
     "WriteBudgetExceeded",
     "WriteOutcomeUnknown",
+    "WritesPaused",
     "ZoneAttributes",
     "ZoneInfo",
     "ZoneNotFound",

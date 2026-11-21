@@ -500,6 +500,7 @@ class _Session(
                 e.version,
                 WEB_VERSION,
             )
+            self._client._version_changed(version, e.version)  # noqa: SLF001  # pylint: disable=protected-access
             self._client.web_version = e.version
             self.token = NO_TOKEN
             await self._init(e.version)
@@ -758,6 +759,7 @@ class _Session(
         if self._client.read_only:
             msg = "the client is read-only"
             raise ReadOnlyError(msg)
+        self._client._check_paused()  # noqa: SLF001  # pylint: disable=protected-access
         if self.shared and not (self.kept or self.writing):
             msg = "a shared session only reads; write outside the block"
             raise SharedSessionError(msg)

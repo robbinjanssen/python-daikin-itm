@@ -409,12 +409,27 @@ async def test_session_of_the_block_writes_without_the_opt_in(itm: FakeITM) -> N
     assert any(r["screen"] == 4 and r["part"] == 11 for r in itm.requests)
 
 
+async def test_dry_run_in_the_block_without_the_opt_in(itm: FakeITM) -> None:
+    """A dry run of a validated write inside needs no allow_experimental either."""
+    dry = FakeClient(itm, allow_experimental=False, dry_run=True)
+    async with dry.kept_session():
+        assert await dry.set_setpoint("1:1-04", 21) is None
+    assert dry.planned
+    assert itm.units[1].setpoint == 23
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
 @pytest.mark.parametrize(("method", "args", "kwargs"), GUARDED)
 async def test_experimental_write_needs_the_opt_in(
-    itm: FakeITM, method: str, args: tuple[Any, ...], kwargs: dict[str, Any]
+    itm: FakeITM,
+    method: str,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    *,
+    dry_run: bool,
 ) -> None:
     """A write not validated yet is still refused inside without the opt-in, unsent."""
-    c = FakeClient(itm, allow_experimental=False)
+    c = FakeClient(itm, allow_experimental=False, dry_run=dry_run)
     async with c.kept_session():
         await c.fetch_indicators()
         sent = len(itm.requests)

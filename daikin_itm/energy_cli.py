@@ -365,12 +365,14 @@ def add_energy_commands(sub: Any) -> None:
     ee.add_argument(
         "--allow-service-change",
         action="store_true",
-        help="room-temp/collection-start/conversion: really change it",
+        help="room-temp/collection-start/conversion: really change it (needed "
+        "for a --dry-run too)",
     )
     ee.add_argument(
         "--allow-restart",
         action="store_true",
-        help="room-temp/collection-start/conversion: saving restarts the iTM",
+        help="room-temp/collection-start/conversion: saving restarts the iTM "
+        "(needed for a --dry-run too)",
     )
     ee.add_argument(
         "name", nargs="?", help="the energy type or group, or the rule (rule-*)"

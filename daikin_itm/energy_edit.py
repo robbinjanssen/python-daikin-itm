@@ -1246,7 +1246,7 @@ class EnergyMixin(ClientCore):
         """Set a point's room temperature source for the energy navigator (3221).
 
         Behind the service login; refused unless allow_service_change and
-        allow_restart (or a dry run): saving restarts the iTM, and the read-back
+        allow_restart (a dry run too): saving restarts the iTM, and the read-back
         waits until it is back. The password is sent once, never stored or logged.
 
         Args:
@@ -1294,7 +1294,7 @@ class EnergyMixin(ClientCore):
         """Set the month the energy navigator starts collecting data (3223).
 
         Behind the service login; refused unless allow_service_change and
-        allow_restart (or a dry run): saving restarts the iTM, and the read-back
+        allow_restart (a dry run too): saving restarts the iTM, and the read-back
         waits until it is back.
 
         Args:
@@ -1334,7 +1334,7 @@ class EnergyMixin(ClientCore):
         """Change the energy conversion's name and unit texts (3224).
 
         Behind the service login; refused unless allow_service_change and
-        allow_restart (or a dry run): saving restarts the iTM, and the read-back
+        allow_restart (a dry run too): saving restarts the iTM, and the read-back
         waits until it is back.
 
         Args:

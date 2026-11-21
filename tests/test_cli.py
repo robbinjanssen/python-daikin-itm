@@ -1090,7 +1090,11 @@ def test_network_command(itm: FakeITM, capsys: pytest.CaptureFixture[str]) -> No
     assert "network: intelligent Touch Manager, host localhost" in (
         capsys.readouterr().out
     )
-    run("--dry-run", "network", "--dns2", "8.8.4.4")
+    sent = len(itm.requests)
+    with pytest.raises(SystemExit, match="allow_network_change"):
+        run("--dry-run", "network", "--dns2", "8.8.4.4")
+    assert len(itm.requests) == sent
+    run("--dry-run", "network", "--dns2", "8.8.4.4", "--allow-network-change")
     assert "network dns_secondary = 8.8.4.4" in capsys.readouterr().out
     with pytest.raises(SystemExit):
         run("network", "--dns2", "8.8.4.4")

@@ -1332,13 +1332,14 @@ class DemandMixin(ClientCore):
         if self.read_only:
             msg = "the client is read-only"
             raise ReadOnlyError(msg)
+        self._check_paused()
 
     def _demand_service_guard(self, *, allowed: bool) -> None:
-        """Refuse a service write when read only, or unless allowed (or a dry run)."""
+        """Refuse a service write when read only, or unless allowed (a dry run too)."""
         self._demand_writable()
-        if not self.dry_run and not allowed:
+        if not allowed:
             msg = (
-                "this changes the installer's service settings; use a dry run, or "
+                "this changes the installer's service settings; "
                 "pass allow_service_change=True"
             )
             raise ItmCommandError(msg)
@@ -1557,7 +1558,7 @@ class DemandMixin(ClientCore):
         Args:
         ----
             password: The service password.
-            allow_service_change: Needed unless this is a dry run.
+            allow_service_change: Needed, also for a dry run.
 
         Returns:
         -------
@@ -1622,7 +1623,7 @@ class DemandMixin(ClientCore):
             sync_external: Synchronise on an external signal (else the period).
             return_value: The return value.
             cutoff_value: The cut-off value.
-            allow_service_change: Needed unless this is a dry run.
+            allow_service_change: Needed, also for a dry run.
 
         Returns:
         -------
@@ -1662,7 +1663,7 @@ class DemandMixin(ClientCore):
         ----
             password: The service password.
             ports: Port number (1-3) -> a port as 1514 lists it, or "" to clear it.
-            allow_service_change: Needed unless this is a dry run.
+            allow_service_change: Needed, also for a dry run.
 
         Returns:
         -------

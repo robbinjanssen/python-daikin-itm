@@ -70,7 +70,8 @@ daikin_itm/
   cli.py              the itm command: parsing, sessions, the unit commands
   cli_common.py       output and argument helpers shared by the CLI modules
   check_cli.py        itm check shared-session and itm check reads: read-only checks
-                      (the list of reads comes from ItmClient by introspection)
+                      (the list of reads: ItmClient's fetch_* and list_zones, an
+                      allowlist found by introspection)
   schedule_cli.py     schedules; energy_cli.py energy navigator, PPD, exports;
   system_cli.py       system, users, zones, region and clock; service_cli.py the
                       installer's service commands, demand, emergency stop
@@ -222,11 +223,11 @@ changing it.
     or another error: a new login, after `_release_saved_session`. A call that
     raises half way ends the login as in a shared session. `max_seconds` is the
     block's `max_age` (logged at INFO).
-  - Writes are allowed (a write not validated yet still needs
-    `allow_experimental`, through `_experimental()`); `_own_session()` stays
-    refused. They take the usual paths and read back in the kept session,
-    never from a pick: `UIState` marks the values the client set itself
-    (`select_locally`, `set_check`) until the iTM
+  - Writes are allowed, and their dry runs (a write not validated yet still
+    needs `allow_experimental`, through `_experimental()`, a dry run of it
+    too); `_own_session()` stays refused. They take the usual paths and read
+    back in the kept session, never from a pick: `UIState` marks the values the
+    client set itself (`select_locally`, `set_check`) until the iTM
     sends that part or closes its screen (`picked()`). Showing another point
     does not clear a mark: the iTM sends a part only when the new point's value
     differs from what it takes the client to show, and whether that is the pick
@@ -463,11 +464,17 @@ changing it.
   is sent: the public write methods check it (`_writable()`, first thing, also
   before a read the write needs), and so do the session's commit, panel picks
   and the settings dialog's OK. Keep that guard on any new write; a shared
-  session refuses writes in the same place.
+  session refuses writes in the same place. It refuses everything that makes
+  the iTM run a job or produce a file too: the exports call `self._job(...)`
+  first (`exports.download` refuses as a backstop), the backup is a write. Give
+  a new export or job the same guard; `itm check` takes only `fetch_*` and
+  `list_zones` (`check_cli.READ_PREFIXES`, `READ_NAMES`), so never name one
+  of those `fetch_*`.
 - **Experimental writes** (not validated on a real iTM) call
   `self._experimental("what it does")` first: without `allow_experimental=True`
   they raise `ExperimentalError` before anything is sent (read only refuses
-  first; a dry run is always allowed). Arguments of a validated method that
+  first; a dry run needs the opt-in too, as it still sends the steps before the
+  change). Arguments of a validated method that
   aren't validated are checked one by one (`_EXPERIMENTAL_UNIT_SETTINGS`,
   `set_region`, `set_zone_member_order`).
 - **Faults** (tested against the simulated iTM only; `FakeITM.lose_reply_next`,
@@ -510,8 +517,22 @@ changing it.
   `.last_seen`: `_confirm`, `_confirm_zone`, `_confirm_settings`, `check_wrong`
   and the setback, hardware and screensaver writes), all `ItmCommandError`s with
   the messages they had. Raise them in new code for those cases.
+- **Opt-ins** (`allow_service_change`, `allow_network_change`, `allow_restart`,
+  `allow_leakage_check`, `allow_password_change`, `allow_safety_change`,
+  `allow_send`, `allow_remote_change`) are checked in the public method before
+  anything is sent, through `_require_opt_in` where it fits, and refuse a dry
+  run as well. A new risky write gets the same.
 - **Web UI version**: when the iTM reports another version string (after a
-  firmware update), the client adopts it and logs a warning.
+  firmware update), `handshake` adopts it and logs a warning. With
+  `pause_writes_on_version_change` it also records the change
+  (`_version_changed`: the first version known and the new one) and
+  `_check_paused()` (in `_writable()`, `_demand_writable()` and the session's
+  `require_writable()`) raises `WritesPaused` until `confirm_web_version()`
+  or a login sees the first version again; `session_info.writes_paused` shows
+  it. `_verify` checks it before a write after all too, so the background
+  check of a write without confirm sends nothing while paused (the
+  `WritesPaused` is logged and noted in `session_info`, as its other errors).
+  Reads never check it.
 - **Replies are untrusted.** `Reader` bounds-checks every read and count (also
   the 2-byte ones, `count(wide=False)`), unknown screen update and dialog types
   and data after the end of a reply are rejected, replies over 1 MB are
@@ -609,7 +630,14 @@ changing it.
   shared-session`'s list of reads holds none that ends the session (those are
   left out in `EXCLUDED`, for that command only); `LEFT_OUT` holds the reads
   that press a menu button that starts something, and `ZONE_SPECIFIC` those
-  that read only a zone of one kind (`fetch_analog_values`), left out of both commands.
+  that read only a zone of one kind (`fetch_analog_values`), left out of both commands;
+  the list takes only the allowlisted names (no export, backup or other job).
+- `tests/test_experimental.py` and `tests/test_dry_run_opt_ins.py` cover the
+  opt-ins: every experimental write and every write behind an allowance refuses
+  without it, normal and dry run, before a request is sent; add a new one to
+  `GUARDED` or `OPT_INS` there. `tests/test_version_pause.py` covers
+  `pause_writes_on_version_change`, the write after all of a write's check
+  included.
 - `tests/test_robustness.py` covers the faults: the simulator's fault modes, the
   INIT sent again, a hung iTM (one timeout, the clean-up skipped, the logout
   tried once), lost replies before and after a change (`WriteOutcomeUnknown`,

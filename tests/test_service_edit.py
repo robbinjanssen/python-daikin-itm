@@ -227,6 +227,17 @@ async def test_export_and_parse_results(itm: FakeServiceEditITM) -> None:
     assert isinstance(parsed, LeakageCheckResults)
 
 
+async def test_read_only_refuses_the_results_export(itm: FakeServiceEditITM) -> None:
+    """The results are a file the iTM makes: a read-only client sends nothing."""
+    ro = client(itm, read_only=True)
+    with pytest.raises(ReadOnlyError):
+        await ro.export_leakage_check_results(SERVICE)
+    with pytest.raises(ReadOnlyError):
+        await ro.fetch_leakage_check_results(SERVICE)
+    assert not itm.requests
+    assert not itm.finished
+
+
 def test_parse_results_edge_cases() -> None:
     """Empty files, latin-1 bytes and missing label rows."""
     assert not parse_results(b"a\nb\nc\nd\n").results
@@ -337,20 +348,29 @@ async def test_password_mismatch_and_short_enable(itm: FakeServiceEditITM) -> No
 async def test_dry_run_plans_and_sends_nothing(itm: FakeServiceEditITM) -> None:
     """Every write in a dry run plans its request; nothing changes; no password."""
     dry = client(itm, dry_run=True)
-    assert await dry.set_leakage_check_indoor_units(SERVICE, "OU-1", ()) is None
-    assert await dry.set_leakage_check_schedule(SERVICE, "OU-1", 1, at="03:00") is None
-    await dry.copy_leakage_check_schedule(SERVICE, "OU-1", ("OU-2",))
-    assert await dry.start_leakage_check(SERVICE, "OU-1") is None
-    assert await dry.run_layout_setup(SERVICE) is None
-    assert await dry.set_r32_output_port(SERVICE, 1, "Alarm out A") is None
+    svc: dict[str, Any] = {"allow_service_change": True}
+    pw: dict[str, Any] = {"allow_password_change": True}
+    assert await dry.set_leakage_check_indoor_units(SERVICE, "OU-1", (), **svc) is None
     assert (
-        await dry.set_password_setting("administrator", enabled=True, password=SECRET)
+        await dry.set_leakage_check_schedule(SERVICE, "OU-1", 1, at="03:00", **svc)
+        is None
+    )
+    await dry.copy_leakage_check_schedule(SERVICE, "OU-1", ("OU-2",), **svc)
+    assert (
+        await dry.start_leakage_check(SERVICE, "OU-1", allow_leakage_check=True) is None
+    )
+    assert await dry.run_layout_setup(SERVICE, **svc) is None
+    assert await dry.set_r32_output_port(SERVICE, 1, "Alarm out A", **svc) is None
+    assert (
+        await dry.set_password_setting(
+            "administrator", enabled=True, password=SECRET, **pw
+        )
         is None
     )
     itm.enabled["screen"] = True
-    assert await dry.set_password_setting("screen", password=SECRET) is None
+    assert await dry.set_password_setting("screen", password=SECRET, **pw) is None
     with pytest.raises(ItmCommandError, match="4-15"):
-        await dry.set_password_setting("screen", password="ab")
+        await dry.set_password_setting("screen", password="ab", **pw)
     assert itm.outdoors[0].registered == [itm.indoor[0]]
     assert itm.outdoors[0].programs[0].at == (2, 0)
     assert not itm.outdoors[0].running
@@ -638,7 +658,9 @@ def test_cli_leakcheck(
     assert target.read_bytes().startswith(b"intelligent")
     with pytest.raises(SystemExit, match="allow_leakage_check"):
         cli("leakcheck", "start", "OU-1")
-    cli("--dry-run", "leakcheck", "start", "OU-1")
+    with pytest.raises(SystemExit, match="allow_leakage_check"):
+        cli("--dry-run", "leakcheck", "start", "OU-1")
+    cli("--dry-run", "leakcheck", "start", "OU-1", "--allow-leakage-check")
     assert "would send" in capsys.readouterr().out
     cli("leakcheck", "start", "OU-1", "--allow-leakage-check")
     assert itm.outdoors[0].running
@@ -700,7 +722,9 @@ def test_cli_service_extensions(
     assert itm.ports[1] == ""
     with pytest.raises(SystemExit, match="--value or --clear"):
         cli("service", "r32-port", "--port", "1")
-    cli("--dry-run", "service", "run-layout")
+    with pytest.raises(SystemExit, match="allow_service_change"):
+        cli("--dry-run", "service", "run-layout")
+    cli("--dry-run", "service", "run-layout", "--allow-service-change")
     assert "would send" in capsys.readouterr().out
     cli("service")
     assert "time zone" in capsys.readouterr().out
@@ -720,7 +744,9 @@ def test_cli_password(
     with pytest.raises(SystemExit, match="which password"):
         cli("password", "enable")
     monkeypatch.setenv("ITM_NEW_PASSWORD", SECRET)
-    cli("--dry-run", "password", "enable", "screen")
+    with pytest.raises(SystemExit, match="allow_password_change"):
+        cli("--dry-run", "password", "enable", "screen")
+    cli("--dry-run", "password", "enable", "screen", "--allow-password-change")
     out = capsys.readouterr().out
     assert "***" in out
     assert SECRET not in out

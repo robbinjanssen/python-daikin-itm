@@ -29,10 +29,12 @@ if TYPE_CHECKING:
     from .menu import ScheduleSummary
     from .models import Unit
 
+READ_PREFIXES: Final = ("fetch_",)
+READ_NAMES: Final = frozenset({"list_zones"})
+
 LEFT_OUT: Final = {
     "fetch_password_settings": "opens the password setting (menu button 33), "
     "never read on a real iTM yet",
-    "export_setup": "starts the setup export job (menu button 59)",
 }
 
 EXCLUDED: Final = {
@@ -172,10 +174,14 @@ DERIVED: Final = (
 
 
 def argument_free_reads() -> list[str]:
-    """Return the names of the client's public reads that need no arguments."""
+    """Return the names of the client's public reads that need no arguments.
+
+    Only the names the allowlist takes (READ_PREFIXES, READ_NAMES): never an
+    export, a backup or anything else that makes the iTM run a job.
+    """
     names = []
     for name, method in inspect.getmembers(ItmClient, inspect.iscoroutinefunction):
-        if not name.startswith(("fetch_", "export_")) and name != "list_zones":
+        if not name.startswith(READ_PREFIXES) and name not in READ_NAMES:
             continue
         required = [
             p
