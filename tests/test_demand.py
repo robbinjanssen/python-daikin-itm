@@ -358,7 +358,10 @@ async def test_energy_saving_service(itm: FakeDemandITM) -> None:
         await c.disable_energy_saving(PASSWORD)
     assert len(itm.requests) == sent
     dry = FakeClient(itm, dry_run=True)
-    assert await dry.disable_energy_saving(PASSWORD) is None
+    with pytest.raises(ItmCommandError, match="allow_service_change"):
+        await dry.disable_energy_saving(PASSWORD)
+    assert len(itm.requests) == sent
+    assert await dry.disable_energy_saving(PASSWORD, allow_service_change=True) is None
     assert itm.saving_configured
     assert await c.disable_energy_saving(PASSWORD, allow_service_change=True) is False
     es = await c.fetch_energy_saving(PASSWORD)
@@ -399,9 +402,15 @@ async def test_pulse_setup(itm: FakeDemandITM) -> None:
     with pytest.raises(ItmCommandError, match="allow_service_change"):
         await c.set_demand_pulse_setup(PASSWORD, pulse_coefficient=2)
     dry = FakeClient(itm, dry_run=True)
+    with pytest.raises(ItmCommandError, match="allow_service_change"):
+        await dry.set_demand_pulse_setup(PASSWORD, pulse_coefficient=2)
     assert (
         await dry.set_demand_pulse_setup(
-            PASSWORD, input_port1="", input_port2="Port 2", cutoff_value=12
+            PASSWORD,
+            input_port1="",
+            input_port2="Port 2",
+            cutoff_value=12,
+            allow_service_change=True,
         )
         is None
     )
@@ -414,7 +423,10 @@ async def test_pulse_setup(itm: FakeDemandITM) -> None:
     assert st.pulse.input_ports == ("Port 1", None)
     with pytest.raises(ItmCommandError, match="outside the iTM's range"):
         await dry.set_demand_pulse_setup(
-            PASSWORD, input_port2="Port 2", pulse_coefficient=1e9
+            PASSWORD,
+            input_port2="Port 2",
+            pulse_coefficient=1e9,
+            allow_service_change=True,
         )
     got = await c.set_demand_pulse_setup(
         PASSWORD,
@@ -457,7 +469,14 @@ async def test_interlock_setup(itm: FakeDemandITM) -> None:
             PASSWORD, {4: "Port 1"}, allow_service_change=True
         )
     dry = FakeClient(itm, dry_run=True)
-    assert await dry.set_demand_interlock_ports(PASSWORD, {2: "Port 3", 3: ""}) is None
+    with pytest.raises(ItmCommandError, match="allow_service_change"):
+        await dry.set_demand_interlock_ports(PASSWORD, {2: "Port 3"})
+    assert (
+        await dry.set_demand_interlock_ports(
+            PASSWORD, {2: "Port 3", 3: ""}, allow_service_change=True
+        )
+        is None
+    )
     assert [p.split(":")[0] for p in dry.planned] == [
         "pick interlock input port 2 Port 3",
         "clear interlock input port 3",
@@ -562,7 +581,9 @@ def test_cli_energy_saving(
     monkeypatch.setenv("ITM_SERVICE_PASSWORD", PASSWORD)
     cli("energy-saving", "show")
     assert "control Running" in capsys.readouterr().out
-    cli("--dry-run", "energy-saving", "disable")
+    with pytest.raises(SystemExit, match="allow_service_change"):
+        cli("--dry-run", "energy-saving", "disable")
+    cli("--dry-run", "energy-saving", "disable", "--allow-service-change")
     assert "disable energy saving" in capsys.readouterr().out
     cli("energy-saving", "disable", "--allow-service-change")
     assert not itm.saving_configured

@@ -495,9 +495,15 @@ async def test_network_dry_run_sends_no_value(itm: FakeITM) -> None:
     """A network dry run opens and cancels each input; nothing is entered or saved."""
     dry = FakeClient(itm, dry_run=True)
     before = list(itm.network)
+    with pytest.raises(ItmCommandError, match="allow_network_change"):
+        await dry.set_network(ip_address="192.0.2.21")
+    assert not itm.requests
     assert (
         await dry.set_network(
-            ip_address="192.0.2.21", dns_secondary="8.8.4.4", hostname="itm"
+            ip_address="192.0.2.21",
+            dns_secondary="8.8.4.4",
+            hostname="itm",
+            allow_network_change=True,
         )
         is None
     )

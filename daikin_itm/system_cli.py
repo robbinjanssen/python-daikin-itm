@@ -380,7 +380,8 @@ def _add_region_commands(sub: Any) -> None:
     ds.add_argument("state", nargs="?", choices=["on", "off"])
     nw = sub.add_parser(
         "network",
-        help="show the network settings, or (with --dry-run) plan a change",
+        help="show the network settings, or plan (--dry-run) or make a change "
+        "(both need --experimental and --allow-network-change)",
     )
     for opt in (
         "--name",
@@ -395,7 +396,8 @@ def _add_region_commands(sub: Any) -> None:
     nw.add_argument(
         "--allow-network-change",
         action="store_true",
-        help="really change it: a wrong value strands the iTM until someone is on site",
+        help="needed for a change and its --dry-run: a wrong value strands the "
+        "iTM until someone is on site",
     )
     ck = sub.add_parser("clock", help="show the iTM's clock, or set it")
     ck.add_argument("--set-now", action="store_true", help="to this computer's time")
@@ -448,7 +450,8 @@ def _add_own_settings_command(sub: Any) -> None:
     ow.add_argument(
         "--allow-password-change",
         action="store_true",
-        help="--password: needed, a wrong password locks the client out",
+        help="--password: needed (a --dry-run too), a wrong password locks the "
+        "client out",
     )
 
 

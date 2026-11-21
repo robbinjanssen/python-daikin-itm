@@ -163,7 +163,14 @@ async def test_test_email_is_guarded(itm: FakeSystemEditITM) -> None:
     with pytest.raises(ItmCommandError, match="allow_send"):
         await run(itm, send_test_email, ADDRESS)
     assert not itm.mails_sent
-    assert await run(itm, send_test_email, ADDRESS, client={"dry_run": True}) is False
+    with pytest.raises(ItmCommandError, match="allow_send"):
+        await run(itm, send_test_email, ADDRESS, client={"dry_run": True})
+    assert (
+        await run(
+            itm, send_test_email, ADDRESS, allow_send=True, client={"dry_run": True}
+        )
+        is False
+    )
     assert not itm.mails_sent
     assert await run(itm, send_test_email, ADDRESS, allow_send=True) is True
     assert itm.mails_sent == [ADDRESS]
@@ -185,7 +192,9 @@ async def test_web_server_port_is_guarded(itm: FakeSystemEditITM) -> None:
         await run(itm, set_web_server_port, 8080)
     c = FakeClient(itm, dry_run=True)
     async with c._session() as s:
-        assert await set_web_server_port(s, 8080) is False
+        with pytest.raises(ItmCommandError, match="allow_network_change"):
+            await set_web_server_port(s, 8080)
+        assert await set_web_server_port(s, 8080, allow_network_change=True) is False
     assert "web server port = 8080" in c.planned
     assert itm.web_port is None
     assert await run(itm, set_web_server_port, 8080, allow_network_change=True) is True
@@ -260,10 +269,27 @@ async def test_more_settings_and_refusals(itm: FakeSystemEditITM) -> None:
     with pytest.raises(ItmCommandError, match="not found"):
         await run(itm, delete_email_address, "nobody@example.com")
     assert await run(itm, set_confirm_dialogs, enabled=True) is True
-    assert await run(itm, set_web_server_port, None, client={"dry_run": True}) is False
-    itm.remote_connectable = True
     assert (
+        await run(
+            itm,
+            set_web_server_port,
+            None,
+            allow_network_change=True,
+            client={"dry_run": True},
+        )
+        is False
+    )
+    itm.remote_connectable = True
+    with pytest.raises(ItmCommandError, match="allow_remote_change"):
         await run(itm, set_remote_management, connect=False, client={"dry_run": True})
+    assert (
+        await run(
+            itm,
+            set_remote_management,
+            connect=False,
+            allow_remote_change=True,
+            client={"dry_run": True},
+        )
         is False
     )
     c = FakeClient(itm)

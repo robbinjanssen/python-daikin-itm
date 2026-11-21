@@ -242,14 +242,23 @@ async def test_read_only_refuses(itm: FakeEmergencyITM) -> None:
 
 
 async def test_client_guard(itm: FakeEmergencyITM) -> None:
-    """Arming or disarming needs allow_safety_change; a dry run doesn't."""
+    """Arming or disarming needs allow_safety_change, a dry run too."""
     c = FakeClient(itm)
     with pytest.raises(ItmCommandError, match="allow_safety_change"):
         await c.set_emergency_stop_enabled("Program 1", enabled=False)
     assert itm.program("Program 1").enabled
-    assert itm.requests == []
     dry = FakeClient(itm, dry_run=True)
-    assert await dry.set_emergency_stop_enabled("Program 1", enabled=False) is None
+    with pytest.raises(ItmCommandError, match="allow_safety_change"):
+        await dry.set_emergency_stop_enabled("Program 1", enabled=False)
+    with pytest.raises(ItmCommandError, match="allow_safety_change"):
+        await dry.release_emergency_stop("Program 1")
+    assert itm.requests == []
+    assert (
+        await dry.set_emergency_stop_enabled(
+            "Program 1", enabled=False, allow_safety_change=True
+        )
+        is None
+    )
     assert itm.program("Program 1").enabled
     program = await c.set_emergency_stop_enabled(
         "Fire alarm", enabled=True, allow_safety_change=True
@@ -403,7 +412,7 @@ def test_cli(
     itm.start_stop("Fire alarm")
     cli("emgstop", "active")
     assert capsys.readouterr().out.strip() == "active: Fire alarm"
-    cli("--dry-run", "emgstop", "release", "Fire alarm")
+    cli("--dry-run", "emgstop", "release", "Fire alarm", "--allow-safety-change")
     out = capsys.readouterr().out
     assert "dry run, would send:" in out
     assert "release emergency stop Fire alarm" in out

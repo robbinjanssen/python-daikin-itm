@@ -11,7 +11,7 @@ Status, for reading and for writing:
 | :--- | :------ |
 | V | in the library and validated on a real iTM |
 | D | in the library; validated on a real iTM as a dry run only (writes that could strand the iTM) |
-| F | in the library, tested against the simulated iTM only: experimental. Its writes refuse unless the client is created with `allow_experimental=True` (CLI: `--experimental`); a dry run always works, and reads need no opt-in |
+| F | in the library, tested against the simulated iTM only: experimental. Its writes refuse unless the client is created with `allow_experimental=True` (CLI: `--experimental`), a dry run too; reads need no opt-in |
 | P | probed on a real iTM (it opens), not in the library yet |
 | L | needs a dealer option, a paid licence or equipment that wasn't available for testing |
 | X | out of scope on purpose (installer-only or destructive, or needs a person at the panel) |
@@ -86,6 +86,12 @@ not validated there yet), count the changes they send per unit
 is tested against the simulated iTM; the screens' reads and writes it uses are
 the validated ones.
 
+`pause_writes_on_version_change` (off by default) refuses every write, its dry
+run and the write after all of such a check after the iTM reported another web
+UI version, until `confirm_web_version()`; `read_only` refuses the exports and
+the backup as well. Both are tested against the simulated iTM only (no firmware
+update was seen).
+
 172 screens, each counted by its best status (read or write). Covered: 138 (validated on a real iTM: 94, dry run only: 0, simulated iTM only: 44); probed only: 0; needs a licence or another iTM: 0; out of scope: 33; not covered: 1.
 
 | Screen | Class | Read | Write | Notes |
@@ -125,7 +131,7 @@ the validated ones.
 | 600 | `ScHMO` | V | F | heating mode optimisation per unit, all on/off (read validated without the dealer option) |
 | 700 | `ScTimerExtension` | V | V | overtime timer duration |
 | 800 | `ScHistoryMain` | V | - | history (`HistoryEntry.source_kind`: "web" for `Web:<user>`, "itm" for an empty source, seen on a real iTM; with its progress dialog; paged back one page with `pages`, then forward, in a shared session: seen on a real iTM; more pages: simulated iTM only) |
-| 801 | `ScHistoryOutput` | - | V | history export (a ZIP download) |
+| 801 | `ScHistoryOutput` | - | V | history export (a ZIP download; refused by `read_only`) |
 | 900 | `ScInterlockMain` | V | F | interlock programs (read validated on an empty list, without the dealer option) |
 | 901 | `ScInterlockProgramSetup` | F | F | interlock program setup |
 | 902 | `ScInterlockProgramInputSetup` | F | F | interlock input setup |
@@ -240,7 +246,7 @@ the validated ones.
 | 3216 | `ScEnergyNaviCalenderCopy` | V | V | energy navigator: calendar copy (validated with empty calendars) |
 | 3217 | `ScEnergyNaviRuleSetting` | V | V | energy navigator: rule settings: time ranges per day and their cool/heat setpoints |
 | 3218 | `ScEnergyNaviExtractSetting` | V | - | energy navigator: sampling targets (a view filter, no save) |
-| 3219 | `ScEnergyNaviDataOutput` | V | V | energy navigator: data output periods and exports (energy data, point list) |
+| 3219 | `ScEnergyNaviDataOutput` | V | V | energy navigator: data output periods and exports (energy data, point list; refused by `read_only`) |
 | 3220 | `ScEnergyNaviTrialSetting` | V | F | energy navigator installer settings (read V; the data clear button is never pressed) |
 | 3221 | `ScEnergyNaviRoomTempSetting` | V | F | energy navigator: room temperature per point (read V; guarded; saving restarts the iTM) |
 | 3222 | `ScEnergyNaviMngSelect` | F | F | energy navigator: analog point selection |
@@ -259,6 +265,6 @@ the validated ones.
 | 3310 | `ScDemandControlStatus` | F | - | demand control (needs the dealer option and a pulse input) |
 | 3311 | `ScDemandGroup` | F | F | demand control (needs the dealer option and a pulse input) |
 | 3312 | `ScDemandTargetPowerSetup` | F | F | demand control (needs the dealer option and a pulse input) |
-| 4000 | `ScSetupExport` | - | V | setup export (export_setup; a download, sensitive) |
+| 4000 | `ScSetupExport` | - | V | setup export (export_setup; a download, sensitive; refused by `read_only`) |
 | 4100 | `ScSysBackup` | - | F | backup (run_backup; a job on the device, treated as a write) |
 | 20000 | `ScSample` | X | X | sample screen (unused) |

@@ -274,3 +274,33 @@ async def test_backup_is_a_write(itm: FakeExportsITM) -> None:
     result = await client.run_backup()
     assert result is not None
     assert result.data.startswith(b"backup")
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda c: c.export_history(date(2024, 12, 20), date(2025, 1, 1)),
+        lambda c: c.export_energy_data("01/2024-12/2024"),
+        lambda c: c.export_point_list(date(2024, 11, 20), date(2024, 12, 19)),
+        lambda c: c.export_setup(),
+        lambda c: c.run_backup(),
+    ],
+)
+async def test_read_only_refuses_every_export(
+    itm: FakeExportsITM, call: Callable[[FakeClient], Awaitable[Any]]
+) -> None:
+    """An export makes the iTM run a job: a read-only client sends nothing."""
+    with pytest.raises(ReadOnlyError):
+        await call(FakeClient(itm, read_only=True))
+    assert not itm.requests
+    assert itm.job == 0
+
+
+async def test_read_only_session_starts_no_export(itm: FakeExportsITM) -> None:
+    """The download itself refuses in a read-only client's session, too."""
+    c = FakeClient(itm, read_only=True)
+    async with c._session() as s:
+        with pytest.raises(ReadOnlyError):
+            await export_setup(s, fetcher(itm))
+    assert itm.job == 0
+    assert not itm.finished

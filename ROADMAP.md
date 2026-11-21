@@ -46,7 +46,7 @@ starting.
 | **Destructive service functions**: bus scan (A/C auto registration), DIII-NET management, history deletion | They re-register or remove equipment or data on the device. A bus scan can change which units the iTM knows. | Probably never as library calls; at most a documented, guarded expert function. |
 | **Point data registration** (about 27 installer screens) | The installer's registration of management points: how the iTM addresses each unit. Wrong data breaks control of the units. | An installer use case and a test device. |
 | **Starting an emergency stop** | The web UI has no way to start one; only the iTM's input can. Releasing and managing programs are built. | Nothing: this stays out. |
-| **Network changes without a guard**: IP settings, web server ports, remote management | A wrong value locks every client out of the iTM until someone is at the panel. These writes exist, but only behind `allow_network_change` / `allow_remote_change`, and were validated live as a dry run. | Stays guarded. |
+| **Network changes without a guard**: IP settings, web server ports, remote management | A wrong value locks every client out of the iTM until someone is at the panel. These writes exist, but only behind `allow_network_change` / `allow_remote_change` (a dry run needs it too), and were validated live as a dry run. | Stays guarded. |
 | **Touch panel calibration** | Needs someone touching the panel. | Not possible from the web UI. |
 | **The graphical layout view** | It shows a floor plan only after an installer has set one up in the service screens (layout setup). | An iTM with a layout. |
 | **Live writes of the dealer-option functions**: interlock, temperature limit, sliding temperature, heating mode optimisation, demand control | Built: readers validated on the empty screens, writes tested against the simulated iTM. They have not been validated with the options switched on; dealer options need no key (an installer switches them on in the service screens, then the iTM reboots), but whether the functions act while switched off is unknown. Demand control also needs a pulse input. | Switching the options on (a reboot) and testing on a throwaway group or program. |
@@ -60,7 +60,11 @@ The most useful contributions come from installations that differ from the one
 the library was tested on (firmware Ver1.32.00): another iTM model or firmware
 version, other equipment (ventilation units that report their mode and air
 volume, hot water, reheat, output points), licences or dealer options, or another
-display language.
+display language. After a firmware update the client adopts the iTM's new web UI
+version and goes on; a client that would rather stop writing until someone
+checked the new firmware passes `pause_writes_on_version_change=True` (every
+write, also the write after all of a write's check, waits for
+`confirm_web_version()`; see the README's "Web UI version").
 
 1. **Open an issue first** with what your iTM has and what you'd like to add
    (see [CONTRIBUTING.md](CONTRIBUTING.md)).

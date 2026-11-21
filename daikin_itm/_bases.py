@@ -55,6 +55,10 @@ class ClientCore:
 
         def _experimental(self, what: str) -> None: ...
 
+        def _job(self, what: str) -> None: ...
+
+        def _check_paused(self) -> None: ...
+
         async def fetch_info(self) -> ItmInfo:
             """Read the version, region and time screens."""
 

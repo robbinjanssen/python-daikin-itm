@@ -440,9 +440,9 @@ async def send_test_email(
 ) -> bool:
     """Send the iTM's test mail to an address (it really sends one).
 
-    Refused unless ``allow_send`` is True; a dry run plans it instead.
+    Refused unless ``allow_send`` is True, a dry run too.
     """
-    if not allow_send and not s.client.dry_run:
+    if not allow_send:
         msg = "the test e-mail really sends a mail: pass allow_send=True"
         raise ItmCommandError(msg)
     e = MenuScreen.EMAIL
@@ -482,9 +482,9 @@ async def set_web_server_port(
     """Set the web server's port (None: the default); OK + Yes on both screens.
 
     A wrong port takes the web UI, and this library, off the network: refused
-    unless ``allow_network_change`` (a dry run is always allowed).
+    unless ``allow_network_change``, a dry run too.
     """
-    if not allow_network_change and not s.client.dry_run:
+    if not allow_network_change:
         msg = "a web server port change can cut access; pass allow_network_change=True"
         raise ItmCommandError(msg)
     n, w = MenuScreen.NETWORK, WEB_SERVER_SCREEN
@@ -509,7 +509,7 @@ async def set_remote_management(
     s: _Session, *, connect: bool, allow_remote_change: bool = False
 ) -> bool:
     """Connect or disconnect remote management (refused unless explicitly allowed)."""
-    if not allow_remote_change and not s.client.dry_run:
+    if not allow_remote_change:
         msg = "remote management changes access: pass allow_remote_change=True"
         raise ItmCommandError(msg)
     r = MenuScreen.REMOTE_MANAGEMENT
@@ -689,11 +689,15 @@ class SystemMixin(ClientCore):  # pylint: disable=too-many-public-methods
         Args:
         ----
             address: The address as listed.
-            allow_send: Really send it; otherwise only a dry run is allowed.
+            allow_send: Really send it; needed for a dry run too.
 
         """
         self._experimental("send a test e-mail")
-        self._writable()
+        self._require_opt_in(
+            allowed=allow_send,
+            flag="allow_send",
+            why="the test e-mail really sends a mail",
+        )
         await self._in_session(
             lambda s: _ignore(send_test_email(s, address, allow_send=allow_send))
         )
@@ -730,10 +734,15 @@ class SystemMixin(ClientCore):  # pylint: disable=too-many-public-methods
         Args:
         ----
             port: The port, or None for the default.
-            allow_network_change: Really change it; otherwise only a dry run.
+            allow_network_change: Really change it; needed for a dry run too.
 
         """
         self._experimental("change the web server port")
+        self._require_opt_in(
+            allowed=allow_network_change,
+            flag="allow_network_change",
+            why="a web server port change can cut access",
+        )
         await self._system_write(
             lambda s: _ignore(
                 set_web_server_port(s, port, allow_network_change=allow_network_change)
@@ -748,10 +757,15 @@ class SystemMixin(ClientCore):  # pylint: disable=too-many-public-methods
         Args:
         ----
             connect: Connect (True) or disconnect.
-            allow_remote_change: Really do it; otherwise only a dry run.
+            allow_remote_change: Really do it; needed for a dry run too.
 
         """
         self._experimental("change the remote management connection")
+        self._require_opt_in(
+            allowed=allow_remote_change,
+            flag="allow_remote_change",
+            why="remote management changes access",
+        )
         await self._system_write(
             lambda s: _ignore(
                 set_remote_management(

@@ -558,7 +558,7 @@ class EmergencyMixin(ClientCore):
 
         Disarming switches a safety function off; arming may start a stop at once
         when the program's input is already in alarm. Refused unless
-        ``allow_safety_change`` (a dry run is always allowed).
+        ``allow_safety_change``, a dry run too.
 
         Args:
         ----
@@ -576,7 +576,7 @@ class EmergencyMixin(ClientCore):
 
         """
         self._experimental("enable or disable an emergency stop program")
-        if not allow_safety_change and not self.dry_run:
+        if not allow_safety_change:
             msg = (
                 "arming or disarming an emergency stop program changes a safety "
                 "function: pass allow_safety_change=True"
@@ -765,7 +765,7 @@ class EmergencyMixin(ClientCore):
         """Release an active emergency stop (this library never starts one).
 
         Releasing restarts equipment a safety input (e.g. a fire alarm) stopped, so
-        it is refused unless ``allow_safety_change`` (a dry run is always allowed).
+        it is refused unless ``allow_safety_change``, a dry run too.
 
         Args:
         ----
@@ -778,7 +778,7 @@ class EmergencyMixin(ClientCore):
 
         """
         self._experimental("release an emergency stop")
-        if not allow_safety_change and not self.dry_run:
+        if not allow_safety_change:
             msg = (
                 "releasing an emergency stop restarts equipment a safety input "
                 "stopped: pass allow_safety_change=True"

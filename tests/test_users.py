@@ -93,7 +93,15 @@ async def test_own_password_is_sent_never_planned_or_logged(
     """The new password: entered (and repeated), then the client logs in with it."""
     caplog.set_level(logging.DEBUG)
     dry = FakeClient(itm, dry_run=True)
-    assert await dry.set_own_settings(password=NEW_PASSWORD, time_24h=False) is None
+    with pytest.raises(ItmCommandError, match="allow_password_change"):
+        await dry.set_own_settings(password=NEW_PASSWORD, time_24h=False)
+    assert not itm.requests
+    assert (
+        await dry.set_own_settings(
+            password=NEW_PASSWORD, time_24h=False, allow_password_change=True
+        )
+        is None
+    )
     assert any("own password = ***" in line for line in dry.planned)
     assert any("save own settings" in line for line in dry.planned)
     assert all(NEW_PASSWORD not in line for line in dry.planned)

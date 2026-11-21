@@ -1113,7 +1113,12 @@ class ServiceEditMixin(ClientCore):
         -------
             The file's name and contents.
 
+        Raises:
+        ------
+            ReadOnlyError: The client is read-only (nothing is sent).
+
         """
+        self._job("export the leakage check results")
         return await self._in_session(
             lambda s: export_results(s, password, self._get_bytes)
         )
@@ -1128,6 +1133,11 @@ class ServiceEditMixin(ClientCore):
         Returns:
         -------
             Every outdoor unit's results (``last(name)`` gives a unit's last one).
+
+        Raises:
+        ------
+            ReadOnlyError: The client is read-only (nothing is sent): the iTM
+                makes a file for it.
 
         """
         return parse_results((await self.export_leakage_check_results(password)).data)
@@ -1151,7 +1161,7 @@ class ServiceEditMixin(ClientCore):
             password: The service password.
             outdoor: The outdoor unit, by name or address.
             indoor_units: The indoor units, by name or address.
-            allow_service_change: Needed unless this is a dry run.
+            allow_service_change: Needed, also for a dry run.
 
         Returns:
         -------
@@ -1202,7 +1212,7 @@ class ServiceEditMixin(ClientCore):
             activation: The activation, as the program's combo shows it.
             day: The start date.
             at: The start time, "HH:MM".
-            allow_service_change: Needed unless this is a dry run.
+            allow_service_change: Needed, also for a dry run.
 
         Returns:
         -------
@@ -1248,7 +1258,7 @@ class ServiceEditMixin(ClientCore):
             password: The service password.
             outdoor: The source outdoor unit, by name or address.
             targets: The outdoor units to overwrite.
-            allow_service_change: Needed unless this is a dry run.
+            allow_service_change: Needed, also for a dry run.
 
         Raises:
         ------
@@ -1307,7 +1317,7 @@ class ServiceEditMixin(ClientCore):
         ----
             password: The service password.
             outdoor: The outdoor unit, by name or address.
-            allow_leakage_check: Needed unless this is a dry run.
+            allow_leakage_check: Needed, also for a dry run.
 
         Returns:
         -------
@@ -1333,7 +1343,7 @@ class ServiceEditMixin(ClientCore):
         ----
             password: The service password.
             outdoor: The outdoor unit, by name or address.
-            allow_leakage_check: Needed unless this is a dry run.
+            allow_leakage_check: Needed, also for a dry run.
 
         Returns:
         -------
@@ -1368,7 +1378,7 @@ class ServiceEditMixin(ClientCore):
         Args:
         ----
             password: The service password.
-            allow_service_change: Needed unless this is a dry run.
+            allow_service_change: Needed, also for a dry run.
 
         Returns:
         -------
@@ -1415,7 +1425,7 @@ class ServiceEditMixin(ClientCore):
             port: 1 or 2.
             value: The port as 1517 lists it (name, address or the whole row);
                 None clears it.
-            allow_service_change: Needed unless this is a dry run.
+            allow_service_change: Needed, also for a dry run.
 
         Returns:
         -------
@@ -1469,7 +1479,7 @@ class ServiceEditMixin(ClientCore):
             enabled: Enable (True) or disable (False); None leaves it.
             password: A new password (enabling one without a password set asks
                 for it).
-            allow_password_change: Needed unless this is a dry run.
+            allow_password_change: Needed, also for a dry run.
 
         Returns:
         -------

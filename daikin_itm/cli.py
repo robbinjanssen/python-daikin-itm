@@ -729,7 +729,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--read-only",
         action="store_true",
-        help="refuse every write before it is sent",
+        help="refuse every write, export and backup before it is sent",
     )
     p.add_argument(
         "--dry-run",
@@ -740,7 +740,7 @@ def _parser() -> argparse.ArgumentParser:
         "--experimental",
         action="store_true",
         help="allow the writes not validated on a real iTM yet (tested against "
-        "the simulated iTM only); a dry run needs no opt-in",
+        "the simulated iTM only); a --dry-run of one needs it too",
     )
     sub = p.add_subparsers(dest="command", required=True)
     st = sub.add_parser("status", help="show all units")

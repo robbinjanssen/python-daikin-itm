@@ -254,12 +254,14 @@ async def test_collection_start_and_conversion(itm: FakeEnergyMoreITM) -> None:
 
 
 async def test_guard_dry_run_and_read_only(itm: FakeEnergyMoreITM) -> None:
-    """Refused without allow_service_change; a dry run plans; read_only refuses."""
+    """Refused without the opt-ins (a dry run too), planned with; read_only refuses."""
     c = client(itm)
-    calls: list[Callable[[FakeClient], Awaitable[Any]]] = [
-        lambda c: c.set_energy_room_temperature(PASSWORD, "AC1"),
-        lambda c: c.set_energy_collection_start(PASSWORD, "Feb"),
-        lambda c: c.set_energy_conversion(PASSWORD, ConversionType(one="Wh")),
+    calls: list[Callable[..., Awaitable[Any]]] = [
+        lambda c, **kw: c.set_energy_room_temperature(PASSWORD, "AC1", **kw),
+        lambda c, **kw: c.set_energy_collection_start(PASSWORD, "Feb", **kw),
+        lambda c, **kw: c.set_energy_conversion(
+            PASSWORD, ConversionType(one="Wh"), **kw
+        ),
     ]
     for call in calls:
         with pytest.raises(ItmCommandError, match="allow_service_change"):
@@ -279,8 +281,15 @@ async def test_guard_dry_run_and_read_only(itm: FakeEnergyMoreITM) -> None:
             with pytest.raises(ReadOnlyError):
                 await flow
     dry = client(itm, dry_run=True)
+    sent = len(itm.requests)
     for call in calls:
-        assert await call(dry) is None
+        with pytest.raises(ItmCommandError, match="allow_service_change"):
+            await call(dry)
+        with pytest.raises(ItmCommandError, match="allow_restart"):
+            await call(dry, allow_service_change=True)
+    assert len(itm.requests) == sent
+    for call in calls:
+        assert await call(dry, allow_service_change=True, allow_restart=True) is None
     assert [p.split(":")[0] for p in dry.planned] == [
         "apply room temperature of AC1",
         "room temperature of AC1",
@@ -291,7 +300,13 @@ async def test_guard_dry_run_and_read_only(itm: FakeEnergyMoreITM) -> None:
     assert not applied & {(r["screen"], r["part"]) for r in itm.requests}
     dry.planned.clear()
     assert (
-        await dry.set_energy_room_temperature(PASSWORD, "AC1", analog_point="AI 2")
+        await dry.set_energy_room_temperature(
+            PASSWORD,
+            "AC1",
+            analog_point="AI 2",
+            allow_service_change=True,
+            allow_restart=True,
+        )
         is None
     )
     assert [p.split(":")[0] for p in dry.planned] == [
@@ -459,7 +474,17 @@ def test_cli_installer(
     assert "analog inputs: AI 1 3-00; AI 2 3-01" in out
     assert "collection starts in Jan" in out
     assert "conversion '': kWh / MWh / GWh" in out
-    out = main("--dry-run", "energy-edit", "conversion", "--one", "Wh")
+    with pytest.raises(SystemExit, match="allow_service_change"):
+        main("--dry-run", "energy-edit", "conversion", "--one", "Wh")
+    out = main(
+        "--dry-run",
+        "energy-edit",
+        "conversion",
+        "--one",
+        "Wh",
+        "--allow-service-change",
+        "--allow-restart",
+    )
     assert "save energy conversion" in out
     with pytest.raises(SystemExit, match="allow_service_change"):
         main("energy-edit", "collection-start", "--start-month", "Feb")

@@ -603,7 +603,7 @@ class UsersMixin(ClientCore):
 
         The iTM ends the session when they apply. A new password is the one this
         client logs in with from then on; it is sent once and never logged. It
-        needs ``allow_password_change`` (a dry run is always allowed). When the
+        needs ``allow_password_change``, a dry run too. When the
         read-back fails, the client goes back to the old password only if that
         one still logs in.
 
@@ -628,7 +628,7 @@ class UsersMixin(ClientCore):
 
         """
         self._writable()
-        if password is not None and not allow_password_change and not self.dry_run:
+        if password is not None and not allow_password_change:
             msg = (
                 "changing the client's own password can lock it out: "
                 "pass allow_password_change=True"

@@ -66,8 +66,8 @@ class SessionInUse(LoginRejected):
 class ExperimentalError(ItmError):
     """A write not validated on a real iTM yet was asked without the opt-in.
 
-    Raised before anything is sent, unless the client was created with
-    ``allow_experimental=True`` (or the write is a dry run).
+    Raised before anything is sent (in a dry run too), unless the client was
+    created with ``allow_experimental=True``.
     """
 
 
@@ -292,6 +292,34 @@ class WriteBudgetExceeded(ItmCommandError):  # noqa: N818 - public API name
         self.name = name
         self.limit = limit
         self.seconds = seconds
+
+
+class WritesPaused(ItmCommandError):  # noqa: N818 - public API name
+    """The iTM's web UI version changed: writes wait for a confirmation.
+
+    Raised before a write's change is sent (in a dry run too) by a client created
+    with pause_writes_on_version_change=True, from the first login that saw the
+    iTM report another web UI version (after a firmware update) until
+    ItmClient.confirm_web_version() is called or the iTM reports the version
+    known before again. Reads keep working. Carries the
+    version the client knew before and the one the iTM reports now.
+    """
+
+    def __init__(self, old_version: str, new_version: str) -> None:
+        """Initialize the error.
+
+        Args:
+        ----
+            old_version: The web UI version the client knew before the change.
+            new_version: The version the iTM reports now.
+
+        """
+        super().__init__(
+            f"the iTM's web UI version changed from {old_version!r} to "
+            f"{new_version!r}: writes are paused until confirm_web_version()"
+        )
+        self.old_version = old_version
+        self.new_version = new_version
 
 
 class WriteOutcomeUnknown(ItmCommandError):  # noqa: N818 - public API name

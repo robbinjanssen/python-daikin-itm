@@ -104,12 +104,17 @@ def hw_itm() -> FakeITM:
 async def test_refused_without_opt_in(
     method: str, args: tuple[Any, ...], kwargs: dict[str, Any]
 ) -> None:
-    """Without allow_experimental an experimental write sends nothing."""
+    """Without allow_experimental an experimental write sends nothing, dry or not."""
     itm = FakeITM()
     client = FakeClient(itm, allow_experimental=False)
     with pytest.raises(ExperimentalError, match=REFUSED):
         await getattr(client, method)(*args, **kwargs)
     assert not itm.requests
+    dry = FakeClient(itm, allow_experimental=False, dry_run=True)
+    with pytest.raises(ExperimentalError, match=REFUSED):
+        await getattr(dry, method)(*args, **kwargs)
+    assert not itm.requests
+    assert not dry.planned
     with pytest.raises(ReadOnlyError):  # read only is checked first
         await getattr(FakeClient(itm, read_only=True), method)(*args, **kwargs)
     assert not itm.requests
@@ -125,11 +130,13 @@ def test_defaults_and_error_class() -> None:
 async def _check_area(
     itm: FakeITM, flow: Callable[[FakeClient], Awaitable[Any]], **kw: Any
 ) -> None:
-    """Refused without the opt-in; planned in a dry run; done with it."""
+    """Refused without the opt-in, a dry run too; planned or done with it."""
     with pytest.raises(ExperimentalError):
         await flow(FakeClient(itm, allow_experimental=False, **kw))
+    with pytest.raises(ExperimentalError):
+        await flow(FakeClient(itm, allow_experimental=False, dry_run=True, **kw))
     assert not itm.requests
-    dry = FakeClient(itm, allow_experimental=False, dry_run=True, **kw)
+    dry = FakeClient(itm, allow_experimental=True, dry_run=True, **kw)
     dry.progress_interval = 0
     assert await flow(dry) is None
     assert dry.planned
@@ -165,8 +172,11 @@ async def test_test_email() -> None:
     with pytest.raises(ExperimentalError):
         await client.send_test_email("user@example.com", allow_send=True)
     assert not itm.requests
-    dry = FakeClient(itm, allow_experimental=False, dry_run=True)
-    await dry.send_test_email("user@example.com")
+    dry = FakeClient(itm, allow_experimental=True, dry_run=True)
+    with pytest.raises(ItmCommandError, match="allow_send"):
+        await dry.send_test_email("user@example.com")
+    assert not itm.requests
+    await dry.send_test_email("user@example.com", allow_send=True)
     assert dry.planned
     client.allow_experimental = True
     with pytest.raises(ItmCommandError, match="allow_send"):
@@ -188,8 +198,12 @@ async def test_guards_add_up() -> None:
     unit = await client.start_leakage_check(SERVICE, "OU-1", allow_leakage_check=True)
     assert unit is not None
     assert itm.outdoors[0].running
-    dry = FakeClient(itm, allow_experimental=False, dry_run=True)
-    assert await dry.stop_leakage_check(SERVICE, "1-00") is None
+    dry = FakeClient(itm, allow_experimental=True, dry_run=True)
+    with pytest.raises(ItmCommandError, match="allow_leakage_check"):
+        await dry.stop_leakage_check(SERVICE, "1-00")
+    assert (
+        await dry.stop_leakage_check(SERVICE, "1-00", allow_leakage_check=True) is None
+    )
 
 
 async def test_unit_settings_per_argument(hw_itm: FakeITM) -> None:
@@ -205,8 +219,13 @@ async def test_unit_settings_per_argument(hw_itm: FakeITM) -> None:
     assert not hw_itm.requests
     assert unit.low_noise == 0
     dry = FakeClient(hw_itm, allow_experimental=False, dry_run=True)
+    with pytest.raises(ExperimentalError, match="set low_noise: not validated"):
+        await dry.set_unit_settings(unit.name, low_noise="Step 2")
+    assert not hw_itm.requests
+    assert await dry.set_unit_settings(unit.name, overtime=False) is None
+    dry.allow_experimental = True
     assert await dry.set_unit_settings(unit.name, low_noise="Step 2") is None
-    assert dry.planned
+    assert "save settings" in dry.planned[-1]
     client.allow_experimental = True
     result = await client.set_unit_settings(unit.name, low_noise="Step 2")
     assert result is not None
@@ -227,6 +246,10 @@ async def test_region_per_argument() -> None:
         )
     assert not itm.requests
     dry = FakeClient(itm, allow_experimental=False, dry_run=True)
+    with pytest.raises(ExperimentalError, match="temperature_unit"):
+        await dry.set_region(temperature_unit="°F")
+    assert not itm.requests
+    dry.allow_experimental = True
     assert await dry.set_region(temperature_unit="°F") is None
     client.allow_experimental = True
     info = await client.set_region(decimal_separator=",")
@@ -256,7 +279,9 @@ def test_cli_flag(itm: FakeITM, capsys: pytest.CaptureFixture[str]) -> None:
         f"error: {unit.name}: set low_noise: {REFUSED} (or --experimental) to use it"
     )
     assert unit.low_noise == 0
-    itm_cli.main([*base, "--dry-run", *command])
+    with pytest.raises(SystemExit, match="or --experimental"):
+        itm_cli.main([*base, "--dry-run", *command])
+    itm_cli.main([*base, "--dry-run", "--experimental", *command])
     assert "save settings" in capsys.readouterr().out
     assert unit.low_noise == 0
     itm_cli.main([*base, "--experimental", *command])
