@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import sys
 import unicodedata
 from datetime import date
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from .client import ItmClient
     from .energy_navigator import ShownValue
     from .system import SystemSettings
+
+
+# The extensions a download may have to be written under the iTM's name for it.
+DOWNLOAD_EXTENSIONS = (".csv", ".zip", ".txt")
 
 
 def safe(text: str) -> str:
@@ -135,9 +139,41 @@ def shown(value: ShownValue | None) -> str:
     return "" if value is None else value.text.strip()
 
 
-def save(out: Path, data: bytes) -> None:
-    """Write a download readable by its owner only (an archive can hold logins)."""
-    fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+def download_path(out: str | None, name: str) -> Path:
+    """Return where to write a download: --out, or the name the iTM gave it.
+
+    The iTM's name is used only with an extension a download is expected to have
+    (DOWNLOAD_EXTENSIONS), so a hostile iTM can't plant a script or a dotfile.
+    """
+    if out is not None:
+        return Path(out)
+    if not name.lower().endswith(DOWNLOAD_EXTENSIONS):
+        sys.exit(safe(f"the iTM named the file {name!r}; choose a name with --out"))
+    return Path(name)
+
+
+def refuse_existing(out: str | None, *, force: bool) -> None:
+    """Exit before any work when --out names a file that is there, without --force."""
+    if out is not None and not force and os.path.lexists(out):
+        sys.exit(f"{out} exists; pass --force to overwrite it")
+
+
+def save(out: Path, data: bytes, *, force: bool = False) -> None:
+    """Write a download readable by its owner only (an archive can hold logins).
+
+    An existing file is kept unless force, and a symbolic link is never followed,
+    also with force.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    flags |= os.O_TRUNC if force else os.O_EXCL
+    try:
+        fd = os.open(out, flags, 0o600)
+    except FileExistsError:
+        sys.exit(f"{out} exists; pass --force to overwrite it")
+    except OSError as e:
+        if e.errno != errno.ELOOP:
+            raise
+        sys.exit(f"{out} is a symbolic link; not written")
     with os.fdopen(fd, "wb") as f:
         os.fchmod(f.fileno(), 0o600)
         f.write(data)

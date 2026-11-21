@@ -50,7 +50,9 @@ from ._screens import row_holding as _row_holding
 from ._screens import row_named as _row
 from ._screens import ticked as _ticked
 from ._util import check_wrong as _check_wrong
+from ._util import cleanup as _cleanup
 from ._util import ignore as _discard
+from ._util import one_login
 from .dealer_functions import same_point, same_temperature, temperature
 from .exceptions import ItmCommandError
 from .lang import mode_from_label
@@ -553,15 +555,13 @@ async def read_interlocks(s: _Session) -> list[InterlockProgram]:
 
     """
     await _open_interlock(s)
-    try:
+    async with _cleanup(lambda: s.close_screen(INTERLOCK)):
         out = []
         for i, program in enumerate(interlocks_from_screen(s.state)):
             await s.select_row(INTERLOCK, I_LIST, i)
             shown = _radio(s.state, INTERLOCK, I_ENABLE, I_DISABLE)
             out.append(program if shown is None else replace(program, enabled=shown))
         return out
-    finally:
-        await s.close_screen(INTERLOCK)
 
 
 async def set_interlock_enabled(s: _Session, name: str, *, enabled: bool) -> bool:
@@ -574,15 +574,13 @@ async def set_interlock_enabled(s: _Session, name: str, *, enabled: bool) -> boo
     """
     s.require_writable()
     await _open_interlock(s)
-    try:
+    async with _cleanup(lambda: s.close_screen(INTERLOCK)):
         await _select_interlock(s, name)
         if _interlock_enabled(s, name) is enabled:
             return True
         verb = "enable" if enabled else "disable"
         part = I_ENABLE if enabled else I_DISABLE
         return await _press(s, f"{verb} {IL_WHAT} {name}", INTERLOCK, part)
-    finally:
-        await s.close_screen(INTERLOCK)
 
 
 async def create_interlock(s: _Session, name: str) -> bool:
@@ -595,19 +593,17 @@ async def create_interlock(s: _Session, name: str) -> bool:
     """
     s.require_writable()
     await _open_interlock(s)
-    try:
+    async with _cleanup(lambda: s.close_screen(INTERLOCK)):
         _interlock_new(s, name)
         s.refuse_disabled(INTERLOCK, I_CREATE, f"add {IL_WHAT}")
         reply = await s.send(INTERLOCK, I_CREATE)
         return await _answer_name(s, INTERLOCK, reply, name, f"create {IL_WHAT} {name}")
-    finally:
-        await s.close_screen(INTERLOCK)
 
 
 async def _named_copy(s: _Session, name: str, new_name: str, *, copy: bool) -> bool:
     s.require_writable()
     await _open_interlock(s)
-    try:
+    async with _cleanup(lambda: s.close_screen(INTERLOCK)):
         _interlock_new(s, new_name)
         await _select_interlock(s, name)
         verb = "copy" if copy else "rename"
@@ -616,8 +612,6 @@ async def _named_copy(s: _Session, name: str, new_name: str, *, copy: bool) -> b
         reply = await s.send(INTERLOCK, part)
         label = f"{verb} {IL_WHAT} {name} to {new_name}"
         return await _answer_name(s, INTERLOCK, reply, new_name, label)
-    finally:
-        await s.close_screen(INTERLOCK)
 
 
 async def rename_interlock(s: _Session, name: str, new_name: str) -> bool:
@@ -652,14 +646,12 @@ async def delete_interlock(s: _Session, name: str) -> bool:
     """
     s.require_writable()
     await _open_interlock(s)
-    try:
+    async with _cleanup(lambda: s.close_screen(INTERLOCK)):
         await _select_interlock(s, name)
         if _interlock_enabled(s, name):
             msg = f"{name}: disable the {IL_WHAT} before deleting it"
             raise ItmCommandError(msg)
         return await _press(s, f"delete {IL_WHAT} {name}", INTERLOCK, I_DELETE)
-    finally:
-        await s.close_screen(INTERLOCK)
 
 
 async def _open_setup(s: _Session, name: str, *, reading: bool) -> None:
@@ -711,7 +703,7 @@ async def read_interlock_setup(
 
     """
     await _open_interlock(s)
-    try:
+    async with _cleanup(lambda: _leave_interlock(s)):
         await _open_setup(s, name, reading=True)
         setup = interlock_setup_from_screen(s.state, name)
         if not details:
@@ -737,8 +729,6 @@ async def read_interlock_setup(
             input_conditions=conditions,
             conditions=found,
         )
-    finally:
-        await _leave_interlock(s)
 
 
 async def _leave_interlock(s: _Session) -> None:
@@ -961,7 +951,7 @@ async def set_interlock_setup(
         msg = f"an interlock program has {len(P_OUTPUT_TABS)} output tabs"
         raise ItmCommandError(msg)
     await _open_interlock(s)
-    try:
+    async with _cleanup(lambda: _leave_interlock(s)):
         await _open_setup(s, name, reading=False)
         if inputs is not None or conditions:
             what = "interlock input"
@@ -984,8 +974,6 @@ async def set_interlock_setup(
         return await s.press_ok(
             f"save {IL_WHAT} {name}", INTERLOCK_SETUP, P_OK, P_CANCEL
         )
-    finally:
-        await _leave_interlock(s)
 
 
 class InterlockMixin(ClientCore):
@@ -1040,6 +1028,7 @@ class InterlockMixin(ClientCore):
             raise ItmCommandError(msg)
         return program
 
+    @one_login
     async def set_interlock_enabled(
         self, name: str, *, enabled: bool
     ) -> InterlockProgram | None:
@@ -1062,6 +1051,7 @@ class InterlockMixin(ClientCore):
             raise ItmCommandError(msg)
         return program
 
+    @one_login
     async def create_interlock(self, name: str) -> InterlockProgram | None:
         """Add an interlock program (disabled, empty).
 
@@ -1074,6 +1064,7 @@ class InterlockMixin(ClientCore):
         await self._system_write(lambda s: _discard(create_interlock(s, name)))
         return None if self.dry_run else await self._interlock_present(name)
 
+    @one_login
     async def rename_interlock(
         self, name: str, new_name: str
     ) -> InterlockProgram | None:
@@ -1092,6 +1083,7 @@ class InterlockMixin(ClientCore):
             return None
         return await self._interlock_present(new_name, gone=name)
 
+    @one_login
     async def copy_interlock(self, name: str, new_name: str) -> InterlockProgram | None:
         """Copy an interlock program under a new name.
 
@@ -1104,6 +1096,7 @@ class InterlockMixin(ClientCore):
         await self._system_write(lambda s: _discard(copy_interlock(s, name, new_name)))
         return None if self.dry_run else await self._interlock_present(new_name)
 
+    @one_login
     async def delete_interlock(self, name: str) -> None:
         """Delete a disabled interlock program."""
         self._experimental("delete an interlock program")
@@ -1112,6 +1105,7 @@ class InterlockMixin(ClientCore):
             msg = f"{name}: the iTM did not delete the {IL_WHAT}"
             raise ItmCommandError(msg)
 
+    @one_login
     async def set_interlock_setup(
         self,
         name: str,

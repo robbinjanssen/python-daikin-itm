@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
+import functools
 import logging
 import re
+import weakref
 from dataclasses import replace
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
@@ -13,15 +14,22 @@ from typing import TYPE_CHECKING, Any
 import aiohttp
 
 from ._screens import answer_date as _answer_date
+from ._screens import raw_rows as _rows
+from ._screens import row_cells as _cells
 from ._screens import set_checkbox as _set_checkbox
+from ._util import cleanup as _cleanup
+from ._util import cleanup_after as _cleanup_after
 from .changeover import ChangeoverSessionMixin
 from .exceptions import (
     ItmCommandError,
     ItmError,
     LoginRejected,
+    MenuNotAvailable,
     ProtocolError,
     ReadOnlyError,
+    RequestSkipped,
     SessionEnded,
+    SharedSessionError,
     VersionMismatch,
     ZoneNotFound,
 )
@@ -34,6 +42,7 @@ from .menu import (
     H_CLASS_MANAGEMENT,
     H_DATE,
     H_DAY_CHANGE,
+    H_PAGE_NEWER,
     H_PAGE_OLDER,
     H_REFRESH,
     MB_CHANGEOVER,
@@ -84,6 +93,8 @@ from .menu import (
     version_from_screen,
 )
 from .models import (
+    D_CANCEL,
+    DT_CLOSE,
     E_CLOSE,
     L_BTN_ICON,
     L_LIST,
@@ -92,9 +103,12 @@ from .models import (
     ErrorInformation,
     PointKind,
     Unit,
+    analog_details_from_screen,
+    analog_from_list,
     analog_from_panel,
     error_information_from_screen,
     point_kind,
+    status_from_details,
     unit_from_panel,
     units_from_list,
 )
@@ -173,18 +187,42 @@ from .system_edit import SystemSessionMixin
 from .users_edit import UsersSessionMixin
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Collection
 
     from ._util import T as _T
     from .client import ItmClient, Point, SessionStore
+    from .models import AnalogPoint
     from .protocol import Reply
 
 _LOGGER = logging.getLogger(__name__)
 
-# Icon view (screen 1) part IDs (ScMainStdIcon.initScreen in script.js).
+# Icon view (screen 1) part IDs (ScMainStdIcon.initScreen in script.js). Part 0
+# shows the path to the level shown; Top and Up are disabled at the top level.
+ICON_PATH = 0
 ICON_BTN_TOP, ICON_BTN_DOWN, ICON_BTN_UP, ICON_BTN_LIST, ICON_PANEL = 1, 2, 3, 4, 6
 ICON_ID_ZONE = 1000
 LOGIN_BUTTON = 4
+
+_SAVED_WITH_OK = frozenset({"CHARINPUT", "NUMBER", "HOURMIN"})
+# The clients that have warned about a password typed over plain http.
+_WARNED_PLAIN_HTTP: weakref.WeakSet[ItmClient] = weakref.WeakSet()
+
+# How a screen a call left open is closed on the way back to the start position:
+# its Close or Cancel part, never OK.
+_CLOSERS: dict[int, int] = {
+    **{int(screen): part for screen, part in CLOSE_PART.items()},
+    ScreenID.SETTINGS: D_CANCEL,
+    ScreenID.DETAILS: DT_CLOSE,
+    ScreenID.ERROR_INFORMATION: E_CLOSE,
+}
+
+
+def _analog_and_status(state: UIState) -> dict[str, Any]:
+    """Read an analog point's attributes and its thermostat status at once."""
+    return {
+        "analog": analog_details_from_screen(state),
+        "thermo_on": status_from_details(state)["thermo_on"],
+    }
 
 
 class _Session(
@@ -209,6 +247,38 @@ class _Session(
         self.state = UIState()
         self.logged_in = False
         self.restarting = False
+        # A shared_session() block's session: reads only, see ItmClient._writable.
+        self.shared = False
+        # A kept_session() block's session: writes allowed.
+        self.kept = False
+        # A write block's session (confirm_in_session): writes allowed.
+        self.writing = False
+        # The start position (the screens open and the icon view's level right
+        # after the login), the dialogs open now, and why the session can't be
+        # brought back there (None: it can).
+        self._start: tuple[frozenset[int], tuple[Any, ...]] | None = None
+        self._dialogs: dict[tuple[int, int], str] = {}
+        self._stuck: str | None = None
+        # The analog list view is being shown: its main view switch keeps the
+        # session (seen on a real iTM), unlike the units' list and the layout.
+        self._analog_list = False
+        self._menu_available = True
+        # A request got no answer (a timeout, a lost connection): the iTM may hang,
+        # so only the logout is still sent (once, with the client's
+        # logout_timeout); every other request raises RequestSkipped.
+        self.unanswered = False
+        # The request that makes the current call's change was sent (or was about
+        # to be): a lost reply after it leaves the outcome unknown.
+        self.change_sent = False
+
+    @property
+    def menu_available(self) -> bool:
+        """Tell whether the login showed the main menu bar's menu button.
+
+        A normal web user without allowed screens gets it hidden; True before a
+        login.
+        """
+        return self._menu_available
 
     @property
     def client(self) -> ItmClient:
@@ -236,27 +306,40 @@ class _Session(
         A click on a part the iTM reports disabled is refused: it hangs the iTM.
         The unit settings dialog keeps its own checks: it opens with its controls
         disabled, and ticking a setting's checkbox enables them.
+
+        Each request is bounded by the client's request_timeout. After one got no
+        answer only a logout is sent, bounded by logout_timeout.
+
+        Raises
+        ------
+            RequestSkipped: An earlier request of this session got no answer.
+
         """
+        if self.unanswered and event != EventType.LOGOUT:
+            msg = "not sent: an earlier request of this login got no answer"
+            raise RequestSkipped(msg)
         if event == EventType.CLICK and screen != ScreenID.SETTINGS:
             self.refuse_disabled(screen, part, f"screen {screen} part {part}")
+        if (
+            event == EventType.CLICK
+            and data_type == DataType.STRING
+            and self._dialogs.get((screen, part)) == "PASSWORD"
+        ):
+            self._warn_plain_http()
         body = encode_event(
             self.token, screen, part, event, data_type, number, array, string=string
         )
-        request = asyncio.ensure_future(self._post(body))
-        try:
-            text = await asyncio.shield(request)
-        except asyncio.CancelledError:
-            # The iTM may already have processed this request and moved on to a new
-            # token. Let it finish so the token stays known and the caller's cleanup
-            # can still log out, then re-raise.
-            with contextlib.suppress(Exception):
-                await self._take_token(await request)
-            raise
+        text = await self._exchange(body)
         await self._take_token(text)
         reply = parse_reply(text)
-        if event == EventType.CLICK and data_type == DataType.INT:
+        if (
+            event == EventType.CLICK
+            and data_type == DataType.INT
+            and (screen, part) not in self._dialogs
+        ):
             self.state.select_locally(screen, part, number)
         self.state.apply(reply.screens)
+        self._track(screen, part, event, data_type, reply)
         for s in reply.screens:
             if s.update == "LOGOUT":
                 self.logged_in = False
@@ -266,6 +349,89 @@ class _Session(
                 msg = f"iTM ended the session: {s.data}"
                 raise SessionEnded(msg)
         return reply
+
+    async def _exchange(self, body: str) -> str:
+        """Post a request and return the reply's text, keeping its token on cancel.
+
+        Bounded by request_timeout, or by logout_timeout once a request got no
+        answer.
+        """
+        seconds = self._client.request_timeout
+        if self.unanswered:
+            seconds = min(seconds, self._client.logout_timeout)
+        request = asyncio.ensure_future(self._timed(body, seconds))
+        try:
+            return await asyncio.shield(request)
+        except asyncio.CancelledError:
+            # The iTM may already have processed this request and moved on to a new
+            # token. Let it finish so the token stays known and the caller's cleanup
+            # can still log out, then re-raise.
+            try:
+                await self._take_token(await request)
+            except (aiohttp.ClientError, TimeoutError) as err:
+                self._no_answer(err)
+            except Exception:  # pylint: disable=broad-exception-caught
+                _LOGGER.debug("reply after a cancellation not used", exc_info=True)
+            raise
+        except (aiohttp.ClientError, TimeoutError) as err:
+            self._no_answer(err)
+            raise
+
+    async def _timed(self, body: str, seconds: float) -> str:
+        """Post a request, bounded by seconds."""
+        async with asyncio.timeout(seconds):
+            return await self._post(body)
+
+    def _no_answer(self, err: BaseException) -> None:
+        """Record a request that got no answer; an HTTP error status is an answer."""
+        if not isinstance(err, aiohttp.ClientResponseError):
+            _LOGGER.debug("no answer from the iTM: %r", err)
+            self.unanswered = True
+
+    def _warn_plain_http(self) -> None:
+        """Warn once per client that a typed password goes over plain http."""
+        if self._client.plain_http and self._client not in _WARNED_PLAIN_HTTP:
+            _WARNED_PLAIN_HTTP.add(self._client)
+            _LOGGER.warning(
+                "a password typed in the iTM (service, web user, touch panel or "
+                "e-mail server password) goes in clear over plain http; use an "
+                "https:// address where the iTM offers it"
+            )
+
+    def _track(
+        self, screen: int, part: int, event: int, data_type: int, reply: Reply
+    ) -> None:
+        """Keep what the start position needs: open dialogs, what can't be undone.
+
+        A value entered in a DATE, TIME or PASSWORD dialog, or one of a type not
+        known to be saved with OK, may outlive its screen (the history opens on
+        the date entered), and the iTM hides the list and layout views instead
+        of closing them, so what it sends when one is shown again is unknown:
+        after either, only a new login gives a start position to trust (bar the
+        analog list view, which was seen to keep the session). A name,
+        number or time of day entered (CHARINPUT, NUMBER, HOURMIN) is saved with
+        its screen's OK and keeps the session.
+        """
+        answers = {EventType.CLICK, EventType.CLICK2, EventType.CANCEL_PROG}
+        if (screen, part) in self._dialogs and event in answers:
+            kind = self._dialogs.pop((screen, part))
+            if (
+                event == EventType.CLICK
+                and data_type != DataType.NONE
+                and kind not in _SAVED_WITH_OK
+            ):
+                self.no_way_back(f"a value was entered in a {kind} dialog")
+        for s in reply.screens:
+            if s.update == "DLG_OPEN":
+                self._dialogs[s.screen, s.data[0]] = str(s.data[1])
+            elif s.update == "DLG_CLOSE":
+                self._dialogs.pop((s.screen, s.data[0]), None)
+            elif s.update == "CLOSE":
+                self._dialogs = {
+                    d: kind for d, kind in self._dialogs.items() if d[0] != s.screen
+                }
+            elif s.update in {"SHOW", "HIDE"} and not self._analog_list:
+                self.no_way_back("the main view was switched")
 
     def refuse_disabled(self, screen: int, part: int, what: str) -> None:
         """Raise for a part the iTM reports disabled; a hidden part is fine.
@@ -298,16 +464,31 @@ class _Session(
             s.screen == ScreenID.LOGIN and s.update == "DLG_OPEN" for s in reply.screens
         ):
             await self.forget_login()
-            msg = "login rejected (wrong credentials, or another web session is active)"
+            msg = (
+                "login rejected (wrong credentials, "
+                "or this user is logged in elsewhere)"
+            )
             raise LoginRejected(msg)
+        self._menu_available = self.state.visible(ScreenID.MAINMENU, MENU_OPEN)
+        self._client._logged_in(self)  # noqa: SLF001  # pylint: disable=protected-access
 
     async def handshake(self) -> None:
-        """Open the login screen, adopting a new web UI version after an update."""
+        """Open the login screen, adopting a new web UI version after an update.
+
+        The INIT is sent once more when its connection broke (a keep-alive
+        connection the iTM closed, a restart): it changes nothing on the iTM. A
+        timeout isn't retried, so a hung iTM costs one timeout.
+        """
         version = self._client.web_version
         try:
-            await self.send(
-                event=EventType.INIT, data_type=DataType.STRING, string=version
-            )
+            try:
+                await self._init(version)
+            except aiohttp.ClientConnectionError as err:
+                if isinstance(err, TimeoutError):
+                    raise
+                _LOGGER.debug("the INIT got no answer (%r); sending it again", err)
+                self.unanswered = False
+                await self._init(version)
         except VersionMismatch as e:
             # After a firmware update the iTM wants its new version string; it tells
             # us which. The protocol may have changed too, so say so loudly, but
@@ -321,9 +502,11 @@ class _Session(
             )
             self._client.web_version = e.version
             self.token = NO_TOKEN
-            await self.send(
-                event=EventType.INIT, data_type=DataType.STRING, string=e.version
-            )
+            await self._init(e.version)
+
+    async def _init(self, version: str) -> None:
+        """Send the INIT event that opens the login screen."""
+        await self.send(event=EventType.INIT, data_type=DataType.STRING, string=version)
 
     async def press_login(self, username: str, password: str, button: int) -> Reply:
         """Press a login screen button with the credentials, as the browser does."""
@@ -413,20 +596,171 @@ class _Session(
         The list view is shown with the icon view's "List" button and the icon view
         shown again afterwards, so the session ends where it started.
         """
-        await self.send(ScreenID.STDICON, ICON_BTN_LIST)
+        return await self._read_list(units_from_list)
+
+    async def read_analog_from_list(self) -> dict[str, AnalogPoint]:
+        """Read the analog inputs' values from the current zone's list view.
+
+        Unlike the units' list, showing this list and the icon view again keeps
+        the session: on a real iTM the reads after it gave what they give alone.
+        """
+        self._analog_list = True
         try:
-            return units_from_list(self.state)
+            return await self._read_list(analog_from_list)
         finally:
-            await self.send(ScreenID.STDLIST, L_BTN_ICON)
-            # The list stays in the merged state; a later read in this session
-            # must not mistake it for a fresh one.
-            self.state.screens.get(ScreenID.STDLIST, {}).pop((L_LIST, "PNTLIST"), None)
+            self._analog_list = False
+
+    async def _read_list(self, read: Callable[[UIState], _T]) -> _T:
+        """Show the list view, read it with read, and show the icon view again."""
+        await self.send(ScreenID.STDICON, ICON_BTN_LIST)
+        async with _cleanup(self._show_icons):
+            return read(self.state)
+
+    async def _show_icons(self) -> None:
+        """Go back from the list view to the icon view."""
+        await self.send(ScreenID.STDLIST, L_BTN_ICON)
+        # The list stays in the merged state; a later read in this session
+        # must not mistake it for a fresh one.
+        self.state.screens.get(ScreenID.STDLIST, {}).pop((L_LIST, "PNTLIST"), None)
+
+    # -- start position -----------------------------------------------------------
+    def _level(self) -> tuple[Any, ...]:
+        """Return where the icon view is: its path and the icons shown there."""
+        return (
+            self.state.get(ScreenID.STDICON, ICON_PATH, "LABEL"),
+            tuple(icon[:2] for icon in self.icons()),
+        )
+
+    def mark_start(self) -> None:
+        """Remember the start position: what the session shows right after login."""
+        self._start = (frozenset(self.state.screens), self._level())
+        self._dialogs = {}
+        self._stuck = None
+
+    def no_way_back(self, why: str) -> None:
+        """Record that only a new login gives the start position again.
+
+        For what a reader changes that may outlive the screen it is on and that
+        the next reader would take for the state after a login: a day or page
+        moved to, service mode.
+        """
+        self._stuck = why
+
+    async def step_back(
+        self,
+        steps: int,
+        press: Callable[[], Awaitable[object]],
+        shown: Callable[[], object],
+        start: object,
+        why: str,
+    ) -> None:
+        """Undo the steps a reader took to another day or page, in a shared session.
+
+        The screen may show that day or page again when it is opened next, so the
+        session only stays when pressing the way back as often brings back what
+        the screen showed first, and that is known. Outside a shared session nothing
+        is pressed.
+
+        Args:
+        ----
+            steps: How often the reader stepped away.
+            press: Presses the way back once.
+            shown: Returns what the screen shows: a day, a page.
+            start: What it showed before the reader stepped away.
+            why: The reason the session ends when the way back fails.
+
+        """
+        if not steps:
+            return
+        if self.shared:
+            try:
+                for _ in range(steps):
+                    await press()
+            except ItmError as err:
+                _LOGGER.debug("no way back: %s", err)
+            else:
+                if start is not None and shown() == start:
+                    return
+        self.no_way_back(why)
+
+    def at_start(self) -> bool:
+        """Tell whether the session is where a fresh login starts.
+
+        The top level of the icon view, with no menu, screen or dialog open, and
+        nothing done that only a new login undoes. The operation panel shows one
+        of that level's icons then; the iTM names it again in answer to a
+        POLLING event, so this also tells when the iTM is somewhere else. A
+        screen still showing a value the client picked is no start either: the
+        next reader would take the pick for what the iTM shows.
+        """
+        if not self.logged_in or self._stuck or self._dialogs:
+            return False
+        if any(self.state.picked(screen) for screen in self.state.screens):
+            return False
+        names = [icon[0] for icon in self.icons()]
+        if names and self.state.get(ScreenID.OPERATION, P_NAME, "LABEL") not in names:
+            return False
+        return (frozenset(self.state.screens), self._level()) == self._start
+
+    async def back_to_start(self) -> bool:
+        """Close what a call left open and go back to the icon view's top level.
+
+        Returns
+        -------
+            Whether the session is at its start position again. False when it
+            can't be brought there: only a new login gives one then.
+
+        """
+        if self._start is None or self._stuck or self._dialogs:
+            _LOGGER.debug(
+                "no way back to the start position: %s",
+                self._stuck or f"dialogs open {sorted(self._dialogs)}",
+            )
+            return False
+        screens, level = self._start
+        left = [s for s in self.state.screens if s not in screens]
+        for screen in reversed(left):
+            if screen == MenuScreen.MENULIST or screen not in self.state.screens:
+                continue
+            if screen not in _CLOSERS:
+                return False
+            await self.send(screen, _CLOSERS[screen])
+            if screen in self.state.screens:
+                return False
+        await self.close_menu()
+        await self._show_other_icon()
+        if self._level() != level:
+            await self.click(
+                ScreenID.STDICON, ICON_BTN_TOP, "the icon view's top level"
+            )
+            await self._show_other_icon()
+        return self.at_start()
+
+    async def _show_other_icon(self) -> None:
+        """Show other points on the operation panel until the iTM sent each pick over.
+
+        The panel keeps a value the client picked until the iTM sends that part
+        again, and the iTM never echoes a pick. Another point's panel sends it
+        when that point's value differs from what the iTM takes the client to
+        show, which is unknown (the pick or the value before it). So only a part
+        the iTM sent counts: the other points are shown one by one until none
+        holds a pick, and when one still does at_start ends the session.
+        """
+        shown = self.state.get(ScreenID.OPERATION, P_NAME, "LABEL")
+        for i, icon in enumerate(self.icons()):
+            if not self.state.picked(ScreenID.OPERATION):
+                return
+            if icon[0] != shown:
+                await self.select_icon(i)
 
     # -- operation panel ----------------------------------------------------------
     def require_writable(self) -> None:
         if self._client.read_only:
             msg = "the client is read-only"
             raise ReadOnlyError(msg)
+        if self.shared and not (self.kept or self.writing):
+            msg = "a shared session only reads; write outside the block"
+            raise SharedSessionError(msg)
 
     async def choose(self, part: int, index: int, *, confirm: bool = False) -> None:
         """Pick an option of an operation panel control.
@@ -461,24 +795,32 @@ class _Session(
         # The browser waits SEND_TIMER_INTERVAL (3s) after the last change, then
         # sends a TIMER event.
         await asyncio.sleep(delay)
+        self.change_sent = True
         await self.send(ScreenID.OPERATION, -1, EventType.TIMER)
 
     # -- points of any kind -------------------------------------------------------
-    async def read_points(self, *, details: bool = False) -> dict[str, Point]:
+    async def read_points(
+        self, *, details: bool = False, thermostat: Collection[str] = ()
+    ) -> tuple[dict[str, Point], dict[str, bool | None]]:
         """Read every point in the current zone, whatever its kind.
 
         Args:
         ----
             details: Also read each analog point's Details screen (one request
                 more per analog point).
+            thermostat: The points to read the thermostat status of, from their
+                Details screen while they are selected (two requests more each;
+                an analog point read with details too shares its one).
 
         Returns:
         -------
             The points by name: a Unit for indoor and ventilation units, an
-            AnalogPoint for analog inputs.
+            AnalogPoint for analog inputs; and the thermostat status by name of
+            the points in thermostat.
 
         """
         points: dict[str, Point] = {}
+        status: dict[str, bool | None] = {}
         for i, (name, icon_id, _) in enumerate(self.icons()):
             if icon_id == ICON_ID_ZONE:
                 continue
@@ -486,29 +828,46 @@ class _Session(
             point: Point
             if point_kind(icon_id) is PointKind.ANALOG:
                 point = analog_from_panel(self.state)
-                if details:
+                if details and name in thermostat:
+                    both = await self._with_details(_analog_and_status)
+                    point = replace(point, **both["analog"])
+                    status[name] = both["thermo_on"]
+                elif details:
                     point = replace(point, **await self.read_analog_details())
             else:
                 point = unit_from_panel(self.state)
             if point.name != name:
                 msg = f"operation panel shows {point.name!r} instead of {name!r}"
                 raise ItmCommandError(msg)
+            if name in thermostat and name not in status:
+                status[name] = (await self.read_detail_status())["thermo_on"]
             points[name] = point
-        return points
+        return points, status
 
     # -- main menu ----------------------------------------------------------------
     def indicators(self) -> ItmIndicators:
         """Return the main menu bar's indicators and clock (open in every session)."""
-        return indicators_from_screen(self.state)
+        return indicators_from_screen(self.state, menu_available=self.menu_available)
 
     async def open_menu(self) -> None:
-        """Open the menu list from the main menu bar."""
+        """Open the menu list from the main menu bar.
+
+        A menu button the login hid raises MenuNotAvailable before anything is
+        sent, as does a reply without the menu list and without a dialog (both
+        seen for a normal web user without allowed screens); a dialog raises
+        ItmCommandError.
+        """
         if MenuScreen.MENULIST in self.state.screens:
             return
+        if not self.menu_available:
+            raise MenuNotAvailable(button_hidden=True)
         reply = await self.send(ScreenID.MAINMENU, MENU_OPEN)
-        if MenuScreen.MENULIST not in self.state.screens:
-            msg = f"the menu list did not open: {reply.dialogs()}"
-            raise ItmCommandError(msg)
+        if MenuScreen.MENULIST in self.state.screens:
+            return
+        if not reply.dialogs():
+            raise MenuNotAvailable
+        msg = f"the menu list did not open: {reply.dialogs()}"
+        raise ItmCommandError(msg)
 
     async def close_menu(self) -> None:
         """Close the menu list, if open."""
@@ -558,18 +917,25 @@ class _Session(
         mask = 0
         for screen in self.state.screens:
             mask |= bits.get(screen, 64)  # type: ignore[call-overload]
-        return await self.send(-1, -1, EventType.POLLING, DataType.INT, mask)
+        reply = await self.send(-1, -1, EventType.POLLING, DataType.INT, mask)
+        self._client._polled()  # noqa: SLF001  # pylint: disable=protected-access
+        return reply
 
-    async def wait_for_progress(self, reply: Reply, *, attempts: int = 20) -> None:
+    async def wait_for_progress(
+        self, reply: Reply, *, seconds: float | None = None, cancel: bool = False
+    ) -> None:
         """Wait out a PROGRESS dialog a reply opened, like the browser does.
 
         The browser asks for progress (UPD_PROG with the job ID) until the iTM
-        closes the dialog, then a POLLING event brings the data.
+        closes the dialog, then a POLLING event brings the data. A progress
+        request is not started once the time is up.
 
         Args:
         ----
             reply: The reply that may have opened the dialog.
-            attempts: How many progress requests to make at most.
+            seconds: How long to wait at most; None: the client's progress_timeout.
+            cancel: Cancel the job (CANCEL_PROG) when it doesn't end in time. Only
+                for a read: a write's job (a number entered) is never cancelled.
 
         Raises:
         ------
@@ -585,16 +951,29 @@ class _Session(
             return
         dialog = dialogs[0]
         screen, dialog_id, job_id = dialog.screen, dialog.data[0], dialog.data[3]
-        for _ in range(attempts):
+        if seconds is None:
+            seconds = self._client.progress_timeout
+        deadline = asyncio.get_running_loop().time() + seconds
+        while True:
             progress = await self.send(
                 screen, dialog_id, EventType.UPD_PROG, DataType.INT, job_id
             )
             if any(s.update == "DLG_CLOSE" for s in progress.screens):
                 await self.poll()
                 return
+            if asyncio.get_running_loop().time() >= deadline:
+                break
             await asyncio.sleep(self._client.progress_interval)
-        msg = "the iTM did not finish loading in time"
-        raise ItmCommandError(msg)
+        msg = f"the iTM did not finish loading in time ({seconds:g} s)"
+        err = ItmCommandError(msg)
+        if cancel:
+            await _cleanup_after(
+                err,
+                lambda: self.send(
+                    screen, dialog_id, EventType.CANCEL_PROG, DataType.INT, job_id
+                ),
+            )
+        raise err
 
     async def read_info(self) -> ItmInfo:
         """Read the version, region and time screens (region is best effort)."""
@@ -629,7 +1008,11 @@ class _Session(
     ) -> list[ChangeoverGroup]:
         """Read the auto changeover groups; with details also members and settings."""
         await self.open_menu_screen(MB_CHANGEOVER, MenuScreen.CHANGEOVER)
-        try:
+        async with _cleanup(
+            lambda: self.close_screen(MenuScreen.CHANGEOVER_SETTINGS),
+            lambda: self.close_screen(MenuScreen.CHANGEOVER_GROUP),
+            lambda: self.close_screen(MenuScreen.CHANGEOVER),
+        ):
             groups = changeover_groups_from_screen(self.state)
             if not details:
                 return groups
@@ -651,15 +1034,14 @@ class _Session(
                 await self.close_screen(MenuScreen.CHANGEOVER_SETTINGS)
                 detailed.append(replace(group, members=members, **settings))
             return detailed
-        finally:
-            await self.close_screen(MenuScreen.CHANGEOVER_SETTINGS)
-            await self.close_screen(MenuScreen.CHANGEOVER_GROUP)
-            await self.close_screen(MenuScreen.CHANGEOVER)
 
     async def read_changeover_candidates(self) -> list[tuple[str, str, str]]:
         """Read which points an auto changeover group could hold (needs a group)."""
         await self.open_menu_screen(MB_CHANGEOVER, MenuScreen.CHANGEOVER)
-        try:
+        async with _cleanup(
+            lambda: self.close_screen(MenuScreen.CHANGEOVER_GROUP),
+            lambda: self.close_screen(MenuScreen.CHANGEOVER),
+        ):
             if not changeover_groups_from_screen(self.state):
                 return []
             await self.send(
@@ -672,45 +1054,36 @@ class _Session(
             )
             await self.send(MenuScreen.CHANGEOVER, CO_MEMBERS_BUTTON)
             return changeover_candidates_from_screen(self.state)
-        finally:
-            await self.close_screen(MenuScreen.CHANGEOVER_GROUP)
-            await self.close_screen(MenuScreen.CHANGEOVER)
 
     async def read_setback(self) -> SetbackSettings:
         """Read the setback offsets and the recovery temperatures."""
         await self.open_menu_screen(MB_SETBACK, MenuScreen.SETBACK)
-        try:
+        async with _cleanup(
+            lambda: self.close_screen(MenuScreen.SETBACK_ADVANCED),
+            lambda: self.close_screen(MenuScreen.SETBACK),
+        ):
             await self.send(MenuScreen.SETBACK, SB_ADVANCED)
             settings = setback_from_screen(self.state)
             await self.close_screen(MenuScreen.SETBACK_ADVANCED)
             return settings
-        finally:
-            await self.close_screen(MenuScreen.SETBACK_ADVANCED)
-            await self.close_screen(MenuScreen.SETBACK)
 
     async def read_overtime(self) -> int | None:
         """Read the overtime timer's duration in minutes."""
         await self.open_menu_screen(MB_OVERTIME, MenuScreen.OVERTIME)
-        try:
+        async with _cleanup(lambda: self.close_screen(MenuScreen.OVERTIME)):
             return overtime_from_screen(self.state)
-        finally:
-            await self.close_screen(MenuScreen.OVERTIME)
 
     async def read_emergency_stop(self) -> list[EmergencyStopProgram]:
         """Read the emergency stop programs."""
         await self.open_menu_screen(MB_EMERGENCY_STOP, MenuScreen.EMERGENCY_STOP)
-        try:
+        async with _cleanup(lambda: self.close_screen(MenuScreen.EMERGENCY_STOP)):
             return emergency_stop_from_screen(self.state)
-        finally:
-            await self.close_screen(MenuScreen.EMERGENCY_STOP)
 
     async def read_schedules(self) -> list[ScheduleSummary]:
         """Read the schedule programs as the program list shows them."""
         await self.open_menu_screen(MB_SCHEDULE, MenuScreen.SCHEDULE)
-        try:
+        async with _cleanup(lambda: self.close_screen(MenuScreen.SCHEDULE)):
             return schedules_from_screen(self.state)
-        finally:
-            await self.close_screen(MenuScreen.SCHEDULE)
 
     async def _read_screen(
         self, button: int, screen: MenuScreen, read: Callable[[UIState], _T]
@@ -718,10 +1091,8 @@ class _Session(
         """Open a menu screen, read it and close it; None when it doesn't open."""
         if not await self.open_menu_screen(button, screen):
             return None
-        try:
+        async with _cleanup(lambda: self.close_screen(screen)):
             return read(self.state)
-        finally:
-            await self.close_screen(screen)
 
     async def read_system(self, only: frozenset[str] | None = None) -> SystemSettings:
         """Read the system screens (or only the named SystemSettings fields)."""
@@ -826,6 +1197,7 @@ class _Session(
                 + (f" {string!r}" if string else f" {number}" if number != -1 else "")
             )
             return None
+        self.change_sent = True
         return await self.send(screen, part, event, data_type, number, string)
 
     async def press_ok(self, label: str, screen: int, ok: int, cancel: int) -> bool:
@@ -892,7 +1264,7 @@ class _Session(
             "low_back": SB_LOW_BACK,
         }
         advanced = {"recovery_cool": SBA_COOL, "recovery_heat": SBA_HEAT}
-        try:
+        async with _cleanup(lambda: self.close_screen(a), lambda: self.close_screen(s)):
             if any(key in changes for key in advanced):
                 await self.send(s, SB_ADVANCED)
                 if a not in self.state.screens:
@@ -906,15 +1278,12 @@ class _Session(
                 if key in changes:
                     await self._pick_number(s, part, changes[key], f"setback {key}")
             await self.press_ok("save setback offsets", s, SB_OK, CLOSE_PART[s])
-        finally:
-            await self.close_screen(a)
-            await self.close_screen(s)
 
     async def set_overtime(self, minutes: int) -> None:
         """Pick the overtime timer's duration and press OK."""
         await self.open_menu_screen(MB_OVERTIME, MenuScreen.OVERTIME)
         s = MenuScreen.OVERTIME
-        try:
+        async with _cleanup(lambda: self.close_screen(s)):
             options = self.state.get(s, OT_DURATION, "COMBO_STRS") or []
             values = [
                 int(m.group()) if (m := re.search(r"\d+", o)) else -1 for o in options
@@ -928,8 +1297,6 @@ class _Session(
             await self.press_ok(
                 f"save overtime duration {minutes} min", s, OT_OK, CLOSE_PART[s]
             )
-        finally:
-            await self.close_screen(s)
 
     async def select_row(self, screen: int, part: int, row: int) -> Reply:
         """Select a list row, as the browser does.
@@ -947,7 +1314,12 @@ class _Session(
         """Select the list row whose column shows name; raise when it isn't there."""
         row = row_index(self.state, screen, part, column, name)
         if row is None:
-            msg = f"{what}: {name!r} not found"
+            listed = [
+                c[column].strip()
+                for c in map(_cells, _rows(self.state, screen, part))
+                if len(c) > column
+            ]
+            msg = f"{what}: {name!r} not found; available: {listed}"
             raise ItmCommandError(msg)
         await self.select_row(screen, part, row)
 
@@ -975,11 +1347,14 @@ class _Session(
             d.screen, d.data[0], EventType.CLICK, DataType.STRING, string=password
         )
         if reply.dialogs() or not service_logged_in(self.state):
-            for dialog in reply.dialogs():
-                with contextlib.suppress(Exception):
-                    await self.send(d.screen, dialog[0])
             msg = "the iTM refused the service password"
-            raise ItmCommandError(msg)
+            refused = ItmCommandError(msg)
+            for dialog in reply.dialogs():
+                await _cleanup_after(
+                    refused, functools.partial(self.send, d.screen, dialog[0])
+                )
+            raise refused
+        self.no_way_back("service mode")
 
     async def read_service(self) -> ServiceSettings:
         """Read the service screens (after service_login), each left with Cancel."""
@@ -1031,8 +1406,8 @@ class _Session(
         if MenuScreen.HISTORY not in self.state.screens:
             await self.open_menu()
             reply = await self.send(MenuScreen.MENULIST, MB_HISTORY)
-        try:
-            await self.wait_for_progress(reply)
+        async with _cleanup(lambda: self.close_screen(MenuScreen.HISTORY)):
+            await self.wait_for_progress(reply, cancel=True)
             if await _set_checkbox(
                 self,
                 MenuScreen.HISTORY,
@@ -1041,24 +1416,34 @@ class _Session(
                 what="management history",
             ):
                 await self.wait_for_progress(
-                    await self.send(MenuScreen.HISTORY, H_REFRESH)
+                    await self.send(MenuScreen.HISTORY, H_REFRESH), cancel=True
                 )
             if day is not None:
                 await self._history_go_to(day, date_format)
             result = [history_from_screen(self.state)]
+            moved = 0
             for _ in range(pages - 1):
                 if self.state.get(MenuScreen.HISTORY, H_PAGE_OLDER, "ENABLED") != 1:
                     break
-                await self.wait_for_progress(
-                    await self.send(MenuScreen.HISTORY, H_PAGE_OLDER)
-                )
+                await self._history_page(H_PAGE_OLDER)
+                moved += 1
                 page = history_from_screen(self.state)
                 if not page.entries or page.page == result[-1].page:
                     break
                 result.append(page)
+            await self.step_back(
+                moved,
+                lambda: self._history_page(H_PAGE_NEWER),
+                lambda: history_from_screen(self.state).page,
+                result[0].page,
+                "the history stayed on an older page",
+            )
             return result
-        finally:
-            await self.close_screen(MenuScreen.HISTORY)
+
+    async def _history_page(self, button: int) -> None:
+        await self.wait_for_progress(
+            await self.send(MenuScreen.HISTORY, button), cancel=True
+        )
 
     async def _history_go_to(self, day: date, date_format: str | None) -> None:
         shown = parse_shown_date(
@@ -1071,7 +1456,9 @@ class _Session(
             return
         await _answer_date(self, MenuScreen.HISTORY, H_DAY_CHANGE, day, "history day")
         # The date input only changes the date shown; Refresh loads that day's list.
-        await self.wait_for_progress(await self.send(MenuScreen.HISTORY, H_REFRESH))
+        await self.wait_for_progress(
+            await self.send(MenuScreen.HISTORY, H_REFRESH), cancel=True
+        )
 
     async def read_optional_functions(self) -> dict[str, OptionalFunction]:
         """Probe the functions the menu hides (temperature limit, interlock, ...)."""

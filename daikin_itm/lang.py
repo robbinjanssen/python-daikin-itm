@@ -3,23 +3,24 @@
 Everything the client needs is addressed by part ID, icon ID or index, except a few
 labels the iTM only sends as text in its display language: the operation modes, the
 wall remote locks, the on/off and setback words of schedule event texts, the status
-lines on the Details screen, an analog point's attributes, web user types and the
-name of the built-in "All" zone. The tables here map those labels; lookups try every
-language, so nothing has to be configured.
+lines on the Details screen, an analog point's attributes, web user types, the
+name of the built-in "All" zone, the setpoint-only mode of schedule events and the
+month, week and weekday words of schedule calendars (English only). The tables here
+map those labels; lookups try every language, so nothing has to be configured.
 
-The entries were captured from a device in each of the nine languages its language
-screen offers (nl, en, de, es, pt, ja, fr, it, zh). Labels that device never showed
-(dry mode, stop-only in event texts, a few "on" values and lower limits) follow the
-captured ones and are marked inferred. Korean is in the web UI but was not offered.
-An unknown label is reported by the caller (see ``Capabilities.unknown_labels``),
-never silently ignored. Lookups ignore case and outer spaces (German pads some
-labels with a space).
+The entries were captured from a real iTM in all ten display languages (nl, en, de,
+es, pt, ja, fr, it, zh, ko; Korean through a web user's own language). Labels no
+device showed (dry mode, an analog point's lower limit, the R32 alarm's "on" value,
+German "an" and other spellings of the modes) follow the captured ones and are
+marked inferred. An unknown label is reported by the
+caller (see ``Capabilities.unknown_labels``), never silently ignored. Lookups ignore
+case and outer spaces (German pads some labels with a space).
 """
 
 from __future__ import annotations
 
-# Operation mode labels -> heat / cool / fan / dry / auto. Fan, cool and heat are the
-# settings dialog's; auto comes from schedule event texts; dry is inferred.
+# Operation mode labels -> heat / cool / fan / dry / auto, as the settings dialog and
+# schedule event texts show them; dry is inferred.
 MODE_LABELS: dict[str, dict[str, str]] = {
     "nl": {
         "verwarmen": "heat",
@@ -91,10 +92,17 @@ MODE_LABELS: dict[str, dict[str, str]] = {
         "除湿": "dry",
         "自动": "auto",
     },
+    "ko": {
+        "난방": "heat",
+        "냉방": "cool",
+        "송풍": "fan",
+        "제습": "dry",
+        "자동": "auto",
+    },
 }
 
-# Other spellings of the modes (older firmware, other devices) and Korean, which the
-# web UI knows but the captured device didn't offer: inferred, merged in below.
+# Other spellings of the modes (older firmware, other devices): inferred, merged in
+# below.
 _MODE_SYNONYMS: dict[str, dict[str, str]] = {
     "en": {
         "heating": "heat",
@@ -129,20 +137,14 @@ _MODE_SYNONYMS: dict[str, dict[str, str]] = {
         "ventilatore": "fan",
         "automatico": "auto",
     },
-    "ko": {
-        "난방": "heat",
-        "냉방": "cool",
-        "송풍": "fan",
-        "제습": "dry",
-        "자동": "auto",
-    },
 }
 for _code, _labels in _MODE_SYNONYMS.items():
     MODE_LABELS.setdefault(_code, {}).update(_labels)
 
-# Wall remote lock labels -> allowed / stop_only / forbidden: the settings dialog's
-# radios, the list view's lock columns and the values in schedule event texts (which
-# use their own words in some languages, e.g. "Erlaubt" next to "Zulässig").
+# Wall remote lock labels -> allowed / stop_only / forbidden: the list view's lock
+# columns and the values in schedule event texts (which use their own words in some
+# languages, e.g. "Erlaubt" next to "Zulässig"), and the settings dialog's radios
+# (read by position).
 LOCK_LABELS: dict[str, dict[str, str]] = {
     "nl": {
         "toegestaan": "allowed",
@@ -189,6 +191,7 @@ LOCK_LABELS: dict[str, dict[str, str]] = {
         "禁止遥控器": "forbidden",
         "禁止": "forbidden",
     },
+    "ko": {"허가": "allowed", "정지만 허가": "stop_only", "금지": "forbidden"},
 }
 
 # The keys of the wall remote lock settings in schedule event texts ("<key>[<value>]")
@@ -239,6 +242,11 @@ EVENT_LOCK_KEYS: dict[str, dict[str, str]] = {
         "复位运转模式": "lock_mode",
         "复位温度设定": "lock_setpoint",
     },
+    "ko": {
+        "원격 운전/정지": "lock_start_stop",
+        "원격 운전 모드": "lock_mode",
+        "원격 온도 설정": "lock_setpoint",
+    },
 }
 
 # Status lines on the Details screen: "<key> [<value>]".
@@ -252,11 +260,13 @@ DETAIL_KEYS: dict[str, dict[str, str]] = {
     "fr": {"état du thermostat": "thermo", "alarme r32": "r32"},
     "it": {"stato del termostato": "thermo", "allarme r32": "r32"},
     "zh": {"温控器状态": "thermo", "r32警报": "r32"},
+    "ko": {"서모 상태": "thermo", "r32 alarm": "r32"},
 }
 
-# On/off-like values: Details status values, the maintenance column, the overtime
-# combo and e-mail activation. The "on" side of the thermostat and R32 values is
-# inferred where the device only showed "off".
+# On/off-like values: the Details status values and the maintenance column. The R32
+# alarm's "on" values (no device showed an alarm) and German "an" are inferred. The
+# overtime combo is read by position, e-mail activation against its disable radio's
+# label.
 ON_OFF_LABELS: dict[str, dict[str, bool]] = {
     "nl": {"aan": True, "uit": False, "actief": True, "deactiv.": False},
     "en": {
@@ -267,7 +277,7 @@ ON_OFF_LABELS: dict[str, dict[str, bool]] = {
         "enable": True,
         "disable": False,
     },
-    "de": {"an": True, "aus": False, "aktiv.": True, "deaktiv.": False},
+    "de": {"an": True, "ein": True, "aus": False, "aktiv.": True, "deaktiv.": False},
     "es": {"on": True, "off": False, "hab.": True, "desh.": False},
     "pt": {
         "on": True,
@@ -290,9 +300,8 @@ ON_OFF_LABELS: dict[str, dict[str, bool]] = {
     "zh": {"on": True, "off": False, "有效": True, "无效": False},
 }
 
-# On/off and setback words -> on / off / setback_low / setback_high: the operation
-# panel's combo and the first word of a schedule event text. Setback high in event
-# texts is inferred from setback low.
+# On/off and setback words -> on / off / setback_low / setback_high: the first word of
+# a schedule event text, and the operation panel's combo (read by position).
 POWER_LABELS: dict[str, dict[str, str]] = {
     "nl": {
         "start": "on",
@@ -330,7 +339,7 @@ POWER_LABELS: dict[str, dict[str, str]] = {
         "iniciar": "on",
         "parar": "off",
         "bloqueio baixo": "setback_low",
-        "bloqueio alto": "setback_high",
+        "bloqueio elevado": "setback_high",
         "a baix": "setback_low",
         "at alto": "setback_high",
     },
@@ -366,6 +375,29 @@ POWER_LABELS: dict[str, dict[str, str]] = {
         "sb弱": "setback_low",
         "sb强": "setback_high",
     },
+    "ko": {
+        "운전": "on",
+        "정지": "off",
+        "세트백 저": "setback_low",
+        "세트백 고": "setback_high",
+        "sb저": "setback_low",
+        "sb고": "setback_high",
+    },
+}
+
+# The schedule event editor's setpoint-only mode, one option more than a unit's modes,
+# as its mode list and event texts show it.
+EVENT_MODE_LABELS: dict[str, dict[str, str]] = {
+    "nl": {"setpoint": "setpoint"},
+    "en": {"dependent": "setpoint"},
+    "de": {"einstl.pkt": "setpoint"},
+    "es": {"pto.consigna": "setpoint"},
+    "pt": {"temperatura": "setpoint"},
+    "ja": {"温調": "setpoint"},
+    "fr": {"temp": "setpoint"},
+    "it": {"setpoint": "setpoint"},
+    "zh": {"温度控制": "setpoint"},
+    "ko": {"온도조절점": "setpoint"},
 }
 
 # The name of the iTM's built-in "All" zone, which it translates with the display
@@ -380,24 +412,25 @@ ALL_ZONE_LABELS: dict[str, str] = {
     "fr": "Tout",
     "it": "Tutto",
     "zh": "全部",
+    "ko": "모두",
 }
 
-# Web access user types -> administrator (True) or user (False). The device only had
-# administrators; the user types are inferred.
+# Web access user types -> administrator (True) or user (False).
 USER_TYPE_LABELS: dict[str, dict[str, bool]] = {
     "nl": {"beheerder": True, "gebruiker": False},
     "en": {"manager": True, "user": False},
     "de": {"administrator": True, "benutzer": False},
     "es": {"gestor": True, "usuario": False},
     "pt": {"gestor": True, "utilizador": False},
-    "ja": {"管理者": True, "一般": False},
+    "ja": {"管理者": True, "一般ユーザ": False},
     "fr": {"administrateur": True, "utilisateur": False},
     "it": {"gestore": True, "utente": False},
     "zh": {"管理员": True, "用户": False},
+    "ko": {"관리자": True, "사용자": False},
 }
 
 # Attribute lines of an analog point's Details screen: "<key>:<value>". Lower limits
-# are inferred (the device's analog points only had an upper limit).
+# are inferred (the devices' analog points only had an upper limit).
 ANALOG_KEYS: dict[str, dict[str, str]] = {
     "nl": {
         "doelpunt": "source_point",
@@ -462,6 +495,59 @@ ANALOG_KEYS: dict[str, dict[str, str]] = {
         "下限值": "lower_limit",
         "单位字符串": "unit",
     },
+    "ko": {
+        "대상 관리점": "source_point",
+        "목표 아날로그 값": "source_value",
+        "상한치": "upper_limit",
+        "하한치": "lower_limit",
+        "단위 문자 예": "unit",
+    },
+}
+
+
+# The words of a schedule program's calendar rules (month, "1st Sunday") and period
+# combos -> month 1-12 (0: every month), week 1-5 (5: the last) and weekday (0 =
+# Sunday). English only, as a real iTM shows them: the fallback for a program read
+# without the editor's option lists, which give these words by position in every
+# display language.
+_MONTHS_EN = (
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+)
+_WEEKDAYS_EN = (
+    "sunday",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+)
+CALENDAR_MONTHS: dict[str, dict[str, int]] = {
+    "en": {
+        **{name[:3]: number for number, name in enumerate(_MONTHS_EN, start=1)},
+        **{name: number for number, name in enumerate(_MONTHS_EN, start=1)},
+        "every": 0,
+    },
+}
+CALENDAR_WEEKS: dict[str, dict[str, int]] = {
+    "en": {"1st": 1, "2nd": 2, "3rd": 3, "4th": 4, "last": 5},
+}
+CALENDAR_WEEKDAYS: dict[str, dict[str, int]] = {
+    "en": {
+        **{name[:3]: number for number, name in enumerate(_WEEKDAYS_EN)},
+        **{name: number for number, name in enumerate(_WEEKDAYS_EN)},
+    },
 }
 
 
@@ -523,6 +609,34 @@ def is_all_zone(name: str) -> bool:
     return name.strip() in ALL_ZONE_LABELS.values()
 
 
+def event_mode_from_label(label: str | None) -> str | None:
+    """Map a schedule event's mode label to a mode or setpoint (setpoint only)."""
+    return mode_from_label(label) or _lookup(EVENT_MODE_LABELS, label)
+
+
 def event_lock_key(label: str) -> str | None:
     """Map an event text's lock key to lock_start_stop / lock_mode / lock_setpoint."""
     return _lookup(EVENT_LOCK_KEYS, label)
+
+
+def _lookup_number(tables: dict[str, dict[str, int]], label: str) -> int | None:
+    key = label.strip().lower()
+    for table in tables.values():
+        if key in table:
+            return table[key]
+    return None
+
+
+def calendar_month(label: str) -> int | None:
+    """Map a calendar month label to 1-12, 0 for every month, or None."""
+    return _lookup_number(CALENDAR_MONTHS, label)
+
+
+def calendar_week(label: str) -> int | None:
+    """Map a calendar week label to 1-4, 5 for the last week, or None."""
+    return _lookup_number(CALENDAR_WEEKS, label)
+
+
+def calendar_weekday(label: str) -> int | None:
+    """Map a calendar weekday label to 0 (Sunday) .. 6 (Saturday), or None."""
+    return _lookup_number(CALENDAR_WEEKDAYS, label)

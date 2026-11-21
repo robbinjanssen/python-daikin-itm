@@ -8,10 +8,15 @@ import time
 from typing import TYPE_CHECKING
 
 import pytest
-from aiohttp import web
+from aiohttp import ClientResponseError, web
 from aiohttp.test_utils import TestServer
 
-from daikin_itm import FileSessionStore, ItmClient, ProtocolError
+from daikin_itm import (
+    FileSessionStore,
+    ItmClient,
+    MemorySessionStore,
+    ProtocolError,
+)
 from daikin_itm.cli_common import safe as _safe
 from daikin_itm.protocol import parse_reply
 
@@ -167,6 +172,57 @@ async def test_reply_is_read() -> None:
             await client.close()
 
 
+@pytest.mark.parametrize("status", [301, 302, 307, 308])
+async def test_redirects_are_not_followed(status: int) -> None:
+    """A redirect is an error: no request leaves the configured iTM."""
+    followed: list[str] = []
+
+    async def redirect(_request: web.Request) -> web.Response:
+        return web.Response(status=status, headers={"Location": "/elsewhere"})
+
+    async def elsewhere(request: web.Request) -> web.Response:
+        followed.append(request.method)
+        return web.Response(text=TOKEN + "00000000")
+
+    app = web.Application()
+    app.router.add_post("/cmd/", redirect)
+    app.router.add_get("/sdlfs/WebExport/x.csv", redirect)
+    app.router.add_route("*", "/elsewhere", elsewhere)
+    async with TestServer(app) as server:
+        client = ItmClient(f"{server.host}:{server.port}", "u", "p")
+        try:
+            with pytest.raises(ProtocolError, match=f"HTTP status {status}"):
+                await client._post("snD=")
+            with pytest.raises(ProtocolError, match=f"HTTP status {status}"):
+                await client._get_bytes("/sdlfs/WebExport/x.csv")
+        finally:
+            await client.close()
+    assert not followed
+
+
+async def test_other_statuses() -> None:
+    """An error status raises as before; another success status is refused."""
+
+    async def no_content(_request: web.Request) -> web.Response:
+        return web.Response(status=204)
+
+    async def error(_request: web.Request) -> web.Response:
+        return web.Response(status=500)
+
+    app = web.Application()
+    app.router.add_post("/cmd/", no_content)
+    app.router.add_get("/sdlfs/WebExport/x.csv", error)
+    async with TestServer(app) as server:
+        client = ItmClient(f"{server.host}:{server.port}", "u", "p")
+        try:
+            with pytest.raises(ProtocolError, match="HTTP status 204"):
+                await client._post("snD=")
+            with pytest.raises(ClientResponseError):
+                await client._get_bytes("/sdlfs/WebExport/x.csv")
+        finally:
+            await client.close()
+
+
 # -- F3: an https:// iTM address is used as given -----------------------------------
 def test_https_address_is_kept() -> None:
     """A full URL is kept, a bare host gets http://."""
@@ -199,6 +255,105 @@ async def test_session_file_missing_or_corrupt(tmp_path: Path) -> None:
     await FileSessionStore(str(path)).save(None)
     await FileSessionStore(str(path)).save(None)  # removing twice is fine
     assert not path.exists()
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "[]",
+        '"text"',
+        "null",
+        '{"host": "10.0.0.5"}',
+        '{"host": "10.0.0.5", "token": 12}',
+        '{"host": "10.0.0.5", "token": "x"}',
+        '{"host": "10.0.0.5", "token": "' + "g" * 32 + '"}',
+        '{"host": "10.0.0.5", "token": "' + "a" * 31 + '\\n"}',
+        '{"host": ["10.0.0.5"], "token": "' + "a" * 32 + '"}',
+        '{"host": "http://[10.0.0.5", "token": "' + "a" * 32 + '"}',
+        '{"token": "' + "a" * 32 + '"}',
+        "[" * 100_000,
+        "\udcff",
+    ],
+    ids=[
+        "list",
+        "string",
+        "null",
+        "no-token",
+        "number",
+        "short",
+        "not-hex",
+        "newline",
+        "host-list",
+        "host-unparsable",
+        "no-host",
+        "deep",
+        "not-utf8",
+    ],
+)
+async def test_session_file_damaged_or_hostile(tmp_path: Path, content: str) -> None:
+    """A file that isn't a saved session of this host loads as no token."""
+    path = tmp_path / "session.json"
+    path.write_bytes(content.encode("utf-8", "surrogateescape"))
+    assert await FileSessionStore(str(path), "10.0.0.5").load() is None
+
+
+async def test_session_file_too_large(tmp_path: Path) -> None:
+    """A huge file is not read whole."""
+    path = tmp_path / "session.json"
+    token = '{"host": null, "token": "' + "a" * 32 + '"}'
+    path.write_text(token + " " * 70_000, encoding="utf-8")
+    assert await FileSessionStore(str(path)).load() is None
+    path.write_text(token, encoding="utf-8")
+    assert await FileSessionStore(str(path)).load() == "a" * 32
+
+
+@pytest.mark.parametrize(
+    ("saved", "loaded"),
+    [
+        ("10.0.0.5", "http://10.0.0.5"),
+        ("10.0.0.5:80", "HTTP://10.0.0.5/"),
+        ("https://ITM.example:443/", "https://itm.example"),
+        ("itm.example:8080", "http://itm.example:8080"),
+    ],
+)
+async def test_session_file_host_is_normalised(
+    tmp_path: Path, saved: str, loaded: str
+) -> None:
+    """The host is compared as the iTM it names, not as typed."""
+    path = tmp_path / "session.json"
+    await FileSessionStore(str(path), saved).save("a" * 32)
+    assert await FileSessionStore(str(path), loaded).load() == "a" * 32
+    assert await FileSessionStore(str(path), "https://10.0.0.6").load() is None
+
+
+async def test_session_file_of_an_earlier_version(tmp_path: Path) -> None:
+    """A file that kept the host as typed still loads for that host."""
+    path = tmp_path / "session.json"
+    path.write_text(
+        '{"host": "10.0.0.5", "token": "' + "a" * 32 + '", "saved_at": 1}',
+        encoding="utf-8",
+    )
+    assert await FileSessionStore(str(path), "10.0.0.5").load() == "a" * 32
+
+
+async def test_a_store_without_a_token_is_forgotten() -> None:
+    """Whatever a store hands back that isn't a token never goes into a request."""
+    store = MemorySessionStore()
+    store.token = "not a token\x00"
+    sent: list[str] = []
+
+    class Client(ItmClient):
+        """A client that records what it would send."""
+
+        async def _post(self, body: str) -> str:
+            sent.append(body)
+            return TOKEN + "00000000"
+
+    assert await Client("10.0.0.5", "u", "p", store=store).release_saved_session() is (
+        False
+    )
+    assert not sent
+    assert store.token is None
 
 
 async def test_session_file_write_failure_leaves_no_temp_file(

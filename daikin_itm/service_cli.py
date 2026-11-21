@@ -5,13 +5,14 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .cli_common import date_arg as _date_arg
+from .cli_common import download_path as _download_path
 from .cli_common import echo as _out
 from .cli_common import onoff as _onoff
 from .cli_common import print_plan as _print_plan
+from .cli_common import refuse_existing as _refuse_existing
 from .cli_common import save as _save
 from .cli_common import shown as _shown
 
@@ -236,9 +237,10 @@ async def _leakcheck(client: ItmClient, args: argparse.Namespace) -> None:
         for r in results.results:
             _out(f"{r.outdoor:20} {r.checked:20} {r.amount}")
     elif args.action == "export":
+        _refuse_existing(args.out, force=args.force)
         download = await client.export_leakage_check_results(password)
-        out = Path(args.out or download.name)
-        await asyncio.to_thread(_save, out, download.data)
+        out = _download_path(args.out, download.name)
+        await asyncio.to_thread(_save, out, download.data, force=args.force)
         _out(f"{download.name}: {len(download.data)} bytes written to {out}")
     else:
         await _leakcheck_write(client, args, password)
@@ -528,6 +530,9 @@ def _add_service_edit_commands(sub: Any) -> None:
     lc.add_argument("--time", help="schedule: the start time, HH:MM")
     lc.add_argument("--to", action="append", help="copy: an outdoor unit (repeat)")
     lc.add_argument("--out", help="export: the file to write")
+    lc.add_argument(
+        "--force", action="store_true", help="export: overwrite an existing file"
+    )
     lc.add_argument(
         "--allow-leakage-check",
         action="store_true",

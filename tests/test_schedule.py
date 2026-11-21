@@ -11,7 +11,10 @@ import pytest
 
 from daikin_itm import ItmCommandError, PowerState, RemoteLock
 from daikin_itm.menu import (
+    EVT_TIME,
+    MenuScreen,
     ScheduleEvent,
+    _calendar_options,
     day_events_from_screen,
     event_from_action,
     event_from_screen,
@@ -122,8 +125,22 @@ def test_captured_editor() -> None:
     assert 390 in program.weekly_slots[2]  # Tuesday 06:30
     assert program.weekly_slots[0] == ()  # Sunday: no events
     assert program.weekly_slots[6] == (540, 570)  # Saturday 09:00 and 09:30
-    assert not program.special_slots
+    assert program.special_slots == {f"Ex{i}": () for i in range(1, 6)}
     assert not program.calendar
+    assert program.period_dates is None
+    assert not program.calendar_values
+
+
+def test_captured_editor_sends_the_calendar_options() -> None:
+    """The editor's first reply holds the calendar's option lists in the iTM's order."""
+    options = _calendar_options(_replay("program", stop_before=[104, 1]))
+    assert len(options.months) == 13
+    assert options.months[0] == "Jan"
+    assert options.months[12] == "Every"
+    assert options.weeks == ("1st", "2nd", "3rd", "4th", "Last")
+    assert options.weekdays[0] == "Sunday"
+    assert len(options.weekdays) == 7
+    assert options.patterns == ("Ex1", "Ex2", "Ex3", "Ex4", "Ex5")
 
 
 def test_captured_day_events() -> None:
@@ -161,6 +178,14 @@ def test_captured_event_settings() -> None:
     assert event.overtime is None  # not part of the event
     assert event.fan_speed is None
     assert event.action.startswith("Start, ")
+
+
+def test_event_time_on_a_12_hour_display() -> None:
+    """An event screen showing a 12-hour clock gives the time as "HH:MM"."""
+    state = UIState()
+    state.screens[MenuScreen.SCHEDULE_EVENT] = {(EVT_TIME, "TEXT"): "7:05 PM"}
+    event = event_from_screen(state, ScheduleEvent("19:05", "x", "zone", "Start"))
+    assert event.time == "19:05"
 
 
 def test_event_without_settings() -> None:

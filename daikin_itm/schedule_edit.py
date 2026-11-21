@@ -20,16 +20,20 @@ event is selected by its own row; a part the iTM shows as disabled is never clic
 from __future__ import annotations
 
 import dataclasses
+import html
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ._bases import ClientCore, SessionCore
+from ._screens import close as _close
 from ._screens import select_rows as _select_rows
 from ._screens import set_checkbox as _set_checkbox
 from ._screens import ticked as _ticked
+from ._util import cleanup as _cleanup
+from ._util import one_login
 from .exceptions import ItmCommandError
-from .lang import mode_from_label
+from .lang import event_mode_from_label
 from .menu import (
     CLOSE_PART,
     EV_EDIT,
@@ -52,7 +56,14 @@ from .menu import (
     SCH_DELETE_BUTTON,
     SCH_EDIT_BUTTON,
     SCH_PANEL,
+    SD_DAY_LABEL,
     SD_NEXT,
+    SD_PREVIOUS,
+    SE_CAL_DATE_MONTH,
+    SE_CAL_PATTERN,
+    SE_CAL_WEEK,
+    SE_CAL_WEEK_MONTH,
+    SE_CAL_WEEKDAY,
     SE_DAY_RADIOS,
     SE_DISABLED,
     SE_EDIT_DAY,
@@ -114,9 +125,8 @@ EVT_FAN_UP = 29
 PK_TAB, PK_POINTS, PK_ZONES, PK_OK, PK_CANCEL = 1, 2, 5, 3, 4
 # Editor (104).
 SE_SPECIAL_RENAME = 103
-SE_CAL_LIST, SE_CAL_DELETE, SE_CAL_PATTERN = 26, 29, 32
-SE_CAL_DATE_RADIO, SE_CAL_DATE_MONTH, SE_CAL_DATE_DAY = 33, 37, 38
-SE_CAL_WEEK_RADIO, SE_CAL_WEEK_MONTH, SE_CAL_WEEK, SE_CAL_WEEKDAY = 39, 43, 44, 46
+SE_CAL_LIST, SE_CAL_DELETE = 26, 29
+SE_CAL_DATE_RADIO, SE_CAL_DATE_DAY, SE_CAL_WEEK_RADIO = 33, 38, 39
 SE_CAL_ADD = 49
 
 POWER_RADIOS = {
@@ -433,10 +443,7 @@ async def _tick(
 def _mode_index(state: UIState, mode: str) -> int | None:
     options = state.get(EVENT, EVT_MODE_COMBO, "COMBO_STRS") or []
     for i, label in enumerate(options):
-        found = mode_from_label(str(label)) or (
-            "setpoint" if "setpoint" in str(label).lower() else None
-        )
-        if found == mode:
+        if event_mode_from_label(str(label)) == mode:
             return i
     return None
 
@@ -549,7 +556,7 @@ async def add_event(s: _Session, program: str, day: Day, spec: EventSpec) -> boo
     """
     _parse_day(day)
     await open_editor(s, program)
-    try:
+    async with _cleanup(lambda: leave_editor(s)):
         await open_day(s, day)
         if find_event(s.state, spec.time, spec.target) is not None:
             msg = f"{program} {day}: an event at {spec.time} for {spec.target!r} exists"
@@ -564,8 +571,6 @@ async def add_event(s: _Session, program: str, day: Day, spec: EventSpec) -> boo
         await event_ok(s, "add event")
         await close_day(s)
         return await save_editor(s, f"add event {spec.time} {spec.target} to {day}")
-    finally:
-        await leave_editor(s)
 
 
 async def edit_event(  # noqa: PLR0913  # pylint: disable=too-many-arguments
@@ -586,7 +591,7 @@ async def edit_event(  # noqa: PLR0913  # pylint: disable=too-many-arguments
     """
     _parse_day(day)
     await open_editor(s, program)
-    try:
+    async with _cleanup(lambda: leave_editor(s)):
         await open_day(s, day)
         await _select_event(s, time, target, EV_EDIT)
         await s.send(EVENTS, EV_EDIT)
@@ -601,8 +606,6 @@ async def edit_event(  # noqa: PLR0913  # pylint: disable=too-many-arguments
         await event_ok(s, "edit event")
         await close_day(s)
         return await save_editor(s, f"edit event {time} {target} of {day}")
-    finally:
-        await leave_editor(s)
 
 
 async def delete_event(
@@ -617,7 +620,7 @@ async def delete_event(
     """
     _parse_day(day)
     await open_editor(s, program)
-    try:
+    async with _cleanup(lambda: leave_editor(s)):
         await open_day(s, day)
         await _select_event(s, time, target, EV_DELETE)
         reply = await s.send(EVENTS, EV_DELETE)
@@ -627,8 +630,13 @@ async def delete_event(
             raise ItmCommandError(msg)
         await close_day(s)
         return await save_editor(s, f"delete event {time} {target} of {day}")
-    finally:
-        await leave_editor(s)
+
+
+def _option_values(state: UIState, part: int) -> list[Any]:
+    nums = state.get(EDITOR, part, "COMBO_NUMS")
+    if nums:
+        return list(nums)
+    return list(range(1, len(state.get(EDITOR, part, "COMBO_STRS") or []) + 1))
 
 
 def _option_index(state: UIState, part: int, value: int) -> int | None:
@@ -656,7 +664,7 @@ async def set_period(  # pylint: disable=too-many-locals
                 msg = f"a period date is (month 1-12, day 1-31), not {(month, day)}"
                 raise ValueError(msg)
     await open_editor(s, program)
-    try:
+    async with _cleanup(lambda: leave_editor(s)):
         await _tab(s, SE_TAB_PROPERTIES)
         await _tick(
             s, SE_PERIOD_CHECK, on=period is not None, what="period", screen=EDITOR
@@ -671,19 +679,18 @@ async def set_period(  # pylint: disable=too-many-locals
             ):
                 index = _option_index(s.state, part, value)
                 if index is None:
-                    msg = f"period {what}: {value} not offered"
+                    offered = _option_values(s.state, part)
+                    msg = f"period {what}: {value} not offered: {offered}"
                     raise ItmCommandError(msg)
                 await _pick(s, EDITOR, part, index, f"period {what}")
         label = "set period" if period is not None else "remove period"
         return await save_editor(s, f"{label} of {program}")
-    finally:
-        await leave_editor(s)
 
 
 def special_day_names(state: UIState) -> tuple[str, ...]:
     """Return the special day names (Ex1..Ex5 unless renamed) of the open editor."""
     return tuple(
-        str(state.get(EDITOR, part, "LABEL") or f"Ex{i + 1}")
+        html.unescape(str(state.get(EDITOR, part, "LABEL") or f"Ex{i + 1}"))
         for i, part in enumerate(SE_SPECIAL_RADIOS)
     )
 
@@ -701,13 +708,11 @@ async def rename_special_day(s: _Session, program: str, day: Day, name: str) -> 
         msg = f"only special days have names, not weekday {day!r}"
         raise ValueError(msg)
     await open_editor(s, program)
-    try:
+    async with _cleanup(lambda: leave_editor(s)):
         await _tab(s, SE_TAB_SPECIAL)
         await s.send(EDITOR, SE_SPECIAL_RADIOS[index])
         await s.answer_text(EDITOR, SE_SPECIAL_RENAME, name, f"name of {day}")
         return await save_editor(s, f"rename {day} of {program} to {name}")
-    finally:
-        await leave_editor(s)
 
 
 def _calendar_rows(state: UIState) -> list[list[str]]:
@@ -724,7 +729,7 @@ async def add_calendar_rule(s: _Session, program: str, rule: CalendarRuleSpec) -
 
     """
     await open_editor(s, program)
-    try:
+    async with _cleanup(lambda: leave_editor(s)):
         await _tab(s, SE_TAB_CALENDAR)
         before = len(_calendar_rows(s.state))
         await _pick(s, EDITOR, SE_CAL_PATTERN, rule.pattern - 1, "calendar pattern")
@@ -734,7 +739,8 @@ async def add_calendar_rule(s: _Session, program: str, rule: CalendarRuleSpec) -
             await _pick(s, EDITOR, SE_CAL_DATE_MONTH, month, "calendar month")
             index = _option_index(s.state, SE_CAL_DATE_DAY, rule.day)
             if index is None:
-                msg = f"calendar day {rule.day} not offered"
+                offered = _option_values(s.state, SE_CAL_DATE_DAY)
+                msg = f"calendar day {rule.day} not offered: {offered}"
                 raise ItmCommandError(msg)
             await _pick(s, EDITOR, SE_CAL_DATE_DAY, index, "calendar day")
         else:
@@ -750,8 +756,6 @@ async def add_calendar_rule(s: _Session, program: str, rule: CalendarRuleSpec) -
             msg = "add calendar rule: the iTM did not list it"
             raise ItmCommandError(msg)
         return await save_editor(s, f"add calendar rule to {program}")
-    finally:
-        await leave_editor(s)
 
 
 async def delete_calendar_rule(s: _Session, program: str, rule: CalendarRule) -> bool:
@@ -764,7 +768,7 @@ async def delete_calendar_rule(s: _Session, program: str, rule: CalendarRule) ->
     """
     wanted = [rule.month.strip(), rule.day.strip(), rule.pattern.strip()]
     await open_editor(s, program)
-    try:
+    async with _cleanup(lambda: leave_editor(s)):
         await _tab(s, SE_TAB_CALENDAR)
         rows = _calendar_rows(s.state)
         if wanted not in rows:
@@ -777,8 +781,6 @@ async def delete_calendar_rule(s: _Session, program: str, rule: CalendarRule) ->
             msg = "delete calendar rule: the iTM still lists it"
             raise ItmCommandError(msg)
         return await save_editor(s, f"delete calendar rule of {program}")
-    finally:
-        await leave_editor(s)
 
 
 # -- copies and clearing ------------------------------------------------------------
@@ -817,7 +819,7 @@ async def copy_program(
         await s.close_screen(MenuScreen.SCHEDULE)
         msg = f"schedule program {name!r} exists already"
         raise ItmCommandError(msg)
-    try:
+    async with _cleanup(lambda: leave_editor(s)):
         await _click(s, MenuScreen.SCHEDULE, SCH_COPY, "copy program")
         if EDITOR not in s.state.screens:
             msg = f"{program}: the copy did not open in the editor"
@@ -826,8 +828,6 @@ async def copy_program(
         if not keep_enabled and program_from_editor(s.state).enabled:
             await _click(s, EDITOR, SE_DISABLED, "disable the copy")
         return await save_editor(s, f"copy program {program} to {name}")
-    finally:
-        await leave_editor(s)
 
 
 async def copy_day(
@@ -846,7 +846,9 @@ async def copy_day(
         msg = "copy a day to one or more days of the same kind (weekdays or Ex1-Ex5)"
         raise ItmCommandError(msg)
     await open_editor(s, program)
-    try:
+    async with _cleanup(
+        lambda: _close(s, DAY_COPY, DC_CANCEL), lambda: leave_editor(s)
+    ):
         if special:
             await _tab(s, SE_TAB_SPECIAL)
             await s.send(EDITOR, SE_SPECIAL_RADIOS[index])
@@ -870,11 +872,6 @@ async def copy_day(
         await _confirm(s, DAY_COPY, reply, "copy day")
         s.state.screens.pop(DAY_COPY, None)
         return await save_editor(s, f"copy {day} of {program} to {list(targets)}")
-    finally:
-        if DAY_COPY in s.state.screens:
-            await s.send(DAY_COPY, DC_CANCEL)
-            s.state.screens.pop(DAY_COPY, None)
-        await leave_editor(s)
 
 
 async def clear_day(s: _Session, program: str, day: Day) -> bool:
@@ -887,7 +884,7 @@ async def clear_day(s: _Session, program: str, day: Day) -> bool:
     """
     special, index = _parse_day(day)
     await open_editor(s, program)
-    try:
+    async with _cleanup(lambda: leave_editor(s)):
         if special:
             await _tab(s, SE_TAB_SPECIAL)
             await s.send(EDITOR, SE_SPECIAL_RADIOS[index])
@@ -898,8 +895,6 @@ async def clear_day(s: _Session, program: str, day: Day) -> bool:
             reply = await _click(s, EDITOR, SE_CLEAR_DAY, f"clear day {day}")
         await _confirm(s, EDITOR, reply, f"clear {day}")
         return await save_editor(s, f"clear {day} of {program}")
-    finally:
-        await leave_editor(s)
 
 
 async def copy_event(  # noqa: PLR0913  # pylint: disable=too-many-arguments
@@ -928,7 +923,7 @@ async def copy_event(  # noqa: PLR0913  # pylint: disable=too-many-arguments
         raise ValueError(msg)
     _parse_day(day)
     await open_editor(s, program)
-    try:
+    async with _cleanup(lambda: leave_editor(s)):
         await open_day(s, day)
         await _select_event(s, time, target, EV_COPY)
         await s.send(EVENTS, EV_COPY)
@@ -944,8 +939,6 @@ async def copy_event(  # noqa: PLR0913  # pylint: disable=too-many-arguments
             raise ItmCommandError(msg)
         await close_day(s)
         return await save_editor(s, f"copy event {time} {target} of {day}")
-    finally:
-        await leave_editor(s)
 
 
 async def copy_calendar(s: _Session, program: str, targets: tuple[str, ...]) -> bool:
@@ -966,7 +959,10 @@ async def copy_calendar(s: _Session, program: str, targets: tuple[str, ...]) -> 
         msg = f"{program}: a calendar can't be copied onto its own program"
         raise ItmCommandError(msg)
     await s.select_program(program)
-    try:
+    async with _cleanup(
+        lambda: _close(s, CALENDAR_COPY, CC_CANCEL),
+        lambda: s.close_screen(MenuScreen.SCHEDULE),
+    ):
         await _click(s, MenuScreen.SCHEDULE, SCH_CALENDAR_COPY, "calendar copy")
         if CALENDAR_COPY not in s.state.screens:
             msg = "the calendar copy screen did not open"
@@ -985,11 +981,6 @@ async def copy_calendar(s: _Session, program: str, targets: tuple[str, ...]) -> 
             CC_OK,
             CC_CANCEL,
         )
-    finally:
-        if CALENDAR_COPY in s.state.screens:
-            await s.send(CALENDAR_COPY, CC_CANCEL)
-            s.state.screens.pop(CALENDAR_COPY, None)
-        await s.close_screen(MenuScreen.SCHEDULE)
 
 
 class ScheduleMixin(ClientCore):
@@ -1004,18 +995,17 @@ class ScheduleMixin(ClientCore):
     async def _schedule_event(
         self, program: str, day: Day, at: str, target: str
     ) -> ScheduleEvent | None:
-        """Return an event of a program's day as read in a fresh session."""
+        """Return an event of a program's day as read back."""
         p = await self.fetch_schedule(program, details=True)
         if isinstance(day, int):
             events = p.weekly.get(day, ())
         else:
-            index = int(day[2:]) - 1
-            labels = list(p.special_slots)
-            events = p.special.get(labels[index], ()) if index < len(labels) else ()
+            events = p.special.get(day, ())
         return next(
             (e for e in events if e.time == at and e.target == target.strip()), None
         )
 
+    @one_login
     async def add_schedule_event(
         self, program: str, day: Day, spec: EventSpec
     ) -> ScheduleEvent | None:
@@ -1029,7 +1019,7 @@ class ScheduleMixin(ClientCore):
 
         Returns:
         -------
-            The event as read back in a fresh session, or None in a dry run.
+            The event as read back, or None in a dry run.
 
         """
         await self._schedule_write(lambda s: add_event(s, program, day, spec))
@@ -1041,6 +1031,7 @@ class ScheduleMixin(ClientCore):
             raise ItmCommandError(msg)
         return event
 
+    @one_login
     async def edit_schedule_event(  # noqa: PLR0913  # pylint: disable=too-many-arguments
         self,
         program: str,
@@ -1065,7 +1056,7 @@ class ScheduleMixin(ClientCore):
 
         Returns:
         -------
-            The event as read back in a fresh session, or None in a dry run.
+            The event as read back, or None in a dry run.
 
         Raises:
         ------
@@ -1073,6 +1064,7 @@ class ScheduleMixin(ClientCore):
                 settings this library can't write back.
 
         """
+        self._writable()
         if keep_unset:
             spec = await self._keep_event_settings(program, day, at, target, spec)
         await self._schedule_write(
@@ -1112,6 +1104,7 @@ class ScheduleMixin(ClientCore):
         }
         return dataclasses.replace(spec, **kept)
 
+    @one_login
     async def delete_schedule_event(
         self, program: str, day: Day, at: str, target: str
     ) -> None:
@@ -1130,6 +1123,7 @@ class ScheduleMixin(ClientCore):
             msg = f"{program}: the iTM did not delete {at} {target}"
             raise ItmCommandError(msg)
 
+    @one_login
     async def copy_schedule(
         self, program: str, name: str, *, keep_enabled: bool = False
     ) -> ScheduleSummary | None:
@@ -1157,6 +1151,7 @@ class ScheduleMixin(ClientCore):
             raise ItmCommandError(msg)
         return copy
 
+    @one_login
     async def copy_schedule_day(
         self, program: str, day: Day, targets: Iterable[Day]
     ) -> ScheduleProgram | None:
@@ -1177,6 +1172,7 @@ class ScheduleMixin(ClientCore):
         await self._schedule_write(lambda s: copy_day(s, program, day, days))
         return None if self.dry_run else await self.fetch_schedule(program)
 
+    @one_login
     async def clear_schedule_day(
         self, program: str, day: Day
     ) -> ScheduleProgram | None:
@@ -1201,6 +1197,7 @@ class ScheduleMixin(ClientCore):
             raise ItmCommandError(msg)
         return result
 
+    @one_login
     async def copy_schedule_event(  # noqa: PLR0913  # pylint: disable=too-many-arguments
         self,
         program: str,
@@ -1263,6 +1260,7 @@ class ScheduleMixin(ClientCore):
         names = tuple(targets)
         await self._schedule_write(lambda s: copy_calendar(s, program, names))
 
+    @one_login
     async def set_schedule_period(
         self, program: str, period: Period | None
     ) -> ScheduleProgram | None:
@@ -1289,6 +1287,7 @@ class ScheduleMixin(ClientCore):
             raise ItmCommandError(msg)
         return result
 
+    @one_login
     async def rename_schedule_special_day(
         self, program: str, day: str, name: str
     ) -> ScheduleProgram | None:
@@ -1315,6 +1314,7 @@ class ScheduleMixin(ClientCore):
             raise ItmCommandError(msg)
         return result
 
+    @one_login
     async def add_schedule_calendar_rule(
         self, program: str, rule: CalendarRuleSpec
     ) -> ScheduleProgram | None:
@@ -1330,6 +1330,7 @@ class ScheduleMixin(ClientCore):
             The program as read back (without events), or None in a dry run.
 
         """
+        self._writable()
         before = len((await self.fetch_schedule(program, events=False)).calendar)
         await self._schedule_write(lambda s: add_calendar_rule(s, program, rule))
         if self.dry_run:
@@ -1340,6 +1341,7 @@ class ScheduleMixin(ClientCore):
             raise ItmCommandError(msg)
         return result
 
+    @one_login
     async def delete_schedule_calendar_rule(
         self, program: str, rule: CalendarRule
     ) -> ScheduleProgram | None:
@@ -1386,17 +1388,29 @@ class ScheduleSessionMixin(SessionCore):
     async def read_schedule_day(self, name: str, *, days_ahead: int = 0) -> ScheduleDay:
         """Read what a program does on a day, from its day overview."""
         await self.select_program(name)
-        try:
+        async with _cleanup(
+            lambda: self.close_screen(MenuScreen.SCHEDULE_DAY),
+            lambda: self.close_screen(MenuScreen.SCHEDULE),
+        ):
             await self.send(MenuScreen.SCHEDULE, SCH_DAY_BUTTON)
             if MenuScreen.SCHEDULE_DAY not in self.state.screens:
                 msg = "the day overview did not open"
                 raise ItmCommandError(msg)
+            today = self._overview_day()
             for _ in range(days_ahead):
                 await self.send(MenuScreen.SCHEDULE_DAY, SD_NEXT)
-            return schedule_day_from_screen(self.state)
-        finally:
-            await self.close_screen(MenuScreen.SCHEDULE_DAY)
-            await self.close_screen(MenuScreen.SCHEDULE)
+            day = schedule_day_from_screen(self.state)
+            await self.step_back(
+                days_ahead,
+                lambda: self.send(MenuScreen.SCHEDULE_DAY, SD_PREVIOUS),
+                self._overview_day,
+                today,
+                "the day overview stayed on another day",
+            )
+            return day
+
+    def _overview_day(self) -> object:
+        return self.state.get(MenuScreen.SCHEDULE_DAY, SD_DAY_LABEL, "LABEL")
 
     async def _read_day_events(
         self, radio: int, edit_button: int, *, details: bool
@@ -1407,7 +1421,10 @@ class ScheduleSessionMixin(SessionCore):
         if MenuScreen.SCHEDULE_EVENTS not in self.state.screens:
             msg = "the event list did not open"
             raise ItmCommandError(msg)
-        try:
+        async with _cleanup(
+            lambda: self.close_screen(MenuScreen.SCHEDULE_EVENT),
+            lambda: self.close_screen(MenuScreen.SCHEDULE_EVENTS),
+        ):
             events = day_events_from_screen(self.state)
             if not details:
                 return tuple(events)
@@ -1434,9 +1451,6 @@ class ScheduleSessionMixin(SessionCore):
                 else:
                     detailed.append(event)
             return tuple(detailed)
-        finally:
-            await self.close_screen(MenuScreen.SCHEDULE_EVENT)
-            await self.close_screen(MenuScreen.SCHEDULE_EVENTS)
 
     async def close_editor(self) -> None:
         """Leave the schedule editor without saving: Cancel, then Yes."""
@@ -1455,7 +1469,9 @@ class ScheduleSessionMixin(SessionCore):
     async def set_schedule_enabled(self, name: str, *, enabled: bool) -> None:
         """Open a program's editor, pick enabled or disabled, OK (and confirm)."""
         await self.select_program(name)
-        try:
+        async with _cleanup(
+            self.close_editor, lambda: self.close_screen(MenuScreen.SCHEDULE)
+        ):
             await self.send(MenuScreen.SCHEDULE, SCH_EDIT_BUTTON)
             e = MenuScreen.SCHEDULE_EDITOR
             if e not in self.state.screens:
@@ -1472,9 +1488,6 @@ class ScheduleSessionMixin(SessionCore):
                 if e in self.state.screens:
                     msg = f"{name}: the editor did not close after OK"
                     raise ItmCommandError(msg)
-        finally:
-            await self.close_editor()
-            await self.close_screen(MenuScreen.SCHEDULE)
 
     async def create_schedule(self, name: str) -> None:
         """Press Add, rename the new program, OK (and confirm).
@@ -1484,7 +1497,9 @@ class ScheduleSessionMixin(SessionCore):
         """
         await self.open_menu_screen(MB_SCHEDULE, MenuScreen.SCHEDULE)
         e = MenuScreen.SCHEDULE_EDITOR
-        try:
+        async with _cleanup(
+            self.close_editor, lambda: self.close_screen(MenuScreen.SCHEDULE)
+        ):
             names = [p.name for p in schedules_from_screen(self.state)]
             if name in names:
                 msg = f"schedule program {name!r} exists already"
@@ -1513,14 +1528,11 @@ class ScheduleSessionMixin(SessionCore):
                 if e in self.state.screens:
                     msg = f"{name}: the editor did not close after OK"
                     raise ItmCommandError(msg)
-        finally:
-            await self.close_editor()
-            await self.close_screen(MenuScreen.SCHEDULE)
 
     async def delete_schedule(self, name: str) -> None:
         """Select a program, press Delete and confirm."""
         await self.select_program(name)
-        try:
+        async with _cleanup(lambda: self.close_screen(MenuScreen.SCHEDULE)):
             # A disabled button hangs the iTM's web server when clicked.
             if self.state.get(MenuScreen.SCHEDULE, SCH_DELETE_BUTTON, "ENABLED") == 0:
                 msg = f"the iTM does not allow deleting {name!r}"
@@ -1530,8 +1542,6 @@ class ScheduleSessionMixin(SessionCore):
             )
             if reply is not None:
                 await self.answer_confirm(MenuScreen.SCHEDULE, reply)
-        finally:
-            await self.close_screen(MenuScreen.SCHEDULE)
 
     async def read_schedule(
         self, name: str, *, events: bool = True, details: bool = False
@@ -1543,7 +1553,12 @@ class ScheduleSessionMixin(SessionCore):
         details, each event's own settings screen too (two requests per event).
         """
         await self.select_program(name)
-        try:
+        async with _cleanup(
+            lambda: self.close_screen(MenuScreen.SCHEDULE_EVENT),
+            lambda: self.close_screen(MenuScreen.SCHEDULE_EVENTS),
+            self.close_editor,
+            lambda: self.close_screen(MenuScreen.SCHEDULE),
+        ):
             await self.send(MenuScreen.SCHEDULE, SCH_EDIT_BUTTON)
             if MenuScreen.SCHEDULE_EDITOR not in self.state.screens:
                 msg = "the schedule editor did not open"
@@ -1560,10 +1575,12 @@ class ScheduleSessionMixin(SessionCore):
             await self.send(*tab, SE_TAB_SPECIAL)
             program = program_from_editor(self.state)
             special: dict[str, tuple[ScheduleEvent, ...]] = {}
-            for i, (label, slots) in enumerate(program.special_slots.items()):
+            for label, slots in program.special_slots.items():
                 if slots and events:
                     special[label] = await self._read_day_events(
-                        SE_SPECIAL_RADIOS[i], SE_EDIT_SPECIAL, details=details
+                        SE_SPECIAL_RADIOS[int(label[2:]) - 1],
+                        SE_EDIT_SPECIAL,
+                        details=details,
                     )
             await self.send(*tab, SE_TAB_CALENDAR)
             program = program_from_editor(self.state)
@@ -1571,8 +1588,3 @@ class ScheduleSessionMixin(SessionCore):
             return dataclasses.replace(
                 program, weekly=weekly, special=special, special_names=names
             )
-        finally:
-            await self.close_screen(MenuScreen.SCHEDULE_EVENT)
-            await self.close_screen(MenuScreen.SCHEDULE_EVENTS)
-            await self.close_editor()
-            await self.close_screen(MenuScreen.SCHEDULE)

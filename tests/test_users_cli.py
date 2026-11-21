@@ -75,3 +75,17 @@ def test_user_screens_command(
     assert itm.user_screens["viewer"] == ["Screen A"]
     run("user", "screens", "viewer", "--screen", "Screen B", "--screen", "Screen C")
     assert "viewer: screens Screen B, Screen C" in capsys.readouterr().out
+
+
+def test_add_an_administrator_command(
+    itm: FakeUsersITM,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`itm user add --type admin` needs no --manage-zone; a normal user does."""
+    monkeypatch.setenv("ITM_NEW_PASSWORD", NEW_PASSWORD)
+    run("user", "add", "admin2", "--type", "admin")
+    assert capsys.readouterr().out == "admin2: admin\n"
+    assert ["admin2", "Manager"] in itm.web_users
+    with pytest.raises(SystemExit, match="at least one --manage-zone"):
+        run("user", "add", "viewer2", "--type", "user")

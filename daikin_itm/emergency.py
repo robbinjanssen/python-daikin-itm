@@ -39,7 +39,9 @@ from ._screens import answer_name as _answer_name
 from ._screens import cell_lists as _cells
 from ._screens import close as _leave
 from ._screens import row_named as _row
+from ._util import cleanup as _cleanup
 from ._util import ignore as _ignore
+from ._util import one_login
 from .exceptions import ItmCommandError
 from .menu import (
     MB_EMERGENCY_STOP,
@@ -160,7 +162,7 @@ async def read_programs(s: _Session) -> list[EmergencyStopProgram]:
 
     """
     await _open(s)
-    try:
+    async with _cleanup(lambda: s.close_screen(MAIN)):
         out = []
         for i, program in enumerate(emergency_stop_from_screen(s.state)):
             await s.select_row(MAIN, ES_LIST, i)
@@ -172,8 +174,6 @@ async def read_programs(s: _Session) -> list[EmergencyStopProgram]:
                 )
             )
         return out
-    finally:
-        await s.close_screen(MAIN)
 
 
 async def set_program_enabled(s: _Session, name: str, *, enabled: bool) -> bool:
@@ -189,7 +189,7 @@ async def set_program_enabled(s: _Session, name: str, *, enabled: bool) -> bool:
 
     """
     await _open(s)
-    try:
+    async with _cleanup(lambda: s.close_screen(MAIN)):
         await _select_program(s, name)
         if _radio_enabled(s.state) is enabled:
             return True
@@ -203,8 +203,6 @@ async def set_program_enabled(s: _Session, name: str, *, enabled: bool) -> bool:
             return False
         await s.answer_confirm(MAIN, reply)
         return True
-    finally:
-        await s.close_screen(MAIN)
 
 
 async def create_program(s: _Session, name: str) -> bool:
@@ -218,7 +216,7 @@ async def create_program(s: _Session, name: str) -> bool:
 
     """
     await _open(s)
-    try:
+    async with _cleanup(lambda: s.close_screen(MAIN)):
         _exists(s, name)
         if not s.state.visible(MAIN, ES_EDIT_GROUP) or not s.state.visible(
             MAIN, ES_CREATE
@@ -232,8 +230,6 @@ async def create_program(s: _Session, name: str) -> bool:
         return await _answer_name(
             s, MAIN, reply, name, f"create emergency stop program {name}"
         )
-    finally:
-        await s.close_screen(MAIN)
 
 
 async def rename_program(s: _Session, name: str, new_name: str) -> bool:
@@ -245,7 +241,7 @@ async def rename_program(s: _Session, name: str, new_name: str) -> bool:
 
     """
     await _open(s)
-    try:
+    async with _cleanup(lambda: s.close_screen(MAIN)):
         _exists(s, new_name)
         await _select_program(s, name)
         _allowed(s, ES_RENAME, name, "renaming")
@@ -257,8 +253,6 @@ async def rename_program(s: _Session, name: str, new_name: str) -> bool:
             new_name,
             f"rename emergency stop program {name} to {new_name}",
         )
-    finally:
-        await s.close_screen(MAIN)
 
 
 async def copy_program(s: _Session, name: str, new_name: str) -> bool:
@@ -270,7 +264,7 @@ async def copy_program(s: _Session, name: str, new_name: str) -> bool:
 
     """
     await _open(s)
-    try:
+    async with _cleanup(lambda: s.close_screen(MAIN)):
         _exists(s, new_name)
         await _select_program(s, name)
         _allowed(s, ES_COPY, name, "copying")
@@ -282,8 +276,6 @@ async def copy_program(s: _Session, name: str, new_name: str) -> bool:
             new_name,
             f"copy emergency stop program {name} to {new_name}",
         )
-    finally:
-        await s.close_screen(MAIN)
 
 
 async def delete_program(s: _Session, name: str) -> bool:
@@ -295,7 +287,7 @@ async def delete_program(s: _Session, name: str) -> bool:
 
     """
     await _open(s)
-    try:
+    async with _cleanup(lambda: s.close_screen(MAIN)):
         await _select_program(s, name)
         _allowed(s, ES_DELETE, name, "deleting")
         if _selected_enabled(s.state, name):
@@ -306,8 +298,6 @@ async def delete_program(s: _Session, name: str) -> bool:
             return False
         await s.answer_confirm(MAIN, reply)
         return True
-    finally:
-        await s.close_screen(MAIN)
 
 
 # -- a program's settings (202, 203) ---------------------------------------------------
@@ -377,12 +367,11 @@ async def read_program_settings(s: _Session, name: str) -> EmergencyStopSettings
 
     """
     await _open(s)
-    try:
+    async with _cleanup(
+        lambda: _leave(s, SETTINGS, ST_CANCEL), lambda: s.close_screen(MAIN)
+    ):
         await _open_settings(s, name, reading=True)
         return settings_from_screen(s.state, name)
-    finally:
-        await _leave(s, SETTINGS, ST_CANCEL)
-        await s.close_screen(MAIN)
 
 
 async def _pick_points(s: _Session, button: int, points: tuple[str, ...]) -> None:
@@ -453,7 +442,11 @@ async def set_program_settings(  # noqa: PLR0913  # pylint: disable=too-many-arg
 
     """
     await _open(s)
-    try:
+    async with _cleanup(
+        lambda: _leave(s, PICKER, PK_CANCEL),
+        lambda: _leave(s, SETTINGS, ST_CANCEL),
+        lambda: s.close_screen(MAIN),
+    ):
         await _open_settings(s, name, reading=False)
         if inputs is not None:
             await _pick_points(s, ST_IN_MODIFY, inputs)
@@ -469,10 +462,6 @@ async def set_program_settings(  # noqa: PLR0913  # pylint: disable=too-many-arg
         return await s.press_ok(
             f"save emergency stop program {name}", SETTINGS, ST_OK, ST_CANCEL
         )
-    finally:
-        await _leave(s, PICKER, PK_CANCEL)
-        await _leave(s, SETTINGS, ST_CANCEL)
-        await s.close_screen(MAIN)
 
 
 # -- active stops and their release (201) ----------------------------------------------
@@ -503,12 +492,10 @@ async def read_active_stops(s: _Session) -> tuple[str, ...]:
         Their names; empty when no stop is active.
 
     """
-    try:
+    async with _cleanup(lambda: _leave(s, RELEASE, RL_CANCEL)):
         if not await _open_release(s):
             return ()
         return tuple(n for n in _last_column(s.state, RELEASE, RL_LIST) if n)
-    finally:
-        await _leave(s, RELEASE, RL_CANCEL)
 
 
 async def release(s: _Session, name: str) -> bool:
@@ -519,7 +506,7 @@ async def release(s: _Session, name: str) -> bool:
         True when sent, False in a dry run.
 
     """
-    try:
+    async with _cleanup(lambda: _leave(s, RELEASE, RL_CANCEL)):
         if not await _open_release(s):
             msg = "no emergency stop is active"
             raise ItmCommandError(msg)
@@ -533,15 +520,13 @@ async def release(s: _Session, name: str) -> bool:
             return False
         await s.answer_confirm(RELEASE, reply)
         return True
-    finally:
-        await _leave(s, RELEASE, RL_CANCEL)
 
 
 class EmergencyMixin(ClientCore):
     """ItmClient's emergency stop methods."""
 
     async def _emergency_program(self, name: str) -> EmergencyStopProgram | None:
-        """Return a program as read in a fresh session (armed as its radios show)."""
+        """Return a program as read back (armed as its radios show)."""
         programs = await self._in_session(read_programs)
         return next((p for p in programs if p.name == name.strip()), None)
 
@@ -565,6 +550,7 @@ class EmergencyMixin(ClientCore):
         """
         return await self._in_session(lambda s: read_program_settings(s, name))
 
+    @one_login
     async def set_emergency_stop_enabled(
         self, name: str, *, enabled: bool, allow_safety_change: bool = False
     ) -> EmergencyStopProgram | None:
@@ -582,7 +568,7 @@ class EmergencyMixin(ClientCore):
 
         Returns:
         -------
-            The program as read back in a fresh session, or None in a dry run.
+            The program as read back, or None in a dry run.
 
         Raises:
         ------
@@ -607,6 +593,7 @@ class EmergencyMixin(ClientCore):
             raise ItmCommandError(msg)
         return program
 
+    @one_login
     async def create_emergency_stop_program(
         self, name: str
     ) -> EmergencyStopProgram | None:
@@ -631,6 +618,7 @@ class EmergencyMixin(ClientCore):
             raise ItmCommandError(msg)
         return program
 
+    @one_login
     async def rename_emergency_stop_program(
         self, name: str, new_name: str
     ) -> EmergencyStopProgram | None:
@@ -656,6 +644,7 @@ class EmergencyMixin(ClientCore):
             raise ItmCommandError(msg)
         return program
 
+    @one_login
     async def copy_emergency_stop_program(
         self, name: str, new_name: str
     ) -> EmergencyStopProgram | None:
@@ -681,6 +670,7 @@ class EmergencyMixin(ClientCore):
             raise ItmCommandError(msg)
         return program
 
+    @one_login
     async def delete_emergency_stop_program(self, name: str) -> None:
         """Delete a disarmed emergency stop program (not the built-in one).
 
@@ -695,6 +685,7 @@ class EmergencyMixin(ClientCore):
             msg = f"{name}: the iTM did not delete the emergency stop program"
             raise ItmCommandError(msg)
 
+    @one_login
     async def set_emergency_stop_settings(  # pylint: disable=too-many-arguments
         self,
         name: str,
@@ -716,7 +707,7 @@ class EmergencyMixin(ClientCore):
 
         Returns:
         -------
-            The settings as read back in a fresh session, or None in a dry run.
+            The settings as read back, or None in a dry run.
 
         """
         self._experimental("change an emergency stop program's settings")
@@ -767,6 +758,7 @@ class EmergencyMixin(ClientCore):
         """
         return await self._in_session(read_active_stops)
 
+    @one_login
     async def release_emergency_stop(
         self, name: str, *, allow_safety_change: bool = False
     ) -> None:

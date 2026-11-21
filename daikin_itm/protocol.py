@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import TYPE_CHECKING, Any
 
-from .exceptions import ItmError, ProtocolError
+from .exceptions import ItmError, ProtocolError, RequestValueError
 
 if TYPE_CHECKING:
     import builtins
@@ -183,13 +183,25 @@ DIALOG = {
 
 _HEX = re.compile(r"[0-9a-fA-F]+")
 _TRUNCATED = re.compile(r"[0-9a-fA-F]*\0*")  # a cut-off number at the end of a reply
+_UNSENDABLE = re.compile("[\x00-\x1f\x7f-\x9f\U00010000-\U0010ffff]")
+MAX_STRING_CHARS = 0xFFFF
+# The login sends the username's length as four decimal digits.
+MAX_USERNAME_CHARS = 9999
 
 
 def login_payload(username: str, password: str) -> str:
     """Return a login click's string, as the browser sends it.
 
     The iTM's protocol takes the password only as its SHA-256 digest.
+
+    Raises
+    ------
+        RequestValueError: The username is longer than 9999 characters.
+
     """
+    if len(username) > MAX_USERNAME_CHARS:
+        msg = f"a username is at most {MAX_USERNAME_CHARS} characters"
+        raise RequestValueError(msg)
     digest = hashlib.sha256(password.encode()).hexdigest() if password else ""
     return f"{len(username):04d}{username}{digest}"
 
@@ -243,28 +255,66 @@ class Reply:
 class Writer:
     """Builds a hex-encoded request body."""
 
-    def __init__(self, token: str = "") -> None:
+    def __init__(self, token: str = "", *, request: bool = False) -> None:
         """Start a request body.
 
         Args:
         ----
             token: The page token the body starts with.
+            request: Refuse the strings a request must not carry (a control
+                character, or a character outside the Basic Multilingual Plane);
+                a reply, as the simulated iTM builds one, may hold them.
 
         """
         self.buf = token
+        self.request = request
 
     def short(self, v: int) -> None:
-        """Append a 16-bit number."""
+        """Append a 16-bit number, signed or unsigned.
+
+        Raises
+        ------
+            RequestValueError: v is outside -32768..65535.
+
+        """
+        _check_range(v, 16)
         self.buf += f"{v & 0xFFFF:04x}"
 
     def int(self, v: int) -> None:
-        """Append a 32-bit number."""
+        """Append a 32-bit number, signed or unsigned.
+
+        Raises
+        ------
+            RequestValueError: v is outside -2**31..2**32-1.
+
+        """
+        _check_range(v, 32)
         self.buf += f"{v & 0xFFFFFFFF:08x}"
 
     def string(self, s: str) -> None:
-        """Append a string, preceded by its length."""
+        """Append a string, preceded by its length.
+
+        Raises
+        ------
+            RequestValueError: s is longer than 65535 characters, or (in a
+                request) holds a control character or a character outside the
+                Basic Multilingual Plane (how the iTM counts those is unknown).
+
+        """
+        if len(s) > MAX_STRING_CHARS:
+            msg = f"a string of {len(s)} characters is longer than {MAX_STRING_CHARS}"
+            raise RequestValueError(msg)
+        if self.request and _UNSENDABLE.search(s):
+            msg = "a string holds a control character or one outside the BMP"
+            raise RequestValueError(msg)
         self.short(len(s))
         self.buf += s
+
+
+def _check_range(v: int, bits: int) -> None:
+    if not -(1 << (bits - 1)) <= v < 1 << bits:
+        msg = f"{v} does not fit in a {bits}-bit field"
+        raise RequestValueError(msg)
 
 
 class Reader:
@@ -400,7 +450,7 @@ def encode_event(  # noqa: PLR0913, PLR0917  # pylint: disable=too-many-argument
         The request body.
 
     """
-    w = Writer(token)
+    w = Writer(token, request=True)
     w.short(screen)
     w.short(part)
     w.short(event)
@@ -563,7 +613,8 @@ def _parse_tab_visible(r: Reader) -> list[Any]:
 
 def _parse_list_row(r: Reader) -> dict[str, Any]:
     """Read a LIST_ROW part."""
-    nrows, ncols = r.count(wide=False), r.count(wide=False)
+    nrows = r.count(wide=False)
+    ncols = r.count(wide=False) if nrows else r.short()
     rows = []
     for _ in range(nrows):
         texts = _fields(r, "S" * ncols)

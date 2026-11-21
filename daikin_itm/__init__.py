@@ -6,6 +6,8 @@ from .client import (
     ItmClient,
     MemorySessionStore,
     Point,
+    Points,
+    SessionInfo,
     SessionStore,
 )
 from .dealer_functions import (
@@ -54,11 +56,21 @@ from .exceptions import (
     ItmCommandError,
     ItmError,
     LoginRejected,
+    MenuNotAvailable,
+    NotConfirmed,
+    NotOffered,
     ProtocolError,
     ReadOnlyError,
+    RequestSkipped,
+    RequestValueError,
     SessionEnded,
+    SessionInUse,
     SetpointOutOfRange,
+    SharedSessionError,
+    UnitStopped,
     VersionMismatch,
+    WriteBudgetExceeded,
+    WriteOutcomeUnknown,
     ZoneNotFound,
 )
 from .history_export import (
@@ -78,6 +90,7 @@ from .interlock import (
 )
 from .layout import Layout, LayoutItem
 from .menu import (
+    CalendarRuleValues,
     ChangeoverGroup,
     ChangeoverReference,
     EmergencyStopProgram,
@@ -107,6 +120,7 @@ from .models import (
     UnitSettings,
 )
 from .point_registry import PointAttributes, PointRegistration
+from .schedule_days import day_pattern, events_between, events_on, next_event, targets
 from .schedule_edit import CalendarRuleSpec, EventSpec
 from .service import (
     ChangeoverOption,
@@ -157,6 +171,7 @@ __all__ = [
     "AnalogPoint",
     "BudgetTab",
     "CalendarRuleSpec",
+    "CalendarRuleValues",
     "Capabilities",
     "ChangeoverGroup",
     "ChangeoverOption",
@@ -228,8 +243,11 @@ __all__ = [
     "MaintenancePoint",
     "ManagementPoint",
     "MemorySessionStore",
+    "MenuNotAvailable",
     "MonthValue",
     "NetworkSettings",
+    "NotConfirmed",
+    "NotOffered",
     "OptionalFunction",
     "OwnSettings",
     "PasswordSettings",
@@ -239,6 +257,7 @@ __all__ = [
     "PointAttributes",
     "PointKind",
     "PointRegistration",
+    "Points",
     "PowerState",
     "PpdSettings",
     "PpdUnit",
@@ -248,6 +267,8 @@ __all__ = [
     "RemoteLock",
     "RemoteLocks",
     "RemoteManagement",
+    "RequestSkipped",
+    "RequestValueError",
     "RoomTemperaturePoint",
     "RuleDay",
     "RuleEditor",
@@ -261,9 +282,12 @@ __all__ = [
     "ScreensaverSettings",
     "ServiceSettings",
     "SessionEnded",
+    "SessionInUse",
+    "SessionInfo",
     "SessionStore",
     "SetbackSettings",
     "SetpointOutOfRange",
+    "SharedSessionError",
     "ShownValue",
     "SlidingTemperatureGroup",
     "SystemSettings",
@@ -271,11 +295,19 @@ __all__ = [
     "TemperatureLimitGroup",
     "Unit",
     "UnitSettings",
+    "UnitStopped",
     "VersionMismatch",
     "WebUser",
     "WebUserScreens",
+    "WriteBudgetExceeded",
+    "WriteOutcomeUnknown",
     "ZoneAttributes",
     "ZoneInfo",
     "ZoneNotFound",
+    "day_pattern",
+    "events_between",
+    "events_on",
+    "next_event",
     "parse_history_export",
+    "targets",
 ]

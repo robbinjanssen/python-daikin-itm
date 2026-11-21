@@ -14,18 +14,25 @@ import os
 import re
 import signal
 import sys
-from dataclasses import asdict
+import tempfile
 from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import aiohttp
 
+from .check_cli import CHECK_COMMANDS, add_check_commands, list_reads
 from .cli_common import echo as _out
 from .cli_common import print_plan as _print_plan
 from .cli_common import print_system as _print_system
 from .cli_common import safe as _safe
-from .client import DEFAULT_ZONE_PATH, UNIT_VIEWS, FileSessionStore, ItmClient
+from .client import (
+    DEFAULT_ZONE_PATH,
+    UNIT_VIEWS,
+    WHEN_STOPPED,
+    FileSessionStore,
+    ItmClient,
+)
 from .dealer_cli import DEALER_COMMANDS, add_dealer_commands
 from .energy_cli import ENERGY_COMMANDS, add_energy_commands
 from .exceptions import ItmError
@@ -58,7 +65,7 @@ if TYPE_CHECKING:
 CACHE_DIR = Path.home() / ".cache" / "daikin-itm"
 
 
-# Descriptions etc., refreshed when unit names change.
+# Descriptions etc. per host and zone, refreshed when unit names change.
 UNITS_CACHE = CACHE_DIR / "units.json"
 
 
@@ -94,44 +101,64 @@ def _credentials(path: str | None) -> tuple[str, str]:
         sys.exit("set ITM_USERNAME and ITM_PASSWORD, or pass --creds")
 
 
-def _load_caps(host: str) -> dict[str, Capabilities]:
-    """Load the cached capabilities of a host's units."""
+def _zone_key(zone_path: tuple[str, ...]) -> str:
+    return "/".join(zone_path)
+
+
+def _load_caps(host: str, zone_path: tuple[str, ...]) -> dict[str, Capabilities]:
+    """Load the cached capabilities of the units in a host's zone."""
     try:
         data = json.loads(UNITS_CACHE.read_text(encoding="utf-8"))
-        data = data.get(host, {}) if isinstance(data, dict) else {}
-        return {
-            name: Capabilities(
-                **{
-                    **c,
-                    "zones": tuple(c.get("zones", ())),
-                    "unknown_labels": tuple(c.get("unknown_labels", ())),
-                }
-            )
-            for name, c in data.items()
-        }
-    except (FileNotFoundError, ValueError, TypeError):
+        units = data[host]["zones"][_zone_key(zone_path)]
+        return {name: Capabilities.from_dict(c) for name, c in units.items()}
+    except (FileNotFoundError, ValueError, TypeError, KeyError, AttributeError):
         return {}
 
 
-def _save_caps(host: str, caps: dict[str, Capabilities]) -> None:
-    """Cache the capabilities of a host's units."""
+def _save_caps(
+    host: str, zone_path: tuple[str, ...], caps: dict[str, Capabilities]
+) -> None:
+    """Cache the capabilities of the units in a host's zone, replacing the file."""
     try:
         data = json.loads(UNITS_CACHE.read_text(encoding="utf-8"))
     except (FileNotFoundError, ValueError):
         data = {}
-    if not isinstance(data, dict):  # not ours: start over
+    if not isinstance(data, dict):
         data = {}
-    data[host] = {name: asdict(c) for name, c in caps.items()}
-    UNITS_CACHE.write_text(
-        json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8"
-    )
+    entry = data.get(host)
+    if not isinstance(entry, dict) or not isinstance(entry.get("zones"), dict):
+        entry = data[host] = {"zones": {}}
+    entry["zones"][_zone_key(zone_path)] = {
+        name: c.to_dict() for name, c in caps.items()
+    }
+    _replace(UNITS_CACHE, json.dumps(data, ensure_ascii=False, indent=1))
 
 
-def _print_units(units: dict[str, Unit], caps: dict[str, Capabilities]) -> None:
-    """Print a table of units."""
+def _replace(path: Path, text: str) -> None:
+    """Write a file through a temporary one, so a reader never sees half of it."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        Path(tmp).replace(path)
+    except BaseException as err:
+        try:
+            Path(tmp).unlink(missing_ok=True)
+        except OSError as failed:
+            err.add_note(f"clean-up failed as well: {failed!r}")
+        raise
+
+
+def _print_units(
+    units: dict[str, Unit],
+    caps: dict[str, Capabilities],
+    thermostat: dict[str, bool | None] | None = None,
+) -> None:
+    """Print a table of units, with the thermostat status when it was read."""
+    thermo_head = f" {'thermo':>6}" if thermostat is not None else ""
     _out(
         f"{'unit':14} {'description':22} {'power':8} {'mode':10} {'fan':7} "
-        f"{'setpoint':>8} {'range':>7} {'room':>6}  error"
+        f"{'setpoint':>8} {'range':>7} {'room':>6}{thermo_head}  error"
     )
     for u in units.values():
         rng = (
@@ -141,10 +168,14 @@ def _print_units(units: dict[str, Unit], caps: dict[str, Capabilities]) -> None:
         desc = caps[u.name].description if u.name in caps else None
         # The list view has no on/off options, only the state.
         power = u.power or (u.power_state.value if u.power_state else "-")
+        thermo = ""
+        if thermostat is not None:
+            shown = {True: "on", False: "off", None: "-"}[thermostat.get(u.name)]
+            thermo = f" {shown:>6}"
         _out(
             f"{u.name:14} {desc or '-':22} {power:8} "
             f"{u.mode_label or '-':10} {u.fan_speed or '-':7} "
-            f"{u.setpoint or '-':>8} {rng:>7} {temp:>6}  {u.error_code or ''}"
+            f"{u.setpoint or '-':>8} {rng:>7} {temp:>6}{thermo}  {u.error_code or ''}"
         )
 
 
@@ -158,13 +189,28 @@ def _print_change(unit: str, u: Unit | None) -> None:
 
 
 async def _status(client: ItmClient, args: argparse.Namespace) -> None:
-    """Show all units."""
-    units = await client.fetch_units(view=args.view)
-    caps = {} if args.refresh else _load_caps(args.host)
-    if set(units) - set(caps):  # first run, or a unit was added/renamed in the iTM
-        caps = await client.fetch_capabilities()
-        _save_caps(args.host, caps)
-    _print_units(units, caps)
+    """Show all units, read in one shared session.
+
+    With the icon view the thermostat status is read in the same walk as the
+    units. With the list view it is read first: the list view ends a shared
+    session, so the reads after it would log in again.
+    """
+    caps = {} if args.refresh else _load_caps(args.host, client.zone_path)
+    thermostat: dict[str, bool | None] | None = None
+    async with client.shared_session():
+        units: dict[str, Unit]
+        if args.thermostat and args.view == "icons":
+            points = await client.fetch_points(thermostat=True)
+            units = {n: p for n, p in points.items() if not isinstance(p, AnalogPoint)}
+            thermostat = points.thermostat
+        else:
+            if args.thermostat:
+                thermostat = await client.fetch_thermostat_status()
+            units = await client.fetch_units(view=args.view)
+        if set(units) - set(caps):  # first run, or a unit was added/renamed in the iTM
+            caps = await client.fetch_capabilities()
+            _save_caps(args.host, client.zone_path, caps)
+    _print_units(units, caps, thermostat)
     for c in caps.values():
         if c.unknown_labels:
             _out(f"{c.name}: unknown mode labels {list(c.unknown_labels)}")
@@ -173,6 +219,7 @@ async def _status(client: ItmClient, args: argparse.Namespace) -> None:
 async def _points(client: ItmClient, args: argparse.Namespace) -> None:
     """Show every point in the zone, whatever its kind."""
     points = await client.fetch_points(details=args.details)
+    values = await client.fetch_analog_values() if args.values else {}
     for p in points.values():
         if isinstance(p, AnalogPoint):
             alarm = {True: "ALARM", False: "ok", None: "?"}[p.alarm]
@@ -182,7 +229,13 @@ async def _points(client: ItmClient, args: argparse.Namespace) -> None:
                 if p.source_point
                 else ""
             )
-            _out(f"{p.name:14} {p.kind.value:12} {alarm:8}{watch}")
+            v = values.get(p.name)
+            value = (
+                f" {'-' if v.value is None else v.value} {v.unit or ''}".rstrip()
+                if v
+                else ""
+            )
+            _out(f"{p.name:14} {p.kind.value:12} {alarm:8}{value}{watch}")
         else:
             power = p.power or (p.power_state.value if p.power_state else "-")
             _out(
@@ -323,21 +376,31 @@ async def _overtime(client: ItmClient, args: argparse.Namespace) -> None:
         _out(f"overtime timer: {result} min")
 
 
-async def _history_names(client: ItmClient, unit: str) -> set[str]:
+def _matching(caps: dict[str, Capabilities], key: str) -> set[str]:
+    found = set()
+    for name, c in caps.items():
+        known = (name, c.address or "", (c.description or "").strip())
+        if key in {k.casefold() for k in known}:
+            found.add(name)
+    return found
+
+
+async def _history_names(client: ItmClient, unit: str, host: str) -> set[str]:
     """Return the names the history may show a unit by.
 
     The history shows a unit by its name; ``unit`` may also be its address or the
-    description set in the iTM (both read from the units' Details screens).
+    description set in the iTM (both read from the units' Details screens). The
+    units cache is used when it knows the unit; otherwise the capabilities are
+    read again and cached.
     """
     wanted = unit.strip()
-    names = {wanted}
     key = wanted.casefold()
-    found = False
-    for name, caps in (await client.fetch_capabilities()).items():
-        known = (name, caps.address or "", (caps.description or "").strip())
-        if key in {k.casefold() for k in known}:
-            names.add(name)
-            found = True
+    found = _matching(_load_caps(host, client.zone_path), key)
+    if not found:
+        caps = await client.fetch_capabilities()
+        _save_caps(host, client.zone_path, caps)
+        found = _matching(caps, key)
+    names = {wanted, *found}
     if not found:
         print(
             f"note: no unit in the zone path {'/'.join(client.zone_path) or '(top)'} "
@@ -349,12 +412,19 @@ async def _history_names(client: ItmClient, unit: str) -> set[str]:
 
 
 async def _history(client: ItmClient, args: argparse.Namespace) -> None:
-    """Show the history."""
+    """Show the history, read in one shared session.
+
+    The capabilities are read before the history: the history of a given day
+    ends a shared session, so a read after it would log in again.
+    """
     day = date.fromisoformat(args.day) if args.day else None
-    names = await _history_names(client, args.unit) if args.unit else None
-    pages = await client.fetch_history(
-        day=day, include_management=args.management, pages=args.pages
-    )
+    async with client.shared_session():
+        names = (
+            await _history_names(client, args.unit, args.host) if args.unit else None
+        )
+        pages = await client.fetch_history(
+            day=day, include_management=args.management, pages=args.pages
+        )
     for page in pages:
         _out(f"-- {page.day or '?'} {page.page or ''}")
         for e in page.entries:
@@ -530,7 +600,7 @@ async def _zones(client: ItmClient, args: argparse.Namespace) -> None:
 
 async def _setpoint(client: ItmClient, args: argparse.Namespace) -> None:
     """Change a unit's setpoint."""
-    u = await client.set_setpoint(args.unit, args.value)
+    u = await client.set_setpoint(args.unit, args.value, when_stopped=args.when_stopped)
     if not _print_plan(client):
         _out(f"{args.unit}: setpoint now {u.setpoint if u else None}")
 
@@ -538,7 +608,7 @@ async def _setpoint(client: ItmClient, args: argparse.Namespace) -> None:
 async def _caps(client: ItmClient, args: argparse.Namespace) -> None:
     """Show the modes and fan control each unit offers."""
     all_caps = await client.fetch_capabilities()
-    _save_caps(args.host, all_caps)
+    _save_caps(args.host, client.zone_path, all_caps)
     for name, caps in all_caps.items():
         _out(
             f"{name:14} {caps.address or '-':8} id={caps.point_id or '-':5} "
@@ -598,6 +668,7 @@ COMMANDS: dict[str, Callable[[ItmClient, argparse.Namespace], Awaitable[None]]] 
     **SERVICE_COMMANDS,
     **SYSTEM_COMMANDS,
     **ENERGY_COMMANDS,
+    **CHECK_COMMANDS,
 }
 
 
@@ -617,7 +688,7 @@ async def _run(args: argparse.Namespace) -> None:
             str(args.session_file or _session_file(args.host)), args.host
         ),
         zone_path=zone_path,
-        read_only=args.read_only,
+        read_only=args.read_only or args.command == "check",
         dry_run=args.dry_run,
         allow_experimental=args.experimental,
     ) as client:
@@ -674,6 +745,13 @@ def _parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
     st = sub.add_parser("status", help="show all units")
     st.add_argument(
+        "--thermostat",
+        action="store_true",
+        help="also read each unit's thermostat status: two requests per unit in "
+        "the same walk with the icon view, which leaves out the analog inputs "
+        "(see points); three with the list view",
+    )
+    st.add_argument(
         "--refresh",
         action="store_true",
         help="re-read descriptions instead of using the cache",
@@ -689,6 +767,12 @@ def _parser() -> argparse.ArgumentParser:
     s = sub.add_parser("setpoint", help="change a unit's setpoint")
     s.add_argument("unit")
     s.add_argument("value", type=int)
+    s.add_argument(
+        "--when-stopped",
+        choices=WHEN_STOPPED,
+        default="refuse",
+        help="a stopped unit: refuse, or write it through the settings dialog",
+    )
     sub.add_parser(
         "caps",
         help="modes and fan control each unit offers (opens each settings dialog)",
@@ -720,6 +804,12 @@ def _parser() -> argparse.ArgumentParser:
     pt.add_argument(
         "--details", action="store_true", help="also what each analog point watches"
     )
+    pt.add_argument(
+        "--values",
+        action="store_true",
+        help="also the analog inputs' values (a zone of analog inputs only; the "
+        "list view, one login more)",
+    )
     sub.add_parser("errors", help="the error information the iTM shows, if any")
     _add_menu_commands(sub)
     add_dealer_commands(sub)
@@ -728,6 +818,7 @@ def _parser() -> argparse.ArgumentParser:
     add_service_commands(sub)
     add_system_commands(sub)
     add_energy_commands(sub)
+    add_check_commands(sub)
     return p
 
 
@@ -826,6 +917,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     """
     parser = _parser()
     args = parser.parse_args(argv)
+    if args.command == "check" and args.list:
+        list_reads(args.check_command)
+        return
     if not args.host:
         parser.error("set the iTM's address with --host or ITM_HOST")
 

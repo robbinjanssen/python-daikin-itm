@@ -8,7 +8,7 @@ dealer option: temperature limit groups (400-402), sliding temperature groups
 / ``press_ok`` (so a dry run plans instead of sending, and ``read_only`` refuses
 before anything is sent) and leaves every screen it opened with its Close/Cancel.
 ``DealerFunctionsMixin`` gives ``ItmClient`` the public methods, each write
-confirmed by a read-back in a fresh session.
+confirmed by a read-back.
 
 Seen on a real iTM with the dealer options switched off (read only):
 
@@ -52,7 +52,9 @@ from ._screens import return_choice as _return_choice
 from ._screens import row_holding as _row_holding
 from ._screens import row_named as _row
 from ._util import check_wrong as _check_wrong
+from ._util import cleanup as _cleanup
 from ._util import ignore as _discard
+from ._util import one_login
 from .exceptions import ItmCommandError
 from .menu import (
     MB_HEATING_OPTIMISATION,
@@ -311,7 +313,11 @@ async def _read_group_details(s: _Session, g: _Groups, row: int) -> dict[str, An
 
 async def _read_groups(s: _Session, g: _Groups, *, details: bool) -> list[Any]:
     await _open(s, g.button, g.main, g.what)
-    try:
+    async with _cleanup(
+        lambda: _leave(s, g.settings, g.settings_cancel),
+        lambda: _leave(s, g.members, M_CANCEL),
+        lambda: s.close_screen(g.main),
+    ):
         if g is TEMP_LIMIT:
             groups: list[Any] = temperature_limits_from_screen(s.state)
         else:
@@ -333,10 +339,6 @@ async def _read_groups(s: _Session, g: _Groups, *, details: bool) -> list[Any]:
                 found["outdoor_point"] = point
             out.append(replace(group, **found))
         return out
-    finally:
-        await _leave(s, g.settings, g.settings_cancel)
-        await _leave(s, g.members, M_CANCEL)
-        await s.close_screen(g.main)
 
 
 async def read_temperature_limits(
@@ -375,15 +377,13 @@ async def create_group(s: _Session, g: _Groups, name: str) -> bool:
     """
     s.require_writable()
     await _open(s, g.button, g.main, g.what)
-    try:
+    async with _cleanup(lambda: s.close_screen(g.main)):
         if name.strip() in _group_names(s.state, g):
             msg = f"{g.what} {name!r} exists already"
             raise ItmCommandError(msg)
         s.refuse_disabled(g.main, G_CREATE, f"add {g.what}")
         reply = await s.send(g.main, G_CREATE)
         return await _answer_name(s, g.main, reply, name, f"create {g.what} {name}")
-    finally:
-        await s.close_screen(g.main)
 
 
 async def delete_group(s: _Session, g: _Groups, name: str) -> bool:
@@ -396,14 +396,12 @@ async def delete_group(s: _Session, g: _Groups, name: str) -> bool:
     """
     s.require_writable()
     await _open(s, g.button, g.main, g.what)
-    try:
+    async with _cleanup(lambda: s.close_screen(g.main)):
         await _select_group(s, g, name)
         if _group_enabled(s, g, name):
             msg = f"{name}: disable the {g.what} before deleting it"
             raise ItmCommandError(msg)
         return await _press(s, f"delete {g.what} {name}", g.main, G_DELETE)
-    finally:
-        await s.close_screen(g.main)
 
 
 async def set_group_enabled(
@@ -418,15 +416,13 @@ async def set_group_enabled(
     """
     s.require_writable()
     await _open(s, g.button, g.main, g.what)
-    try:
+    async with _cleanup(lambda: s.close_screen(g.main)):
         await _select_group(s, g, name)
         if _group_enabled(s, g, name) is enabled:
             return True
         verb = "enable" if enabled else "disable"
         part = G_ENABLE if enabled else G_DISABLE
         return await _press(s, f"{verb} {g.what} {name}", g.main, part)
-    finally:
-        await s.close_screen(g.main)
 
 
 async def set_group_members(
@@ -441,7 +437,9 @@ async def set_group_members(
     """
     s.require_writable()
     await _open(s, g.button, g.main, g.what)
-    try:
+    async with _cleanup(
+        lambda: _leave(s, g.members, M_CANCEL), lambda: s.close_screen(g.main)
+    ):
         await _select_group(s, g, name)
         await _open_sub(s, g, G_MEMBERS, g.members)
         wanted = list(dict.fromkeys(m.strip() for m in members))
@@ -472,9 +470,6 @@ async def set_group_members(
         return await s.press_ok(
             f"save members of {g.what} {name}", g.members, M_OK, M_CANCEL
         )
-    finally:
-        await _leave(s, g.members, M_CANCEL)
-        await s.close_screen(g.main)
 
 
 async def _number(  # noqa: PLR0913  # pylint: disable=too-many-arguments
@@ -512,7 +507,9 @@ async def set_temperature_limit_settings(
     s.require_writable()
     g = TEMP_LIMIT
     await _open(s, g.button, g.main, g.what)
-    try:
+    async with _cleanup(
+        lambda: _leave(s, g.settings, g.settings_cancel), lambda: s.close_screen(g.main)
+    ):
         _new_name_free(s, g, name, new_name)
         await _select_group(s, g, name)
         await _open_sub(s, g, G_SETTINGS, g.settings)
@@ -523,9 +520,6 @@ async def set_temperature_limit_settings(
         await _number(s, a, TA_LOWER_BUTTON, lower, "lower limit", g=g)
         await _number(s, a, TA_UPPER_BUTTON, upper, "upper limit", g=g)
         return await s.press_ok(f"save {g.what} {name}", a, TA_OK, TA_CANCEL)
-    finally:
-        await _leave(s, g.settings, g.settings_cancel)
-        await s.close_screen(g.main)
 
 
 async def _open_inputs(s: _Session) -> None:
@@ -546,7 +540,11 @@ async def read_sliding_inputs(s: _Session, name: str) -> tuple[str, ...]:
     """
     g = SLIDING
     await _open(s, g.button, g.main, g.what)
-    try:
+    async with _cleanup(
+        lambda: _leave(s, SLIDING_INPUTS, AI_CANCEL),
+        lambda: _leave(s, g.settings, g.settings_cancel),
+        lambda: s.close_screen(g.main),
+    ):
         await _select_group(s, g, name)
         await _open_sub(s, g, G_SETTINGS, g.settings)
         await _open_inputs(s)
@@ -555,10 +553,6 @@ async def read_sliding_inputs(s: _Session, name: str) -> tuple[str, ...]:
             for r in _cells(s.state, SLIDING_INPUTS, AI_LIST)
             if any(r)
         )
-    finally:
-        await _leave(s, SLIDING_INPUTS, AI_CANCEL)
-        await _leave(s, g.settings, g.settings_cancel)
-        await s.close_screen(g.main)
 
 
 async def set_sliding_settings(  # noqa: PLR0913  # pylint: disable=too-many-arguments
@@ -591,7 +585,11 @@ async def set_sliding_settings(  # noqa: PLR0913  # pylint: disable=too-many-arg
     s.require_writable()
     g = SLIDING
     await _open(s, g.button, g.main, g.what)
-    try:
+    async with _cleanup(
+        lambda: _leave(s, SLIDING_INPUTS, AI_CANCEL),
+        lambda: _leave(s, g.settings, g.settings_cancel),
+        lambda: s.close_screen(g.main),
+    ):
         _new_name_free(s, g, name, new_name)
         await _select_group(s, g, name)
         await _open_sub(s, g, G_SETTINGS, g.settings)
@@ -613,10 +611,6 @@ async def set_sliding_settings(  # noqa: PLR0913  # pylint: disable=too-many-arg
                 await _number(s, a, parts[0][1], values[0], f"{what} from", g=g)
                 await _number(s, a, parts[1][1], values[1], f"{what} to", g=g)
         return await s.press_ok(f"save {g.what} {name}", a, SA_OK, SA_CANCEL)
-    finally:
-        await _leave(s, SLIDING_INPUTS, AI_CANCEL)
-        await _leave(s, g.settings, g.settings_cancel)
-        await s.close_screen(g.main)
 
 
 # -- heating mode optimisation (600) --------------------------------------------------
@@ -634,10 +628,8 @@ async def read_heating_optimisation(s: _Session) -> list[HeatingOptimisationUnit
 
     """
     await _open(s, MB_HEATING_OPTIMISATION, HMO, HMO_WHAT)
-    try:
+    async with _cleanup(lambda: s.close_screen(HMO)):
         return heating_optimisation_from_screen(s.state)
-    finally:
-        await s.close_screen(HMO)
 
 
 async def set_heating_optimisation(
@@ -652,7 +644,7 @@ async def set_heating_optimisation(
     """
     s.require_writable()
     await _open(s, MB_HEATING_OPTIMISATION, HMO, HMO_WHAT)
-    try:
+    async with _cleanup(lambda: s.close_screen(HMO)):
         sent = True
         for name in dict.fromkeys(n.strip() for n in names):
             units = [u.name for u in heating_optimisation_from_screen(s.state)]
@@ -667,8 +659,6 @@ async def set_heating_optimisation(
             part = H_ENABLE if enabled else H_DISABLE
             sent = await _press(s, f"{HMO_WHAT} {verb} for {name}", HMO, part) and sent
         return sent
-    finally:
-        await s.close_screen(HMO)
 
 
 async def set_heating_optimisation_all(s: _Session, *, enabled: bool) -> bool:
@@ -681,15 +671,13 @@ async def set_heating_optimisation_all(s: _Session, *, enabled: bool) -> bool:
     """
     s.require_writable()
     await _open(s, MB_HEATING_OPTIMISATION, HMO, HMO_WHAT)
-    try:
+    async with _cleanup(lambda: s.close_screen(HMO)):
         units = heating_optimisation_from_screen(s.state)
         if units and all(u.enabled is enabled for u in units):
             return True
         part = H_ALL_ON if enabled else H_ALL_OFF
         label = f"{HMO_WHAT} {'on' if enabled else 'off'} for all units"
         return await _press(s, label, HMO, part)
-    finally:
-        await s.close_screen(HMO)
 
 
 # -- the client's public methods ------------------------------------------------------
@@ -732,6 +720,7 @@ class DealerFunctionsMixin(ClientCore):  # pylint: disable=too-many-public-metho
         groups = await self.fetch_temperature_limits(details=True)
         return next((g for g in groups if g.name == name.strip()), None)
 
+    @one_login
     async def create_temperature_limit(
         self,
         name: str,
@@ -768,6 +757,7 @@ class DealerFunctionsMixin(ClientCore):  # pylint: disable=too-many-public-metho
             await self.set_temperature_limit(name, lower=lower, upper=upper)
         return await self._temperature_limit(name)
 
+    @one_login
     async def set_temperature_limit(
         self,
         name: str,
@@ -815,6 +805,7 @@ class DealerFunctionsMixin(ClientCore):  # pylint: disable=too-many-public-metho
         _check_wrong(name, wrong, result)
         return result
 
+    @one_login
     async def set_temperature_limit_members(
         self, name: str, members: Iterable[str]
     ) -> TemperatureLimitGroup | None:
@@ -838,6 +829,7 @@ class DealerFunctionsMixin(ClientCore):  # pylint: disable=too-many-public-metho
             raise ItmCommandError(msg)
         return result
 
+    @one_login
     async def set_temperature_limit_enabled(
         self, name: str, *, enabled: bool
     ) -> TemperatureLimitGroup | None:
@@ -860,6 +852,7 @@ class DealerFunctionsMixin(ClientCore):  # pylint: disable=too-many-public-metho
             raise ItmCommandError(msg)
         return result
 
+    @one_login
     async def delete_temperature_limit(self, name: str) -> None:
         """Delete a disabled temperature limit group."""
         self._experimental("delete a temperature limit group")
@@ -903,6 +896,7 @@ class DealerFunctionsMixin(ClientCore):  # pylint: disable=too-many-public-metho
         groups = await self.fetch_sliding_temperatures(details=True)
         return next((g for g in groups if g.name == name.strip()), None)
 
+    @one_login
     async def create_sliding_temperature(
         self, name: str, *, members: Iterable[str] = ()
     ) -> SlidingTemperatureGroup | None:
@@ -925,6 +919,7 @@ class DealerFunctionsMixin(ClientCore):  # pylint: disable=too-many-public-metho
             await self.set_sliding_temperature_members(name, wanted)
         return await self._sliding(name)
 
+    @one_login
     async def set_sliding_temperature(  # pylint: disable=too-many-arguments
         self,
         name: str,
@@ -985,6 +980,7 @@ class DealerFunctionsMixin(ClientCore):  # pylint: disable=too-many-public-metho
         _check_wrong(name, wrong, result)
         return result
 
+    @one_login
     async def set_sliding_temperature_members(
         self, name: str, members: Iterable[str]
     ) -> SlidingTemperatureGroup | None:
@@ -1008,6 +1004,7 @@ class DealerFunctionsMixin(ClientCore):  # pylint: disable=too-many-public-metho
             raise ItmCommandError(msg)
         return result
 
+    @one_login
     async def set_sliding_temperature_enabled(
         self, name: str, *, enabled: bool
     ) -> SlidingTemperatureGroup | None:
@@ -1030,6 +1027,7 @@ class DealerFunctionsMixin(ClientCore):  # pylint: disable=too-many-public-metho
             raise ItmCommandError(msg)
         return result
 
+    @one_login
     async def delete_sliding_temperature(self, name: str) -> None:
         """Delete a disabled sliding temperature group."""
         self._experimental("delete a sliding temperature group")
@@ -1051,6 +1049,7 @@ class DealerFunctionsMixin(ClientCore):  # pylint: disable=too-many-public-metho
         """
         return await self._in_session(read_heating_optimisation)
 
+    @one_login
     async def set_heating_optimisation(
         self, units: Iterable[str] | None = None, *, enabled: bool
     ) -> list[HeatingOptimisationUnit] | None:

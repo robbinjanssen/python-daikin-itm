@@ -197,7 +197,7 @@ async def test_own_read_back_fails_after_the_change(
     c = FakeClient(itm)
 
     async def busy() -> None:
-        msg = "another web session is active"
+        msg = "this user is logged in elsewhere"
         raise LoginRejected(msg)
 
     monkeypatch.setattr(c, "fetch_own_settings", busy)
@@ -239,9 +239,9 @@ async def test_web_user_screens_refusals(itm: FakeUsersITM) -> None:
     itm.screens_disabled_for.add("guest")
     with pytest.raises(ItmCommandError, match="administrator"):
         await c.set_web_user_screens("guest", ["Screen A"])
-    with pytest.raises(ItmCommandError, match="not found"):
+    with pytest.raises(ItmCommandError, match=r"not found; available: \[.*viewer"):
         await c.fetch_web_user_screens("nobody")
-    with pytest.raises(ItmCommandError, match="not offered"):
+    with pytest.raises(ItmCommandError, match=r"not offered: .*offered: \[.*Screen A"):
         await c.set_web_user_screens("viewer", ["Screen X"])
     with pytest.raises(ItmCommandError, match="account this client logs in with"):
         await c.set_web_user_screens("user", ["Screen A"])
@@ -358,3 +358,19 @@ async def test_zone_error_on_zone_settings() -> None:
                 "Zone A", name=None, info=None, start_interval=None, stop_interval=None
             )
     assert itm.open_screens == set()
+
+
+async def test_add_an_administrator_without_zones(itm: FakeUsersITM) -> None:
+    """An administrator takes no zones: the iTM disables the zone list for one."""
+    c = FakeClient(itm)
+    user = await c.create_web_user("admin2", NEW_PASSWORD, admin=True)
+    assert user is not None
+    assert user.admin is True
+    sent = len(itm.requests)
+    with pytest.raises(ItmCommandError, match="every zone"):
+        await c.create_web_user("admin3", NEW_PASSWORD, zones=("Building",), admin=True)
+    with pytest.raises(ItmCommandError, match="every zone"):
+        await c.set_web_user("admin2", admin=True, zones=("Building",))
+    assert len(itm.requests) == sent
+    with pytest.raises(ItmCommandError, match="at least one zone"):
+        await c.create_web_user("viewer2", NEW_PASSWORD)

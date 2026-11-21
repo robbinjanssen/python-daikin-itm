@@ -33,7 +33,9 @@ from ._bases import ClientCore
 from ._screens import answer_date
 from ._screens import checkbox as _checkbox
 from ._screens import close as _close
+from ._util import cleanup as _cleanup
 from ._util import ignore as _ignore
+from ._util import one_login
 from .exceptions import ItmCommandError
 from .menu import MenuScreen
 from .protocol import DataType, EventType
@@ -221,17 +223,8 @@ async def download(  # pylint: disable=too-many-locals
         msg = "export: the iTM produced no file"
         raise ItmCommandError(msg)
     reason = DOWNLOAD_FAILED
-    try:
-        path = export_path(uri)
-        data = await fetch(path)
-        reason = DOWNLOAD_SUCCEEDED
-    except ItmCommandError:
-        raise
-    except Exception as err:
-        msg = f"export: could not fetch {path}: {err}"
-        raise ItmCommandError(msg) from err
-    finally:
-        await s.send(
+    async with _cleanup(
+        lambda: s.send(
             dlg_screen,
             dlg_id,
             EventType.FINISH_DOWNLOAD,
@@ -239,6 +232,16 @@ async def download(  # pylint: disable=too-many-locals
             2,
             array=(job, reason),
         )
+    ):
+        try:
+            path = export_path(uri)
+            data = await fetch(path)
+            reason = DOWNLOAD_SUCCEEDED
+        except ItmCommandError:
+            raise
+        except Exception as err:
+            msg = f"export: could not fetch {path}: {err}"
+            raise ItmCommandError(msg) from err
     return Download(name=path.removeprefix(EXPORT_DIR), data=data)
 
 
@@ -261,7 +264,7 @@ async def read_ppd(
         msg = "PPD: give a period (start/end) or a calculation day, not both"
         raise ItmCommandError(msg)
     await s.open_system_screen(MB_PPD, MenuScreen.PPD)
-    try:
+    async with _cleanup(lambda: _close(s, PPD_SCREEN, PD_CLOSE)):
         if start is not None or end is not None:
             await s.send(PPD_SCREEN, PD_PERIOD_RADIO)
             if start is not None:
@@ -273,11 +276,10 @@ async def read_ppd(
             await s.answer_number(
                 PD_DAY_BUTTON, calculation_day, "PPD calculation day", screen=PPD_SCREEN
             )
+            s.no_way_back("a PPD calculation day was entered")
         reply = await s.click(PPD_SCREEN, PD_EXECUTE, "PPD calculation")
         await s.wait_for_progress(reply)
         return ppd_from_screen(s.state)
-    finally:
-        await _close(s, PPD_SCREEN, PD_CLOSE)
 
 
 async def _open_ppd_advanced(s: _Session) -> None:
@@ -294,14 +296,14 @@ async def _open_ppd_advanced(s: _Session) -> None:
 
 async def read_ppd_advanced(s: _Session) -> PpdAdvanced:
     """Read the PPD advanced settings (both tabs), then cancel."""
-    try:
+    async with _cleanup(
+        lambda: _close(s, PPD_ADVANCED, PA_CANCEL),
+        lambda: _close(s, PPD_SCREEN, PD_CLOSE),
+    ):
         await _open_ppd_advanced(s)
         await s.send(PPD_ADVANCED, PA_TAB, EventType.TAB_SELECT, DataType.INT, 1)
         await s.send(PPD_ADVANCED, PA_TAB, EventType.TAB_SELECT, DataType.INT, 0)
         return ppd_advanced_from_screen(s.state)
-    finally:
-        await _close(s, PPD_ADVANCED, PA_CANCEL)
-        await _close(s, PPD_SCREEN, PD_CLOSE)
 
 
 async def set_ppd_weekday(
@@ -318,7 +320,10 @@ async def set_ppd_weekday(
         msg = "a weekday is 0 (Sunday) .. 6 (Saturday)"
         raise ItmCommandError(msg)
     check = PA_WEEKDAY_CHECKS[weekday]
-    try:
+    async with _cleanup(
+        lambda: _close(s, PPD_ADVANCED, PA_CANCEL),
+        lambda: _close(s, PPD_SCREEN, PD_CLOSE),
+    ):
         await _open_ppd_advanced(s)
         if enabled is not None:
             await s.send(
@@ -345,9 +350,6 @@ async def set_ppd_weekday(
             PA_OK,
             PA_CANCEL,
         )
-    finally:
-        await _close(s, PPD_ADVANCED, PA_CANCEL)
-        await _close(s, PPD_SCREEN, PD_CLOSE)
 
 
 # -- history and energy navigator exports ---------------------------------------------
@@ -366,7 +368,10 @@ async def export_history(s: _Session, start: date, end: date, fetch: Fetch) -> D
     if HISTORY not in s.state.screens:
         msg = "the history did not open"
         raise ItmCommandError(msg)
-    try:
+    async with _cleanup(
+        lambda: _close(s, HISTORY_OUTPUT, HO_CANCEL),
+        lambda: _close(s, HISTORY, HS_CLOSE),
+    ):
         await s.click(HISTORY, HS_CSV, "history CSV")
         if HISTORY_OUTPUT not in s.state.screens:
             msg = "the history output screen did not open"
@@ -374,16 +379,13 @@ async def export_history(s: _Session, start: date, end: date, fetch: Fetch) -> D
         await answer_date(s, HISTORY_OUTPUT, HO_START, start, "history start")
         await answer_date(s, HISTORY_OUTPUT, HO_END, end, "history end")
         return await download(s, HISTORY_OUTPUT, HO_OUTPUT, fetch)
-    finally:
-        await _close(s, HISTORY_OUTPUT, HO_CANCEL)
-        await _close(s, HISTORY, HS_CLOSE)
 
 
 async def export_energy_data(s: _Session, period: str, fetch: Fetch) -> Download:
     """Export the energy navigator's data of a period (as its combo lists it)."""
     await s.open_system_screen(MB_ENERGY_EXPORT, MenuScreen.ENERGY_EXPORT)
     x = MenuScreen.ENERGY_EXPORT
-    try:
+    async with _cleanup(lambda: _close(s, x, EX_CLOSE)):
         options = [
             str(o).strip() for o in s.state.get(x, EX_PERIOD, "COMBO_STRS") or []
         ]
@@ -392,8 +394,6 @@ async def export_energy_data(s: _Session, period: str, fetch: Fetch) -> Download
             raise ItmCommandError(msg)
         await s.send(x, EX_PERIOD, EventType.CLICK, DataType.INT, options.index(period))
         return await download(s, x, EX_SAVE_ENERGY, fetch)
-    finally:
-        await _close(s, x, EX_CLOSE)
 
 
 async def export_point_list(
@@ -402,13 +402,11 @@ async def export_point_list(
     """Export the energy navigator's management point list of a period."""
     await s.open_system_screen(MB_ENERGY_EXPORT, MenuScreen.ENERGY_EXPORT)
     x = MenuScreen.ENERGY_EXPORT
-    try:
+    async with _cleanup(lambda: _close(s, x, EX_CLOSE)):
         await s.send(x, EX_TAB, EventType.TAB_SELECT, DataType.INT, 1)
         await answer_date(s, x, EX_FROM_BUTTON, start, "point list from")
         await answer_date(s, x, EX_TO_BUTTON, end, "point list to")
         return await download(s, x, EX_SAVE_POINTS, fetch)
-    finally:
-        await _close(s, x, EX_CLOSE)
 
 
 # -- backup and setup export ----------------------------------------------------------
@@ -427,10 +425,8 @@ async def export_setup(s: _Session, fetch: Fetch) -> Download:
     sensitive.
     """
     await s.open_menu()
-    try:
+    async with _cleanup(s.close_menu):
         return await download(s, MenuScreen.MENULIST, MB_SETUP_EXPORT, fetch)
-    finally:
-        await s.close_menu()
 
 
 async def backup(s: _Session, fetch: Fetch) -> Download | None:
@@ -444,14 +440,13 @@ async def backup(s: _Session, fetch: Fetch) -> Download | None:
 
     """
     await s.open_menu()
-    try:
-        return await download(s, MenuScreen.MENULIST, MB_BACKUP, fetch)
-    except ItmCommandError as err:
-        if "produced no file" in str(err):
-            return None
-        raise
-    finally:
-        await s.close_menu()
+    async with _cleanup(s.close_menu):
+        try:
+            return await download(s, MenuScreen.MENULIST, MB_BACKUP, fetch)
+        except ItmCommandError as err:
+            if "produced no file" in str(err):
+                return None
+            raise
 
 
 class ExportsMixin(ClientCore):
@@ -493,6 +488,7 @@ class ExportsMixin(ClientCore):
         """
         return await self._in_session(read_ppd_advanced)
 
+    @one_login
     async def set_ppd_weekday(
         self, weekday: int, *, enabled: bool | None = None, option: str | None = None
     ) -> PpdAdvanced | None:

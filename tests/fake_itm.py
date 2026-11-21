@@ -1,14 +1,43 @@
 """A small simulated iTM that behaves like the real one where it matters.
 
-- one web session at a time; logins are rejected while another session is active
-- replies only contain operation-panel parts that differ from what the client is
-  believed to show, and a client's own selection is never echoed back
+- one web session; logins are rejected while it is active (the real iTM allows one
+  per user, the simulator has one user)
+- replies only contain operation-panel, icon view and main menu bar parts that
+  differ from what the client is believed to show, and a client's own selection
+  is never echoed back; the main menu bar's changes come with a POLLING event
+- the icon view's Top and Up buttons are disabled at the top level, Down unless
+  a zone is selected; the list view opens hidden with the login and sends its
+  list again only when it differs from the one it sent before in the session
 - setpoint changes are applied on the TIMER commit, and ignored while a unit is
-  stopped
+  stopped; with ``latency_logins`` a change reaches the unit only after that many
+  further logins or POLLING events; ``change_elsewhere`` sends another client's
+  change that way
+- the session ends after ``idle_timeout`` seconds without a request (by ``clock``);
+  any request, a POLLING too, keeps it alive
+- with ``sticky_picks`` a pick a unit didn't take stays on the client's panel
+  until another point is shown; with ``forgets_picks`` the iTM takes the value it
+  sent last for what the client shows, so such a pick also stays when another
+  point with the unit's value is shown; ``FakeUnit.ignores_writes`` makes a unit
+  ignore changes
+- with ``editor_stays_open`` a schedule program's editor stays open when it is
+  left with Cancel and Yes
+- with ``ignores_typed_values`` a name, number or time of day typed in an input
+  dialog (CHARINPUT, NUMBER, HOURMIN) is taken as Cancel: the dialog closes and
+  nothing changes
+- with ``normal_user=True`` the account is a normal web user without allowed
+  screens: the login hides the main menu bar's menu button, the menu doesn't
+  open, and the managed zone's units are the top level
+- faults, all off by default: ``fail_next`` fails the next request before the
+  iTM sees it (a refused connection); ``lose_reply_next`` lets the next request
+  matching ``fault_on`` take effect and then loses its reply (the error given);
+  ``hang_next`` makes that many requests matching ``fault_on`` never get an
+  answer, and not take effect (through ``answer``, which waits); ``restart()``
+  forgets the sessions, as a restarted iTM does
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 
 from daikin_itm.protocol import (
@@ -108,9 +137,30 @@ __all__ = [
     "_rows",
 ]
 
+_TYPED_INPUTS = frozenset({4, 6, 10})  # CHARINPUT, NUMBER, HOURMIN
 
-class FakeITM(PanelMixin, MenuMixin):
+
+class FakeITM(PanelMixin, MenuMixin):  # pylint: disable=too-many-instance-attributes
     """The simulated iTM; feed it request bodies with handle()."""
+
+    # -- faults -----------------------------------------------------------------------
+    async def answer(self, body: str) -> str:
+        """Answer a request body like handle, or never (``hang_next``).
+
+        A hung request is recorded in ``hung`` and doesn't take effect; the
+        caller's timeout ends the wait.
+        """
+        await asyncio.sleep(0)
+        if self.hang_next and self.fault_on(self._parse(body)):
+            self.hang_next -= 1
+            self.hung.append(self._parse(body))
+            await asyncio.Event().wait()
+        return self.handle(body)
+
+    def restart(self) -> None:
+        """Restart: every session is forgotten; units and settings stay."""
+        self.session = None
+        self.restarts += 1
 
     # -- request handling ---------------------------------------------------------
     def handle(self, body: str) -> str:
@@ -118,6 +168,17 @@ class FakeITM(PanelMixin, MenuMixin):
         if (error := self.fail_next) is not None:
             self.fail_next = None
             raise error  # pylint: disable=raising-bad-type  # inferred from __init__
+        reply = self._handle(body)
+        lost = self.lose_reply_next
+        if lost is not None and self.fault_on(self.requests[-1]):
+            self.lose_reply_next = None
+            self.lost_replies.append(self.requests[-1])
+            raise lost  # pylint: disable=raising-bad-type  # inferred from __init__
+        return reply
+
+    @staticmethod
+    def _parse(body: str) -> dict[str, Any]:
+        """Return the fields of a request body."""
         r = Reader(body[4:])
         token = r.raw(32)
         ev: dict[str, Any] = {
@@ -131,7 +192,20 @@ class FakeITM(PanelMixin, MenuMixin):
         ev["array"] = [r.int() for _ in range(n)]
         ev["string"] = r.string()
         ev["token"] = token
+        return ev
+
+    def _handle(self, body: str) -> str:
+        """Answer a request body; the faults are left to handle and answer."""
+        ev = self._parse(body)
+        token = ev["token"]
         self.requests.append(ev)
+        now = self.clock()
+        if (
+            self.session is not None
+            and self.idle_timeout is not None
+            and now - self.last_request > self.idle_timeout
+        ):
+            self.session = None
 
         if ev["event"] == 0:  # INIT
             if ev["string"] != self.web_version:
@@ -141,10 +215,33 @@ class FakeITM(PanelMixin, MenuMixin):
             return self._login(ev["string"])
         if self.session is None or token != self.session:
             return self._reply(None, [("LOGOUT", -1, [3], [])])
+        self.last_request = now
         if ev["event"] == 10:  # logout
             self.session = None
             return self._reply(None, [])
-        return self._reply(self.session, self._list_or_event(ev))
+        if ev["event"] == 4:  # POLLING
+            self._tick_pending()
+        if (
+            self.ignores_typed_values
+            and ev["event"] == 1
+            and self.input_dialogs.get((ev["screen"], ev["part"])) in _TYPED_INPUTS
+        ):
+            ev = {**ev, "event": 2}
+            self.typed_values_ignored += 1
+        updates = self._list_or_event(ev)
+        self._track_dialogs(updates)
+        return self._reply(self.session, updates)
+
+    def _track_dialogs(self, updates: list[Update]) -> None:
+        for kind, screen, data, _ in updates:
+            if kind == "DLG_OPEN":
+                self.input_dialogs[screen, data[0]] = data[1]
+            elif kind == "DLG_CLOSE":
+                self.input_dialogs.pop((screen, data[0]), None)
+            elif kind == "CLOSE":
+                self.input_dialogs = {
+                    d: t for d, t in self.input_dialogs.items() if d[0] != screen
+                }
 
     def _list_or_event(self, ev: dict[str, Any]) -> list[Update]:
         if ev["event"] == 1 and (ev["screen"], ev["part"]) in ROW_LISTS:
@@ -155,6 +252,27 @@ class FakeITM(PanelMixin, MenuMixin):
             ev = {**ev, "dtype": 1, "number": ev["array"][0]}
         return self._event(ev)
 
+    def change_elsewhere(self, unit: FakeUnit, steps: int, **values: Any) -> None:
+        """Let another client's change reach a unit after steps logins or POLLINGs.
+
+        changed_elsewhere gets the number of requests seen when it does.
+        """
+
+        def change() -> None:
+            for key, value in values.items():
+                setattr(unit, key, value)
+            self.changed_elsewhere.append(len(self.requests))
+
+        self._pending.append([steps, change, unit])
+
+    def _tick_pending(self) -> None:
+        """Let the changes still on their way to a unit come one step closer."""
+        for p in self._pending:
+            p[0] -= 1
+            if p[0] <= 0:
+                p[1]()
+        self._pending = [p for p in self._pending if p[0] > 0]
+
     def _login(self, s: str) -> str:
         n = int(s[:4])
         user, digest = s[4 : 4 + n], s[4 + n :]
@@ -164,14 +282,22 @@ class FakeITM(PanelMixin, MenuMixin):
                 [("DLG_OPEN", 1203, [6, 1, "Cannot log in", "Error", "OK"], [])],
             )
         self.session = next(self.tokens)
-        for p in self._pending:
-            p[0] -= 1
-            if p[0] <= 0:
-                p[1]()
-        self._pending = [p for p in self._pending if p[0] > 0]
+        self.input_dialogs = {}
+        self.last_request = self.clock()
+        self.logins += 1
+        self._tick_pending()
         self.path = [self.root]
         self.selected = 0
         self.shown = {}
+        self.panel_sent = {}
+        self.panel_item = None
+        self.icon_shown = {}
+        self.bar_shown = {}
+        self.list_sent = None
+        # The day a screen was moved to lasts as long as the session.
+        self.overview_offset = 0
+        self.history_page = 0
+        self.history_day = self.history_loaded_day = "01/01/2025"
         self.pending_setpoint = None
         self.pending_power = None
         self.confirming_setback = None
@@ -181,9 +307,12 @@ class FakeITM(PanelMixin, MenuMixin):
             self.session,
             [
                 ("LOGIN", -1, [102, "Information", ""], []),
-                ("OPEN", 0, [-1], self._menu_bar()),
-                ("OPEN", 1, [-1], [(6, "ICONPANEL", self._icons())]),
+                ("OPEN", 0, [-1], self._bar_delta()),
                 ("OPEN", 4, [-1], self._panel_delta()),
+                ("OPEN", 1, [-1], self._icon_delta()),
+                ("OPEN", 2, [-1], [(6, "LABEL", "Icon")]),
+                ("HIDE", 2, [], []),
+                ("CLOSE", 1203, [], []),
             ],
         )
 
@@ -192,6 +321,7 @@ class FakeITM(PanelMixin, MenuMixin):
         routes: list[tuple[bool, Callable[[dict[str, Any]], list[Update]]]] = [
             (screen == 1 and part == 6 and event == 1, self._select_icon),
             (screen == 1 and part == 2 and event == 1, self._zone_down),
+            (screen == 1 and part == 1 and event == 1, self._zone_top),
             (screen == 1 and part == 4 and event == 1, self._list_view),
             (screen == 2 and part == 6 and event == 1, self._icon_view),
             (screen == 0 and part == 19 and event == 1, self._error_information),
@@ -213,6 +343,12 @@ class FakeITM(PanelMixin, MenuMixin):
             if matches:
                 return handler(ev)
         return []
+
+    def _polling(self, ev: dict[str, Any]) -> list[Update]:
+        """Name the selected icon on the operation panel again, like the real iTM."""
+        changed = [p for p in self._panel_delta() if p[:2] != (0, "LABEL")]
+        panel = [(0, "LABEL", self.shown[0, "LABEL"]), *changed]
+        return [("UPDATE", 4, [], panel), *super()._polling(ev)]
 
     # -- encoding -------------------------------------------------------------------
     @staticmethod
@@ -351,7 +487,7 @@ def _encode_list_column(w: Writer, v: list[list[Any]]) -> None:
 
 def _encode_list_row(w: Writer, v: dict[str, Any]) -> None:
     rows = v["rows"]
-    ncols = len(rows[0]["text"]) if rows else 0
+    ncols = v.get("ncols", len(rows[0]["text"]) if rows else 0)
     w.short(len(rows))
     w.short(ncols)
     for row in rows:

@@ -46,6 +46,7 @@ from ._screens import graph as _graph
 from ._screens import part_text as _string
 from ._screens import radio as _checked
 from ._screens import ticked as _checked_on
+from ._util import cleanup as _cleanup
 from ._util import field_names
 from .exceptions import ItmCommandError
 from .menu import MB_ENERGY_NAVIGATOR, MenuScreen
@@ -621,13 +622,11 @@ async def _visit_tabs(s: _Session, screen: int, part: int) -> None:
 async def read_budget(s: _Session) -> EnergyBudget | None:
     """Read the budget overview (3200), every tab; None when it does not open."""
     s3200 = MenuScreen.ENERGY_NAVIGATOR
-    try:
+    async with _cleanup(lambda: close(s, s3200, BG_CLOSE)):
         if not await open_from_menu(s, MB_ENERGY_NAVIGATOR, s3200):
             return None
         await _visit_tabs(s, s3200, BG_TABS)
         return budget_from_screen(s.state)
-    finally:
-        await close(s, s3200, BG_CLOSE)
 
 
 async def open_plan_screen(s: _Session, button: int, screen: int, tabs: int) -> bool:
@@ -660,12 +659,10 @@ async def read_planned(s: _Session) -> PlannedConsumption | None:
             disabled.
 
     """
-    try:
+    async with _cleanup(lambda: leave_plan_screens(s, PLANNED, PL_CANCEL)):
         if not await open_plan_screen(s, PS_PLANNED, PLANNED, PL_TABS):
             return None
         return planned_from_screen(s.state)
-    finally:
-        await leave_plan_screens(s, PLANNED, PL_CANCEL)
 
 
 async def read_actual(s: _Session) -> ActualConsumption | None:
@@ -681,12 +678,10 @@ async def read_actual(s: _Session) -> ActualConsumption | None:
             disabled.
 
     """
-    try:
+    async with _cleanup(lambda: leave_plan_screens(s, ACTUAL, AC_CANCEL)):
         if not await open_plan_screen(s, PS_ACTUAL, ACTUAL, AC_TABS):
             return None
         return actual_from_screen(s.state)
-    finally:
-        await leave_plan_screens(s, ACTUAL, AC_CANCEL)
 
 
 async def _read_equipment_list(s: _Session, button: int, screen: int) -> bool:
@@ -705,13 +700,13 @@ async def read_rules(s: _Session) -> tuple[str, ...] | None:
         The names as listed; None when 3210 doesn't open.
 
     """
-    try:
+    async with _cleanup(
+        lambda: close(s, RULES, RL_CLOSE),
+        lambda: close(s, MenuScreen.ENERGY_EQUIPMENT, EQ_CLOSE),
+    ):
         if not await _read_equipment_list(s, EQ_RULES, RULES):
             return None
         return rules_from_screen(s.state)
-    finally:
-        await close(s, RULES, RL_CLOSE)
-        await close(s, MenuScreen.ENERGY_EQUIPMENT, EQ_CLOSE)
 
 
 async def read_sampling_targets(s: _Session) -> tuple[SamplingTarget, ...] | None:
@@ -722,13 +717,13 @@ async def read_sampling_targets(s: _Session) -> tuple[SamplingTarget, ...] | Non
         The levels and names as listed; None when 3210 doesn't open.
 
     """
-    try:
+    async with _cleanup(
+        lambda: close(s, SAMPLING_TARGETS, ST_CANCEL),
+        lambda: close(s, MenuScreen.ENERGY_EQUIPMENT, EQ_CLOSE),
+    ):
         if not await _read_equipment_list(s, EQ_TARGET, SAMPLING_TARGETS):
             return None
         return sampling_targets_from_screen(s.state)
-    finally:
-        await close(s, SAMPLING_TARGETS, ST_CANCEL)
-        await close(s, MenuScreen.ENERGY_EQUIPMENT, EQ_CLOSE)
 
 
 async def open_display_list(s: _Session, button: int, screen: int) -> bool:
@@ -758,7 +753,9 @@ async def _read_list_entries(
     An entry whose Edit button stays disabled after selecting it gets plain(name).
     """
     button, screen, setting, cancel = lists
-    try:
+    async with _cleanup(
+        lambda: close(s, setting, cancel), lambda: leave_display_list(s, screen)
+    ):
         if not await open_display_list(s, button, screen):
             return None
         entries = []
@@ -771,9 +768,6 @@ async def _read_list_entries(
             entries.append(read(s.state, name))
             await close(s, setting, cancel)
         return tuple(entries)
-    finally:
-        await close(s, setting, cancel)
-        await leave_display_list(s, screen)
 
 
 async def read_energy_types(s: _Session) -> tuple[EnergyType, ...] | None:
@@ -817,7 +811,10 @@ async def read_details(s: _Session) -> EquipmentDetails | None:
         disabled (as without data: it is never clicked then).
 
     """
-    try:
+    async with _cleanup(
+        lambda: close(s, DETAILS, DT_CLOSE),
+        lambda: close(s, MenuScreen.ENERGY_EQUIPMENT, EQ_CLOSE),
+    ):
         if not await open_from_menu(
             s, MB_ENERGY_EQUIPMENT, MenuScreen.ENERGY_EQUIPMENT
         ):
@@ -827,9 +824,6 @@ async def read_details(s: _Session) -> EquipmentDetails | None:
         await open_below(s, MenuScreen.ENERGY_EQUIPMENT, EQ_DETAILS[0], DETAILS)
         await _visit_tabs(s, DETAILS, DT_TABS)
         return details_from_screen(s.state)
-    finally:
-        await close(s, DETAILS, DT_CLOSE)
-        await close(s, MenuScreen.ENERGY_EQUIPMENT, EQ_CLOSE)
 
 
 async def leave_rule_editor(s: _Session) -> None:
@@ -855,7 +849,11 @@ async def read_rule_editor(s: _Session) -> tuple[RuleEditor, ...] | None:
         The rules as their editors show them; None when 3210 doesn't open.
 
     """
-    try:
+    async with _cleanup(
+        lambda: leave_rule_editor(s),
+        lambda: close(s, RULES, RL_CLOSE),
+        lambda: close(s, MenuScreen.ENERGY_EQUIPMENT, EQ_CLOSE),
+    ):
         if not await _read_equipment_list(s, EQ_RULES, RULES):
             return None
         rules = []
@@ -868,10 +866,6 @@ async def read_rule_editor(s: _Session) -> tuple[RuleEditor, ...] | None:
             rules.append(rule_editor_from_screen(s.state, name))
             await leave_rule_editor(s)
         return tuple(rules)
-    finally:
-        await leave_rule_editor(s)
-        await close(s, RULES, RL_CLOSE)
-        await close(s, MenuScreen.ENERGY_EQUIPMENT, EQ_CLOSE)
 
 
 # -- rule settings (3217) -------------------------------------------------------------
@@ -997,15 +991,13 @@ async def read_rule_day(s: _Session, rule: str, day: str) -> RuleDay:
         ItmCommandError: A screen did not open, or the day's Edit is disabled.
 
     """
-    try:
+    async with _cleanup(lambda: leave_rules(s)):
         await open_rule(s, rule)
         if not await open_rule_day(s, day):
             msg = f"rule {rule}: the iTM does not offer editing {day}"
             raise ItmCommandError(msg)
         rows = list_cells(s.state, RULE_SETTING, RS_LIST)
         return RuleDay(rule, day, rows, await read_rule_ranges(s))
-    finally:
-        await leave_rules(s)
 
 
 async def read_rule_settings(s: _Session) -> tuple[RuleDay, ...] | None:
@@ -1018,7 +1010,7 @@ async def read_rule_settings(s: _Session) -> tuple[RuleDay, ...] | None:
         The days read; None when 3210 doesn't open.
 
     """
-    try:
+    async with _cleanup(lambda: leave_rules(s)):
         if not await _read_equipment_list(s, EQ_RULES, RULES):
             return None
         days = []
@@ -1035,8 +1027,6 @@ async def read_rule_settings(s: _Session) -> tuple[RuleDay, ...] | None:
                 await close(s, RULE_SETTING, RS_CANCEL)
             await leave_rule_editor(s)
         return tuple(days)
-    finally:
-        await leave_rules(s)
 
 
 # -- the installer's settings (3220-3224, behind the service login) -------------------
@@ -1119,7 +1109,7 @@ async def read_installer(s: _Session) -> EnergyInstallerSettings | None:
         The settings; None when 3220 doesn't open.
 
     """
-    try:
+    async with _cleanup(lambda: leave_installer(s)):
         if not await open_installer(s):
             return None
         await open_below(s, INSTALLER, IN_ROOM_TEMP, ROOM_TEMP)
@@ -1136,8 +1126,6 @@ async def read_installer(s: _Session) -> EnergyInstallerSettings | None:
         await open_below(s, INSTALLER, IN_CONVERSION, CONVERSION)
         conversion = conversion_from_screen(s.state)
         return EnergyInstallerSettings(points, analog, month, months, conversion)
-    finally:
-        await leave_installer(s)
 
 
 def wanted_parts(only: Iterable[str] | None) -> frozenset[str]:

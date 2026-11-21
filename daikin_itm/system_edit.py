@@ -9,6 +9,7 @@ logged and never put into a dry run's plan.
 
 from __future__ import annotations
 
+import dataclasses
 import html
 import re
 from dataclasses import dataclass
@@ -20,7 +21,9 @@ from ._bases import ClientCore, SessionCore
 from ._screens import close as _close
 from ._screens import open_screen as _open
 from ._screens import radio as _radio
+from ._util import cleanup as _cleanup
 from ._util import ignore as _ignore
+from ._util import one_login
 from .exceptions import ItmCommandError, SessionEnded
 from .menu import (
     CLOSE_PART,
@@ -152,7 +155,7 @@ class EmailServer:
     pop_address: str | None = None
     pop_port: int | None = None
     user_id: str | None = None
-    password: str | None = None  # sent once, never logged nor planned
+    password: str | None = dataclasses.field(default=None, repr=False)  # sent once
     resend_interval: int | None = None  # option index, as the iTM lists them
     auth_method: int | None = None  # option index
 
@@ -236,7 +239,10 @@ async def add_email_address(s: _Session, address: str, points: tuple[str, ...]) 
 
     """
     await _open(s, MB_EMAIL, MenuScreen.EMAIL)
-    try:
+    async with _cleanup(
+        lambda: _close(s, ADDRESS_SCREEN, AD_CANCEL),
+        lambda: s.close_screen(MenuScreen.EMAIL),
+    ):
         if address in email_addresses(s.state):
             msg = f"e-mail address {address!r} exists already"
             raise ItmCommandError(msg)
@@ -297,9 +303,6 @@ async def add_email_address(s: _Session, address: str, points: tuple[str, ...]) 
         return await s.press_ok(
             f"add e-mail address {address}", ADDRESS_SCREEN, AD_OK, AD_CANCEL
         )
-    finally:
-        await _close(s, ADDRESS_SCREEN, AD_CANCEL)
-        await s.close_screen(MenuScreen.EMAIL)
 
 
 async def edit_email_address(
@@ -312,7 +315,9 @@ async def edit_email_address(
     """Change an e-mail address and/or the points it reports on; OK + Yes."""
     e = MenuScreen.EMAIL
     await _open(s, MB_EMAIL, e)
-    try:
+    async with _cleanup(
+        lambda: _close(s, ADDRESS_SCREEN, AD_CANCEL), lambda: s.close_screen(e)
+    ):
         await s.select_listed(e, EMAIL_LIST, 1, address, "e-mail address")
         await s.click(e, EMAIL_EDIT, "edit e-mail address")
         if ADDRESS_SCREEN not in s.state.screens:
@@ -322,16 +327,13 @@ async def edit_email_address(
         return await s.press_ok(
             f"change e-mail address {address}", ADDRESS_SCREEN, AD_OK, AD_CANCEL
         )
-    finally:
-        await _close(s, ADDRESS_SCREEN, AD_CANCEL)
-        await s.close_screen(e)
 
 
 async def delete_email_address(s: _Session, address: str) -> bool:
     """Select an e-mail address, press Delete and confirm."""
     e = MenuScreen.EMAIL
     await _open(s, MB_EMAIL, e)
-    try:
+    async with _cleanup(lambda: s.close_screen(e)):
         await s.select_listed(e, EMAIL_LIST, 1, address, "e-mail address")
         if s.state.get(e, EMAIL_DELETE, "ENABLED") == 0:
             msg = f"the iTM does not allow deleting {address!r}"
@@ -343,8 +345,6 @@ async def delete_email_address(s: _Session, address: str) -> bool:
             return False
         await s.answer_confirm(e, reply)
         return True
-    finally:
-        await s.close_screen(e)
 
 
 async def set_email_enabled(s: _Session, address: str, *, enabled: bool) -> bool:
@@ -355,7 +355,7 @@ async def set_email_enabled(s: _Session, address: str, *, enabled: bool) -> bool
     """
     e = MenuScreen.EMAIL
     await _open(s, MB_EMAIL, e)
-    try:
+    async with _cleanup(lambda: s.close_screen(e)):
         await s.select_listed(e, EMAIL_LIST, 1, address, "e-mail address")
         if _radio(s.state, e, EMAIL_ON, EMAIL_OFF) is enabled:
             return True
@@ -369,8 +369,6 @@ async def set_email_enabled(s: _Session, address: str, *, enabled: bool) -> bool
             return False
         await s.answer_confirm(e, reply)
         return True
-    finally:
-        await s.close_screen(e)
 
 
 def email_server_from_screen(state: UIState) -> dict[str, Any]:
@@ -394,21 +392,20 @@ async def read_email_server(s: _Session) -> dict[str, Any]:
     """Open the e-mail server screen, read it and cancel."""
     e = MenuScreen.EMAIL
     await _open(s, MB_EMAIL, e)
-    try:
+    async with _cleanup(
+        lambda: _close(s, SERVER_SCREEN, SV_CANCEL), lambda: s.close_screen(e)
+    ):
         await s.click(e, EMAIL_SERVER, "e-mail server")
         for tab in (0, 1):
             await s.send(SERVER_SCREEN, SV_TAB, EventType.TAB_SELECT, DataType.INT, tab)
         return email_server_from_screen(s.state)
-    finally:
-        await _close(s, SERVER_SCREEN, SV_CANCEL)
-        await s.close_screen(e)
 
 
 async def set_email_server(s: _Session, server: EmailServer) -> bool:
     """Change the e-mail server settings; OK + Yes. The password is never planned."""
     e, v = MenuScreen.EMAIL, SERVER_SCREEN
     await _open(s, MB_EMAIL, e)
-    try:
+    async with _cleanup(lambda: _close(s, v, SV_CANCEL), lambda: s.close_screen(e)):
         await s.click(e, EMAIL_SERVER, "e-mail server")
         if v not in s.state.screens:
             msg = "the e-mail server screen did not open"
@@ -436,9 +433,6 @@ async def set_email_server(s: _Session, server: EmailServer) -> bool:
                 s, reply, "PASSWORD", server.password, "e-mail password"
             )
         return await s.press_ok("save e-mail server settings", v, SV_OK, SV_CANCEL)
-    finally:
-        await _close(s, v, SV_CANCEL)
-        await s.close_screen(e)
 
 
 async def send_test_email(
@@ -453,7 +447,11 @@ async def send_test_email(
         raise ItmCommandError(msg)
     e = MenuScreen.EMAIL
     await _open(s, MB_EMAIL, e)
-    try:
+    async with _cleanup(
+        lambda: _close(s, TRIAL_SCREEN, TR_CANCEL),
+        lambda: _close(s, ADDRESS_SCREEN, AD_CANCEL),
+        lambda: s.close_screen(e),
+    ):
         await s.select_listed(e, EMAIL_LIST, 1, address, "e-mail address")
         await s.click(e, EMAIL_EDIT, "edit e-mail address")
         await s.send(ADDRESS_SCREEN, AD_TAB, EventType.TAB_SELECT, DataType.INT, 1)
@@ -464,24 +462,18 @@ async def send_test_email(
         return await s.press_ok(
             f"send a test e-mail to {address}", TRIAL_SCREEN, TR_OK, TR_CANCEL
         )
-    finally:
-        await _close(s, TRIAL_SCREEN, TR_CANCEL)
-        await _close(s, ADDRESS_SCREEN, AD_CANCEL)
-        await s.close_screen(e)
 
 
 async def set_confirm_dialogs(s: _Session, *, enabled: bool) -> bool:
     """Switch the iTM's "apply settings?" confirm dialogs on or off; OK."""
     c = MenuScreen.CONFIRM_DIALOGS
     await _open(s, MB_CONFIRM_DIALOGS, c)
-    try:
+    async with _cleanup(lambda: s.close_screen(c)):
         if _radio(s.state, c, CD_ON, CD_OFF) is enabled:
             return True
         await s.send(c, CD_ON if enabled else CD_OFF)
         verb = "on" if enabled else "off"
         return await s.press_ok(f"confirm dialogs {verb}", c, CD_OK, CD_CANCEL)
-    finally:
-        await s.close_screen(c)
 
 
 async def set_web_server_port(
@@ -497,7 +489,7 @@ async def set_web_server_port(
         raise ItmCommandError(msg)
     n, w = MenuScreen.NETWORK, WEB_SERVER_SCREEN
     await _open(s, MB_NETWORK, n)
-    try:
+    async with _cleanup(lambda: _close(s, w, WS_CANCEL), lambda: s.close_screen(n)):
         await s.click(n, NW_WEB_SERVER, "web server settings")
         if w not in s.state.screens:
             msg = "the web server screen did not open"
@@ -511,9 +503,6 @@ async def set_web_server_port(
         if not await s.press_ok("save web server port", w, WS_OK, WS_CANCEL):
             return False
         return await s.press_ok("save network settings", n, 23, NW_CANCEL)
-    finally:
-        await _close(s, w, WS_CANCEL)
-        await s.close_screen(n)
 
 
 async def set_remote_management(
@@ -525,7 +514,7 @@ async def set_remote_management(
         raise ItmCommandError(msg)
     r = MenuScreen.REMOTE_MANAGEMENT
     await _open(s, MB_REMOTE_MANAGEMENT, r)
-    try:
+    async with _cleanup(lambda: s.close_screen(r)):
         part = RM_CONNECT if connect else RM_DISCONNECT
         if s.state.get(r, part, "ENABLED") == 0:
             msg = "the iTM has remote management connect/disconnect disabled"
@@ -537,8 +526,6 @@ async def set_remote_management(
             return False
         await s.answer_confirm(r, reply)
         return True
-    finally:
-        await s.close_screen(r)
 
 
 class SystemMixin(ClientCore):  # pylint: disable=too-many-public-methods
@@ -551,6 +538,7 @@ class SystemMixin(ClientCore):  # pylint: disable=too-many-public-methods
             raise ItmCommandError(msg)
         return email
 
+    @one_login
     async def add_email_address(
         self, address: str, points: Iterable[str]
     ) -> EmailSettings | None:
@@ -578,6 +566,7 @@ class SystemMixin(ClientCore):  # pylint: disable=too-many-public-methods
             raise ItmCommandError(msg)
         return email
 
+    @one_login
     async def edit_email_address(
         self,
         address: str,
@@ -612,6 +601,7 @@ class SystemMixin(ClientCore):  # pylint: disable=too-many-public-methods
             raise ItmCommandError(msg)
         return email
 
+    @one_login
     async def delete_email_address(self, address: str) -> None:
         """Delete an e-mail address.
 
@@ -627,6 +617,7 @@ class SystemMixin(ClientCore):  # pylint: disable=too-many-public-methods
             msg = f"{address}: the iTM did not delete the address"
             raise ItmCommandError(msg)
 
+    @one_login
     async def set_email_enabled(
         self, address: str, *, enabled: bool
     ) -> EmailSettings | None:
@@ -664,6 +655,7 @@ class SystemMixin(ClientCore):  # pylint: disable=too-many-public-methods
         """
         return await self._in_session(read_email_server)
 
+    @one_login
     async def set_email_server(self, server: EmailServer) -> dict[str, Any] | None:
         """Change the e-mail server settings; the password is never logged.
 
@@ -706,6 +698,7 @@ class SystemMixin(ClientCore):  # pylint: disable=too-many-public-methods
             lambda s: _ignore(send_test_email(s, address, allow_send=allow_send))
         )
 
+    @one_login
     async def set_confirm_dialogs(self, *, enabled: bool) -> bool | None:
         """Switch the iTM's "confirm settings" dialogs on or off.
 
@@ -889,6 +882,7 @@ class SystemMixin(ClientCore):  # pylint: disable=too-many-public-methods
         """
         return await self._in_session(lambda s: s.read_dst())
 
+    @one_login
     async def set_dst(
         self,
         *,
@@ -925,6 +919,7 @@ class SystemMixin(ClientCore):  # pylint: disable=too-many-public-methods
             raise ItmCommandError(msg)
         return result
 
+    @one_login
     async def set_clock(
         self, when: datetime | None = None, *, tolerance: float = 120
     ) -> ItmInfo | None:
@@ -932,14 +927,22 @@ class SystemMixin(ClientCore):  # pylint: disable=too-many-public-methods
 
         Args:
         ----
-            when: The local date and time to set.
+            when: The local date and time to set, without a time zone (the iTM
+                keeps local time).
             tolerance: How far (seconds) the read-back may differ.
 
         Returns:
         -------
             The info as read back, or None in a dry run.
 
+        Raises:
+        ------
+            TypeError: when has a time zone; nothing is sent.
+
         """
+        if when is not None and when.tzinfo is not None:
+            msg = "set_clock takes the iTM's local time without a time zone"
+            raise TypeError(msg)
         target = when or datetime.now()  # noqa: DTZ005 - the iTM keeps local time
         await self._system_write(lambda s: s.set_clock(target))
         if self.dry_run:
@@ -980,7 +983,7 @@ class SystemSessionMixin(SessionCore):  # pylint: disable=too-many-public-method
         if not await self.open_menu_screen(MB_HARDWARE, s):
             msg = "the hardware settings screen did not open"
             raise ItmCommandError(msg)
-        try:
+        async with _cleanup(lambda: self.close_screen(s)):
             for key, part in (
                 ("backlight", HW_BACKLIGHT),
                 ("buzzer_volume", HW_BUZZER_VOLUME),
@@ -1000,8 +1003,6 @@ class SystemSessionMixin(SessionCore):  # pylint: disable=too-many-public-method
                     s, HW_BUZZER_DURATION, index, f"buzzer duration {minutes}"
                 )
             await self.press_ok("save hardware settings", s, HW_OK, CLOSE_PART[s])
-        finally:
-            await self.close_screen(s)
 
     async def set_screensaver(self, changes: dict[str, Any]) -> None:
         """Pick the screensaver mode, delay and error behaviour and press OK."""
@@ -1009,7 +1010,7 @@ class SystemSessionMixin(SessionCore):  # pylint: disable=too-many-public-method
         if not await self.open_menu_screen(MB_SCREENSAVER, s):
             msg = "the screensaver screen did not open"
             raise ItmCommandError(msg)
-        try:
+        async with _cleanup(lambda: self.close_screen(s)):
             if "mode" in changes:
                 modes = list(ScreensaverMode)
                 await self.pick_option(
@@ -1027,8 +1028,6 @@ class SystemSessionMixin(SessionCore):  # pylint: disable=too-many-public-method
                     s, SS_OFF_ON_ERROR if changes["off_on_error"] else SS_ON_ON_ERROR
                 )
             await self.press_ok("save screensaver settings", s, SS_OK, CLOSE_PART[s])
-        finally:
-            await self.close_screen(s)
 
     async def open_system_screen(self, button: int, screen: MenuScreen) -> None:
         """Open a system screen from the menu list; raise when it doesn't open."""
@@ -1040,21 +1039,16 @@ class SystemSessionMixin(SessionCore):  # pylint: disable=too-many-public-method
         """Open a zone's settings screen, read it and cancel."""
         s, a = MenuScreen.ZONES, MenuScreen.ZONE_SETTINGS
         await self.open_system_screen(MB_ZONES, s)
-        try:
+        async with _cleanup(lambda: self.close_screen(a), lambda: self.close_screen(s)):
             await self.select_listed(s, ZN_LIST, 0, zone, "zone")
             await self.click(s, ZN_SETTINGS, "zone")
             return zone_attributes_from_screen(self.state)
-        finally:
-            await self.close_screen(a)
-            await self.close_screen(s)
 
     async def read_dst(self) -> DstSettings:
         """Read the time screen's summer time switch and rule."""
         await self.open_system_screen(MB_TIME, MenuScreen.TIME)
-        try:
+        async with _cleanup(lambda: self.close_screen(MenuScreen.TIME)):
             return dst_from_screen(self.state)
-        finally:
-            await self.close_screen(MenuScreen.TIME)
 
     async def _network_input(self, field: str, value: str) -> None:
         """Open a network field's input, check it, and enter value (or plan it)."""
@@ -1093,18 +1087,16 @@ class SystemSessionMixin(SessionCore):  # pylint: disable=too-many-public-method
         """Enter the network changes and press OK (in a dry run: plan, Cancel)."""
         n = MenuScreen.NETWORK
         await self.open_system_screen(MB_NETWORK, n)
-        try:
+        async with _cleanup(lambda: self.close_screen(n)):
             for field, value in changes.items():
                 await self._network_input(field, value)
             await self.press_ok("save network settings", n, NW_OK, CLOSE_PART[n])
-        finally:
-            await self.close_screen(n)
 
     async def set_maintenance(self, point: str, *, on: bool) -> None:
         """Move a point into (or out of) the maintenance list and press OK."""
         s = MenuScreen.MAINTENANCE
         await self.open_system_screen(MB_MAINTENANCE, s)
-        try:
+        async with _cleanup(lambda: self.close_screen(s)):
             source, button = (
                 (MT_AVAILABLE, MT_ADD) if on else (MT_IN_MAINTENANCE, MT_REMOVE)
             )
@@ -1117,8 +1109,6 @@ class SystemSessionMixin(SessionCore):  # pylint: disable=too-many-public-method
             await self.press_ok(
                 f"put {point} {verb} maintenance", s, MT_OK, CLOSE_PART[s]
             )
-        finally:
-            await self.close_screen(s)
 
     async def set_point_attributes(
         self, point: str, *, name: str | None, info: str | None
@@ -1126,7 +1116,7 @@ class SystemSessionMixin(SessionCore):  # pylint: disable=too-many-public-method
         """Change a management point's name and/or description, then OK."""
         s, a = MenuScreen.POINTS, MenuScreen.POINT_SETTINGS
         await self.open_system_screen(MB_POINTS, s)
-        try:
+        async with _cleanup(lambda: self.close_screen(a), lambda: self.close_screen(s)):
             await self.select_listed(s, PT_LIST, 1, point, "point")
             await self.click(s, PT_CHANGE, "point")
             if a not in self.state.screens:
@@ -1137,9 +1127,6 @@ class SystemSessionMixin(SessionCore):  # pylint: disable=too-many-public-method
             if info is not None:
                 await self.answer_text(a, PA_INFO_BUTTON, info, f"{point} description")
             await self.press_ok(f"save point {point}", a, PA_OK, CLOSE_PART[a])
-        finally:
-            await self.close_screen(a)
-            await self.close_screen(s)
 
     async def set_zone_attributes(
         self,
@@ -1153,7 +1140,7 @@ class SystemSessionMixin(SessionCore):  # pylint: disable=too-many-public-method
         """Change a zone's name, description and/or intervals, then OK."""
         s, a = MenuScreen.ZONES, MenuScreen.ZONE_SETTINGS
         await self.open_system_screen(MB_ZONES, s)
-        try:
+        async with _cleanup(lambda: self.close_screen(a), lambda: self.close_screen(s)):
             await self.select_listed(s, ZN_LIST, 0, zone, "zone")
             await self.click(s, ZN_SETTINGS, "zone")
             if a not in self.state.screens:
@@ -1171,26 +1158,20 @@ class SystemSessionMixin(SessionCore):  # pylint: disable=too-many-public-method
                     await self.answer_number(button, value, f"{zone} {what}", screen=a)
             async with zones_edit.zone_errors(cast("_Session", self)):
                 await self.press_ok(f"save zone {zone}", a, ZA_OK, CLOSE_PART[a])
-        finally:
-            await self.close_screen(a)
-            await self.close_screen(s)
 
     async def read_language(self) -> str | None:
         """Open the language screen from the region screen and read the language."""
         r, g = MenuScreen.REGION, MenuScreen.LANGUAGE
         await self.open_system_screen(MB_REGION, r)
-        try:
+        async with _cleanup(lambda: self.close_screen(g), lambda: self.close_screen(r)):
             await self.send(r, RG_LANGUAGE_BUTTON)
             return language_from_screen(self.state)
-        finally:
-            await self.close_screen(g)
-            await self.close_screen(r)
 
     async def set_language(self, code: str) -> None:
         """Pick a display language: language screen OK, then region screen OK."""
         r, g = MenuScreen.REGION, MenuScreen.LANGUAGE
         await self.open_system_screen(MB_REGION, r)
-        try:
+        async with _cleanup(lambda: self.close_screen(g), lambda: self.close_screen(r)):
             await self.send(r, RG_LANGUAGE_BUTTON)
             if g not in self.state.screens:
                 msg = "the language screen did not open"
@@ -1198,9 +1179,6 @@ class SystemSessionMixin(SessionCore):  # pylint: disable=too-many-public-method
             await self.send(g, LANGUAGE_RADIOS[code])
             await self.press_ok(f"pick language {code}", g, LG_OK, CLOSE_PART[g])
             await self.press_ok(f"save language {code}", r, RG_OK, CLOSE_PART[r])
-        finally:
-            await self.close_screen(g)
-            await self.close_screen(r)
 
     async def _pick_dst_rule(self, parts: tuple[int, ...], rule: DstRule) -> None:
         """Pick a summer time rule's month, week, weekday and hour."""
@@ -1223,7 +1201,7 @@ class SystemSessionMixin(SessionCore):  # pylint: disable=too-many-public-method
         """Pick date format, 12/24 hours, °C/°F and decimal separator, then OK."""
         r = MenuScreen.REGION
         await self.open_system_screen(MB_REGION, r)
-        try:
+        async with _cleanup(lambda: self.close_screen(r)):
             if (fmt := changes.get("date_format")) is not None:
                 await self.pick_option(
                     r, R_DATE_FORMAT, DATE_FORMATS.index(fmt), f"date format {fmt}"
@@ -1236,27 +1214,23 @@ class SystemSessionMixin(SessionCore):  # pylint: disable=too-many-public-method
                 if (value := changes.get(key)) is not None:
                     await self.send(r, first if value == values[0] else second)
             await self.press_ok("save region settings", r, RG_OK, CLOSE_PART[r])
-        finally:
-            await self.close_screen(r)
 
     async def set_dst(self, *, enabled: bool, start: DstRule, end: DstRule) -> None:
         """Switch summer time on (with its rule) or off, then OK."""
         t = MenuScreen.TIME
         await self.open_system_screen(MB_TIME, t)
-        try:
+        async with _cleanup(lambda: self.close_screen(t)):
             await self.send(t, TM_DST_ON if enabled else TM_DST_OFF)
             if enabled:
                 await self._pick_dst_rule(TM_DST_START, start)
                 await self._pick_dst_rule(TM_DST_END, end)
             await self.press_ok("save summer time", t, TM_OK, CLOSE_PART[t])
-        finally:
-            await self.close_screen(t)
 
     async def set_clock(self, when: datetime) -> None:
         """Enter a date and time in the clock's input, then OK."""
         t = MenuScreen.TIME
         await self.open_system_screen(MB_TIME, t)
-        try:
+        async with _cleanup(lambda: self.close_screen(t)):
             reply = await self.send(t, TM_CHANGE)
             dialogs = [
                 u
@@ -1284,8 +1258,6 @@ class SystemSessionMixin(SessionCore):  # pylint: disable=too-many-public-method
                 d.screen, d.data[0], EventType.CLICK, DataType.TIME, 6, array=value
             )
             await self.press_ok("save the clock", t, TM_OK, CLOSE_PART[t])
-        finally:
-            await self.close_screen(t)
 
 
 def _hour(option: str) -> int | None:

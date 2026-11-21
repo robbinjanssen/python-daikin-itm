@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
+import json
 from typing import Any
 
 import aiohttp
@@ -13,6 +15,7 @@ from yarl import URL
 
 from daikin_itm import (
     DEFAULT_ZONE_PATH,
+    Capabilities,
     ItmClient,
     ItmCommandError,
     ItmError,
@@ -32,8 +35,8 @@ from .fake_itm import FakeITM
 class FakeClient(ItmClient):
     """An ItmClient talking to a FakeITM, without the real-world delays."""
 
-    def __init__(self, itm: FakeITM, **kw: Any) -> None:
-        """Create a client for the simulated iTM."""
+    def __init__(self, itm: FakeITM, *, host: str | None = None, **kw: Any) -> None:
+        """Create a client for the simulated iTM, by default on a host of its own."""
         kw.setdefault("commit_delay", 0)
         kw.setdefault("min_write_interval", 0)
         kw.setdefault("confirm_interval", 0)
@@ -42,12 +45,11 @@ class FakeClient(ItmClient):
         # The behaviour tests exercise the experimental writes too;
         # tests/test_experimental.py covers the opt-in itself.
         kw.setdefault("allow_experimental", True)
-        super().__init__("fake", "user", "secret", **kw)
+        super().__init__(host or f"fake-{id(itm):x}", itm.username, "secret", **kw)
         self.itm = itm
 
     async def _post(self, body: str) -> str:
-        await asyncio.sleep(0)
-        return self.itm.handle(body)
+        return await self.itm.answer(body)
 
 
 def http_error(status: int = 500) -> aiohttp.ClientResponseError:
@@ -191,7 +193,7 @@ async def test_apply_unknown_fan_speed(itm: FakeITM) -> None:
 
 
 async def test_login_rejected_when_other_session_active(itm: FakeITM) -> None:
-    """The iTM allows one web session at a time."""
+    """A second login with the same user is refused."""
     itm.session = "f" * 32  # someone is logged in through the browser
     with pytest.raises(LoginRejected):
         await FakeClient(itm).fetch_units()
@@ -370,6 +372,53 @@ async def test_capabilities_include_identity(itm: FakeITM) -> None:
     )
     assert c.zones == ("Floor 1>Building>Indoor units",)
     assert c.key == "1:1-04"
+
+
+async def test_capabilities_cost_five_requests_per_unit(itm: FakeITM) -> None:
+    """Select, Details open and close, settings open and cancel, per unit."""
+    caps = await FakeClient(itm).fetch_capabilities()
+    downs = [
+        i for i, r in enumerate(itm.requests) if (r["screen"], r["part"]) == (1, 2)
+    ]
+    walk = [r for r in itm.requests[downs[-1] + 1 :] if r["event"] != 10]
+    assert len(walk) == 5 * len(caps)
+
+
+async def test_capabilities_round_trip(itm: FakeITM) -> None:
+    """to_dict gives JSON values, from_dict reads them back."""
+    caps = await FakeClient(itm).fetch_capabilities()
+    stored = json.loads(json.dumps({n: c.to_dict() for n, c in caps.items()}))
+    assert {n: Capabilities.from_dict(c) for n, c in stored.items()} == caps
+    assert stored["1:1-04"]["zones"] == ["Floor 1>Building>Indoor units"]
+    assert set(stored["1:1-04"]) == {f.name for f in dataclasses.fields(Capabilities)}
+
+
+def test_capabilities_from_another_version() -> None:
+    """Unknown keys are ignored, missing optional ones get their default."""
+    caps = Capabilities.from_dict(
+        {"name": "a", "mode_labels": {"cool": "Cool"}, "fan_speed": True, "new": 1}
+    )
+    assert caps == Capabilities("a", {"cool": "Cool"}, fan_speed=True)
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        [],
+        {"name": "a", "fan_speed": True},
+        {"name": 1, "mode_labels": {}, "fan_speed": True},
+        {"name": "a", "mode_labels": {"cool": 1}, "fan_speed": True},
+        {"name": "a", "mode_labels": [], "fan_speed": True},
+        {"name": "a", "mode_labels": {}, "fan_speed": "yes"},
+        {"name": "a", "mode_labels": {}, "fan_speed": True, "address": 4},
+        {"name": "a", "mode_labels": {}, "fan_speed": True, "zones": "x"},
+        {"name": "a", "mode_labels": {}, "fan_speed": True, "zones": [1]},
+    ],
+)
+def test_capabilities_from_bad_data(data: Any) -> None:
+    """Data of the wrong shape raises ValueError, whatever is wrong."""
+    with pytest.raises(ValueError, match="capabilities"):
+        Capabilities.from_dict(data)
 
 
 async def test_web_version_follows_the_device(
@@ -615,13 +664,12 @@ async def test_apply_without_changes_does_not_write(itm: FakeITM) -> None:
     assert not any(r["screen"] == 7 for r in itm.requests)
 
 
-async def test_apply_without_changes_records_no_unconfirmed_change(
-    itm: FakeITM,
-) -> None:
-    """An unconfirmed write that writes nothing leaves nothing to wait for."""
-    c = FakeClient(itm)
+async def test_apply_without_changes_is_checked_in_the_call(itm: FakeITM) -> None:
+    """An unconfirmed write that writes nothing is checked before it returns."""
+    c = FakeClient(itm, verify_timeout=0.05)
     assert await c.set_mode("1:1-04", "cool", confirm=False) is not None
     assert not c._unconfirmed
+    assert not c.writes_sent
 
 
 async def test_apply_sends_only_what_differs(itm: FakeITM) -> None:

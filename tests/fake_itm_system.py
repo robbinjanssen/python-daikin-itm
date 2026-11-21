@@ -499,7 +499,12 @@ class SystemWrites:
             itm.open_screens.add(1202)
             zones = [[z["name"]] for z in itm.zone_attrs.values()]
             return [("OPEN", 1202, [-1], [(2, "LIST_ROW", _rows(zones))])]
-        if self.part == 17 and pending["new"] and not pending.get("zones"):
+        if (
+            self.part == 17
+            and pending["new"]
+            and not pending["admin"]
+            and not pending.get("zones")
+        ):
             error = [31, 1, "Managed area not registered", "Error", "OK"]
             return [("DLG_OPEN", 1204, error, [])]
         if self.part == 17:

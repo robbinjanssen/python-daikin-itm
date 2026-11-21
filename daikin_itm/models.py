@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import html
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
-from .exceptions import ItmCommandError, ProtocolError
+from .exceptions import NotOffered, ProtocolError
 from .lang import (
     MODE_LABELS,
     analog_key,
@@ -36,6 +37,11 @@ L_LIST, L_BTN_ICON = 8, 6
 # Its columns, as the iTM lays them out (ScMainStdList.initScreen); the headers are
 # in the iTM's language, so columns are addressed by index.
 LIST_COLUMNS = 25
+SHORT_LIST_COLUMNS = 4
+# The list of a zone holding only analog inputs: name, status, value, blocked, error
+# type.
+ANALOG_LIST_COLUMNS = 5
+AC_NAME, AC_STATUS, AC_VALUE = 0, 1, 2
 (
     LC_NAME,
     LC_STATUS,
@@ -77,6 +83,7 @@ D_FAN_CHECK, D_FAN_UP, D_FAN_DOWN, D_FAN_ICON = 28, 29, 30, 31
 D_AIRFLOW_CHECK, D_AIRFLOW_UP, D_AIRFLOW_DOWN, D_AIRFLOW_ICON = 88, 89, 90, 91
 D_FILTER_RESET, D_DUST_RESET, D_DUST_FORCED_RESET = 86, 142, 143
 D_VENT_MODE_CHECK, D_VENT_MODE, D_VENT_AMOUNT_CHECK, D_VENT_AMOUNT = 33, 34, 35, 36
+D_SETPOINT_CHECK, D_SETPOINT_TEXT, D_SETPOINT_BUTTON = 19, 21, 23
 # Airflow direction, in the order the settings dialog's "down" button steps through
 # them (it wraps around; "up" goes the other way), with the dialog's icons. The list
 # view shows the small icon, one lower.
@@ -227,6 +234,7 @@ _TEMP = re.compile(r"-?\d+(?:[.,]\d+)?")
 _LIMIT = re.compile(r"(-?\d+(?:[.,]\d+)?)\s*(?:°?[CF]|℃|℉)?\s*-\s*(-?\d+(?:[.,]\d+)?)")
 _STATUS_LINE = re.compile(r"^(.+?)\s*\[(.*)\]\s*$")
 _ATTRIBUTE_LINE = re.compile(r"^([^:\[\]]+?)\s*:\s*(.*)$")
+_MEASURED = re.compile(r"^(-?\d+(?:[.,]\d+)?)(?:\s*([^\d\s.,].*))?$")
 
 # Main menu bar (screen 0, ScMainMenu): the error indicator and its button, shown
 # only while a unit has an error.
@@ -404,6 +412,98 @@ class Capabilities:
     def key(self) -> str:
         """Stable identifier: the bus address when known, else the name."""
         return self.address or self.name
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the capabilities as plain JSON values, for a cache or a store.
+
+        Returns
+        -------
+            Every field by name; the tuples as lists. from_dict reads it back.
+
+        """
+        return {
+            "name": self.name,
+            "mode_labels": dict(self.mode_labels),
+            "fan_speed": self.fan_speed,
+            "point_id": self.point_id,
+            "address": self.address,
+            "unit_type": self.unit_type,
+            "description": self.description,
+            "zones": list(self.zones),
+            "unknown_labels": list(self.unknown_labels),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> Capabilities:
+        """Build capabilities from what to_dict returned, by this or another version.
+
+        Keys this version doesn't know are ignored, and a field the data lacks
+        gets its default, so data stored by an older or newer version loads.
+
+        Args:
+        ----
+            data: The capabilities as to_dict returned them, e.g. read from JSON.
+
+        Returns:
+        -------
+            The capabilities.
+
+        Raises:
+        ------
+            ValueError: The data isn't a mapping, lacks the name, mode labels or
+                fan control, or holds a value of the wrong type.
+
+        """
+        if not isinstance(data, Mapping):
+            msg = f"capabilities must be a mapping, not {type(data).__name__}"
+            raise ValueError(msg)  # noqa: TRY004 - one error for any bad stored data
+        missing = [k for k in ("name", "mode_labels", "fan_speed") if k not in data]
+        if missing:
+            msg = f"capabilities without {missing}"
+            raise ValueError(msg)
+        name, labels, fan = data["name"], data["mode_labels"], data["fan_speed"]
+        valid = (
+            isinstance(name, str)
+            and isinstance(fan, bool)
+            and isinstance(labels, Mapping)
+            and all(
+                isinstance(k, str) and isinstance(v, str) for k, v in labels.items()
+            )
+        )
+        if not valid:
+            msg = (
+                "capabilities: name must be text, mode_labels map text to text and "
+                "fan_speed be true or false"
+            )
+            raise ValueError(msg)
+        return cls(
+            name=name,
+            mode_labels=dict(labels),
+            fan_speed=fan,
+            point_id=_optional_text(data, "point_id"),
+            address=_optional_text(data, "address"),
+            unit_type=_optional_text(data, "unit_type"),
+            description=_optional_text(data, "description"),
+            zones=_texts(data, "zones"),
+            unknown_labels=_texts(data, "unknown_labels"),
+        )
+
+
+def _optional_text(data: Mapping[str, Any], key: str) -> str | None:
+    value = data.get(key)
+    if value is None or isinstance(value, str):
+        return value
+    msg = f"capabilities: {key} must be text or null"
+    raise ValueError(msg)
+
+
+def _texts(data: Mapping[str, Any], key: str) -> tuple[str, ...]:
+    value = data.get(key, ())
+    valid = isinstance(value, (list, tuple)) and all(isinstance(v, str) for v in value)
+    if not valid:
+        msg = f"capabilities: {key} must be a list of text"
+        raise ValueError(msg)
+    return tuple(value)
 
 
 def details_from_screen(state: UIState) -> dict[str, Any]:
@@ -692,13 +792,13 @@ def dialog_setting_choice(state: UIState, setting: DialogSetting, value: Any) ->
 
     Raises:
     ------
-        ItmCommandError: The unit doesn't offer the setting or the value.
+        NotOffered: The unit doesn't offer the setting or the value.
 
     """
     what = setting.key.replace("_", " ")
     if not setting_offered(state, setting):
         msg = f"{what}: not offered by this unit"
-        raise ItmCommandError(msg)
+        raise NotOffered(msg, value=value)
     if setting.kind == "radios":
         return setting.parts[0] if value else setting.parts[1]
     if setting.kind == "number":
@@ -712,7 +812,7 @@ def dialog_setting_choice(state: UIState, setting: DialogSetting, value: Any) ->
         key = str(value).strip().casefold()
     if key not in wanted:
         msg = f"{what}: {value!r} not offered: {list(options)}"
-        raise ItmCommandError(msg)
+        raise NotOffered(msg, value=value, options=options)
     return wanted.index(key)
 
 
@@ -952,6 +1052,18 @@ def units_from_list(state: UIState) -> dict[str, Unit]:
             return {}
         headers = [c[0] for c in panel["cols"]]
         msg = f"unexpected list view layout: {len(headers)} columns {headers}"
+        analog = _analog_rows(panel)
+        if analog and len(headers) == ANALOG_LIST_COLUMNS:
+            msg += (
+                "; the iTM shows this list for a zone holding only analog inputs: "
+                "read their values with fetch_analog_values()"
+            )
+        elif not analog and len(headers) == SHORT_LIST_COLUMNS:
+            msg += (
+                "; the iTM shows this short list for a zone holding units of more "
+                "than one kind (seen with indoor and ventilation units): read it "
+                'with view="icons"'
+            )
         raise ProtocolError(msg)
     units = {}
     for row in panel["rows"]:
@@ -966,8 +1078,10 @@ def units_from_list(state: UIState) -> dict[str, Unit]:
 class AnalogPoint:
     """An analog input of the iTM, e.g. an internal alarm on a unit's temperature.
 
-    The operation panel only shows its state icon; what it watches and its limits
-    are on its Details screen (``fetch_points(details=True)``).
+    The operation panel only shows its state icon; what it watches, its limits and
+    its ID are on its Details screen (``fetch_points(details=True)``), its present
+    value only in the list view of a zone holding only analog inputs
+    (``fetch_analog_values()``).
     """
 
     name: str
@@ -983,6 +1097,8 @@ class AnalogPoint:
     zones: tuple[str, ...] = field(default_factory=tuple)
     # Every "<key>:<value>" line of the Details screen, as shown.
     attributes: dict[str, str] = field(default_factory=dict)
+    value: float | None = None
+    point_id: str | None = None
 
 
 def analog_from_panel(state: UIState) -> AnalogPoint:
@@ -1016,19 +1132,27 @@ def analog_details_from_screen(state: UIState) -> dict[str, Any]:
 
     Returns:
     -------
-        Keyword arguments for AnalogPoint: description, zones, attributes, and the
-        attributes the client knows by field (unit, source_point, ...).
+        Keyword arguments for AnalogPoint: description, zones, attributes,
+        point_id, and the attributes the client knows by field (unit,
+        source_point, ...). The zone heading and paths are not attributes.
 
     """
     text = state.get(ScreenID.DETAILS, DT_INFO, "TEXT")
+    point_id = state.get(ScreenID.DETAILS, DT_ID, "TEXT")
     chars = html.unescape(state.get(ScreenID.DETAILS, DT_CHARS, "TEXT") or "")
+    lines = [line.strip() for line in chars.splitlines()]
+    start = 1 if lines and _zone_heading(lines[0]) else 0
+    end = start
+    while end < len(lines) and lines[end] and _zone_line(lines[end]):
+        end += 1
     out: dict[str, Any] = {
         "description": html.unescape(text).strip() or None if text else None,
-        "zones": _zones_from_chars(chars),
+        "zones": tuple(lines[start:end]),
         "attributes": {},
+        "point_id": html.unescape(point_id).strip() or None if point_id else None,
     }
-    for line in chars.splitlines():
-        m = _ATTRIBUTE_LINE.match(line.strip())
+    for line in lines[end:]:
+        m = _ATTRIBUTE_LINE.match(line)
         if m is None or ">" in m.group(2):
             continue
         key, value = m.group(1), m.group(2)
@@ -1038,6 +1162,76 @@ def analog_details_from_screen(state: UIState) -> dict[str, Any]:
         elif name is not None:
             out[name] = value
     return out
+
+
+def _zone_heading(line: str) -> bool:
+    """Tell whether a Details line is the zone heading, like "Zone:"."""
+    m = _ATTRIBUTE_LINE.match(line)
+    if m is None:
+        return ">" not in line
+    return ">" not in m.group(1) and not m.group(2) and analog_key(m.group(1)) is None
+
+
+def _zone_line(line: str) -> bool:
+    """Tell whether a Details line is a zone (a path) rather than a key and value."""
+    m = _ATTRIBUTE_LINE.match(line)
+    return m is None or ">" in m.group(1)
+
+
+def _analog_rows(panel: Mapping[str, Any]) -> bool:
+    """Tell whether a list holds rows and only analog inputs."""
+    rows = panel["rows"]
+    return bool(rows) and all(
+        point_kind(_cell_icon(row[AC_STATUS])) is PointKind.ANALOG for row in rows
+    )
+
+
+def analog_from_list(state: UIState) -> dict[str, AnalogPoint]:
+    """Read the analog inputs' present values from the open list view.
+
+    The list view of a zone holding only analog inputs has five columns (name,
+    status, value, blocked, error type), read by position. A value like
+    ``23.50°C`` gives value and unit; ``---`` or an empty cell gives None.
+
+    Args:
+    ----
+        state: The merged UI state with the list view shown.
+
+    Returns:
+    -------
+        The analog inputs by name, with name, value and unit; their state and
+        alarm are None (read them with fetch_points).
+
+    Raises:
+    ------
+        ProtocolError: The list view is not shown, has another number of
+            columns, or holds anything but analog inputs.
+
+    """
+    panel = state.get(ScreenID.STDLIST, L_LIST, "PNTLIST")
+    if not panel:
+        msg = "the list view is not shown"
+        raise ProtocolError(msg)
+    headers = [c[0] for c in panel["cols"]]
+    if len(headers) != ANALOG_LIST_COLUMNS or not _analog_rows(panel):
+        msg = (
+            f"not the list of a zone holding only analog inputs: {len(headers)} "
+            f"columns {headers}"
+        )
+        raise ProtocolError(msg)
+    points = {}
+    for row in panel["rows"]:
+        text = _cell_text(row[AC_VALUE])
+        m = _MEASURED.match(text or "")
+        name = html.unescape(str(row[AC_NAME][0]))
+        points[name] = AnalogPoint(
+            name=name,
+            state_icon=None,
+            alarm=None,
+            unit=(m.group(2) or "").strip() or None if m else None,
+            value=float(m.group(1).replace(",", ".")) if m else None,
+        )
+    return points
 
 
 @dataclass(frozen=True)

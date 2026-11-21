@@ -15,6 +15,7 @@ import pytest
 
 from daikin_itm import ChangeoverReference, ItmCommandError, ProtocolError
 from daikin_itm.menu import (
+    HistoryEntry,
     MenuScreen,
     changeover_candidates_from_screen,
     changeover_groups_from_screen,
@@ -197,6 +198,24 @@ def test_captured_history() -> None:
     assert h.entries[0].name == "admin"
 
 
+@pytest.mark.parametrize(
+    ("source", "kind", "user"),
+    [
+        ("", "itm", None),
+        ("Web:user1", "web", "user1"),
+        ("Web:", "web", None),
+        ("Schedule", None, None),
+        ("Auto Change", None, None),
+    ],
+)
+def test_history_source_kind(source: str, kind: str | None, user: str | None) -> None:
+    """The source column says web or the iTM itself; anything else is None."""
+    entry = HistoryEntry(
+        "01/01/2025 10:00", "Management", "1", "x", "AC 01", source, "", "", "", ""
+    )
+    assert (entry.source_kind, entry.source_user) == (kind, user)
+
+
 def test_history_layout_is_checked() -> None:
     """Another number of history columns is refused."""
     s = UIState()
@@ -231,6 +250,25 @@ async def test_fetch_info(itm: FakeITM) -> None:
     assert itm.menu_open is False
     assert itm.open_screens == set()
     assert itm.session is None
+
+
+async def test_clock_is_left_out_of_equality(itm: FakeITM) -> None:
+    """Two reads whose only difference is the clock compare equal."""
+    c = FakeClient(itm)
+    info, first_bar = await c.fetch_info(), await c.fetch_indicators()
+    itm.clock_text = "01/01/2025 10:16:30"
+    itm.bar_clock = "Tue, 31/12\n09:01"
+    later, later_bar = await c.fetch_info(), await c.fetch_indicators()
+    assert (later.clock, later.clock_text, later_bar.clock_text) != (
+        info.clock,
+        info.clock_text,
+        first_bar.clock_text,
+    )
+    assert later == info
+    assert hash(later) == hash(info)
+    assert later_bar == first_bar
+    itm.emergency_stop_active = True
+    assert await c.fetch_indicators() != first_bar
 
 
 async def test_fetch_indicators(itm: FakeITM) -> None:
@@ -330,6 +368,7 @@ async def test_history_progress_times_out(itm: FakeITM) -> None:
     itm.handle = never_done  # type: ignore[method-assign]
     c = FakeClient(itm)
     c.progress_interval = 0
+    c.progress_timeout = 0.05
     with pytest.raises(ItmCommandError, match="loading"):
         await c.fetch_history()
     assert itm.session is None

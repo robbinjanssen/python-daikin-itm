@@ -24,7 +24,8 @@ it opened with its Close or Cancel:
 The expected yearly consumption of 3202 has no input of its own (the web UI shows it
 as text only), so it is not written. A button the iTM shows disabled (``ENABLED 0``)
 is never clicked: the flow raises instead. Every write is confirmed by the client
-with a read in a fresh session (``confirm_*``).
+with a read-back (``confirm_*``); the installer's settings restart the iTM, so
+theirs is a login after the restart.
 
 Validated on a real iTM: the energy types, groups and rules (create, rename,
 delete, copy) and a rule day's ranges with their setpoints. The rest follows the web
@@ -52,7 +53,9 @@ from ._screens import enter_number as _number
 from ._screens import open_below as _open_below
 from ._screens import press_ok as _press_ok
 from ._screens import set_checkbox as _set_checkbox
+from ._util import cleanup as _cleanup
 from ._util import ignore as _ignore
+from ._util import one_login
 from .exceptions import ItmCommandError, ItmError, SessionEnded
 from .protocol import DataType, EventType
 
@@ -209,7 +212,7 @@ async def set_planned(s: _Session, change: PlannedChange) -> bool:
 
     """
     s.require_writable()
-    try:
+    async with _cleanup(lambda: en.leave_plan_screens(s, en.PLANNED, en.PL_CANCEL)):
         await _open_plan(s, en.PS_PLANNED, en.PLANNED)
         await _pick_type(s, en.PLANNED, change.energy_type)
         tab = await _show_tab(s, en.PLANNED, change.year)
@@ -224,8 +227,6 @@ async def set_planned(s: _Session, change: PlannedChange) -> bool:
         return await _press_ok(
             s, "save planned consumption", en.PLANNED, PL_OK, en.PL_CANCEL
         )
-    finally:
-        await en.leave_plan_screens(s, en.PLANNED, en.PL_CANCEL)
 
 
 async def set_actual(s: _Session, change: ActualChange) -> bool:
@@ -242,7 +243,7 @@ async def set_actual(s: _Session, change: ActualChange) -> bool:
 
     """
     s.require_writable()
-    try:
+    async with _cleanup(lambda: en.leave_plan_screens(s, en.ACTUAL, en.AC_CANCEL)):
         await _open_plan(s, en.PS_ACTUAL, en.ACTUAL)
         await _pick_type(s, en.ACTUAL, change.energy_type)
         tab = await _show_tab(s, en.ACTUAL, change.year)
@@ -254,8 +255,6 @@ async def set_actual(s: _Session, change: ActualChange) -> bool:
         return await _press_ok(
             s, "save actual consumption", en.ACTUAL, AC_OK, en.AC_CANCEL
         )
-    finally:
-        await en.leave_plan_screens(s, en.ACTUAL, en.AC_CANCEL)
 
 
 async def _read_year(
@@ -279,13 +278,11 @@ async def confirm_planned(s: _Session, change: PlannedChange) -> en.PlannedYear:
         ItmCommandError: It doesn't show the change.
 
     """
-    try:
+    async with _cleanup(lambda: en.leave_plan_screens(s, en.PLANNED, en.PL_CANCEL)):
         tab = await _read_year(
             s, en.PS_PLANNED, en.PLANNED, change.energy_type, change.year
         )
         year = en.planned_from_screen(s.state).years[tab]
-    finally:
-        await en.leave_plan_screens(s, en.PLANNED, en.PL_CANCEL)
     if change.per_month is not None and year.per_month != change.per_month:
         msg = f"{year.name}: per month is {year.per_month}, not {change.per_month}"
         raise ItmCommandError(msg)
@@ -308,13 +305,11 @@ async def confirm_actual(s: _Session, change: ActualChange) -> en.ActualYear:
         ItmCommandError: It doesn't show the change.
 
     """
-    try:
+    async with _cleanup(lambda: en.leave_plan_screens(s, en.ACTUAL, en.AC_CANCEL)):
         tab = await _read_year(
             s, en.PS_ACTUAL, en.ACTUAL, change.energy_type, change.year
         )
         year = en.actual_from_screen(s.state).years[tab]
-    finally:
-        await en.leave_plan_screens(s, en.ACTUAL, en.AC_CANCEL)
     if change.co2_factor is not None and not _close_to(
         year.co2_factor, change.co2_factor
     ):
@@ -392,7 +387,9 @@ async def create_entry(s: _Session, name: str, *, group: bool = False) -> bool:
         if group
         else (en.TYPE_SETTING, en.TS_OK, en.TS_CANCEL)
     )
-    try:
+    async with _cleanup(
+        lambda: _close(s, setting, cancel), lambda: en.leave_display_list(s, screen)
+    ):
         if name.strip() in en.list_names(s.state, screen):
             msg = f"{_kind(group=group)} {name!r} exists already"
             raise ItmCommandError(msg)
@@ -401,9 +398,6 @@ async def create_entry(s: _Session, name: str, *, group: bool = False) -> bool:
         if sent and setting in s.state.screens:
             await _press_ok(s, f"{label}: settings", setting, ok, cancel)
         return sent
-    finally:
-        await _close(s, setting, cancel)
-        await en.leave_display_list(s, screen)
 
 
 async def rename_entry(
@@ -419,15 +413,13 @@ async def rename_entry(
     s.require_writable()
     screen = await _open_list(s, group=group)
     label = f"rename {_kind(group=group)} {name} to {new_name}"
-    try:
+    async with _cleanup(lambda: en.leave_display_list(s, screen)):
         if new_name.strip() in en.list_names(s.state, screen):
             msg = f"{_kind(group=group)} {new_name!r} exists already"
             raise ItmCommandError(msg)
         await _select_entry(s, screen, name)
         reply = await s.click(screen, en.EL_RENAME, label)
         return await _answer_name(s, reply, screen, label, new_name)
-    finally:
-        await en.leave_display_list(s, screen)
 
 
 async def delete_entry(s: _Session, name: str, *, group: bool = False) -> bool:
@@ -441,7 +433,7 @@ async def delete_entry(s: _Session, name: str, *, group: bool = False) -> bool:
     s.require_writable()
     screen = await _open_list(s, group=group)
     label = f"delete {_kind(group=group)} {name}"
-    try:
+    async with _cleanup(lambda: en.leave_display_list(s, screen)):
         await _select_entry(s, screen, name)
         s.refuse_disabled(screen, en.EL_DELETE, label)
         reply = await s.write(label, screen, en.EL_DELETE)
@@ -449,17 +441,13 @@ async def delete_entry(s: _Session, name: str, *, group: bool = False) -> bool:
             return False
         await s.answer_confirm(screen, reply)
         return True
-    finally:
-        await en.leave_display_list(s, screen)
 
 
 async def read_names(s: _Session, *, group: bool = False) -> tuple[str, ...]:
     """Read the energy type or group names (3205/3207), then close (a read-back)."""
     screen = await _open_list(s, group=group)
-    try:
+    async with _cleanup(lambda: en.leave_display_list(s, screen)):
         return en.list_names(s.state, screen)
-    finally:
-        await en.leave_display_list(s, screen)
 
 
 # -- management rules (3213 -> 3214 -> 3216 / 3217) -----------------------------------
@@ -490,14 +478,12 @@ async def create_rule(s: _Session, name: str) -> bool:
     """
     s.require_writable()
     label = f"create rule {name}"
-    try:
+    async with _cleanup(lambda: en.leave_rules(s)):
         if name.strip() in await _rule_list(s):
             msg = f"rule {name!r} exists already"
             raise ItmCommandError(msg)
         reply = await s.click(en.RULES, en.RL_CREATE, label)
         return await _answer_name(s, reply, en.RULES, label, name)
-    finally:
-        await en.leave_rules(s)
 
 
 async def rename_rule(s: _Session, name: str, new_name: str) -> bool:
@@ -510,7 +496,7 @@ async def rename_rule(s: _Session, name: str, new_name: str) -> bool:
     """
     s.require_writable()
     label = f"rename rule {name} to {new_name}"
-    try:
+    async with _cleanup(lambda: en.leave_rules(s)):
         names = await _rule_list(s)
         if new_name.strip() in names:
             msg = f"rule {new_name!r} exists already"
@@ -518,8 +504,6 @@ async def rename_rule(s: _Session, name: str, new_name: str) -> bool:
         await _select_rule(s, names, name)
         reply = await s.click(en.RULES, en.RL_RENAME, label)
         return await _answer_name(s, reply, en.RULES, label, new_name)
-    finally:
-        await en.leave_rules(s)
 
 
 async def delete_rule(s: _Session, name: str) -> bool:
@@ -532,7 +516,7 @@ async def delete_rule(s: _Session, name: str) -> bool:
     """
     s.require_writable()
     label = f"delete rule {name}"
-    try:
+    async with _cleanup(lambda: en.leave_rules(s)):
         await _select_rule(s, await _rule_list(s), name)
         s.refuse_disabled(en.RULES, en.RL_DELETE, label)
         reply = await s.write(label, en.RULES, en.RL_DELETE)
@@ -540,8 +524,6 @@ async def delete_rule(s: _Session, name: str) -> bool:
             return False
         await s.answer_confirm(en.RULES, reply)
         return True
-    finally:
-        await en.leave_rules(s)
 
 
 async def copy_rule(s: _Session, name: str, new_name: str) -> bool:
@@ -554,7 +536,7 @@ async def copy_rule(s: _Session, name: str, new_name: str) -> bool:
     """
     s.require_writable()
     label = f"copy rule {name} to {new_name}"
-    try:
+    async with _cleanup(lambda: en.leave_rules(s)):
         names = await _rule_list(s)
         if new_name.strip() in names:
             msg = f"rule {new_name!r} exists already"
@@ -562,8 +544,6 @@ async def copy_rule(s: _Session, name: str, new_name: str) -> bool:
         await _select_rule(s, names, name)
         reply = await s.click(en.RULES, en.RL_COPY, label)
         return await _answer_name(s, reply, en.RULES, label, new_name)
-    finally:
-        await en.leave_rules(s)
 
 
 async def copy_rule_calendar(s: _Session, name: str, targets: tuple[str, ...]) -> bool:
@@ -590,7 +570,9 @@ async def copy_rule_calendar(s: _Session, name: str, targets: tuple[str, ...]) -
     if not wanted or name.strip() in wanted:
         msg = f"{label}: name other rules to copy to"
         raise ItmCommandError(msg)
-    try:
+    async with _cleanup(
+        lambda: _close(s, screen, en.CC_CANCEL), lambda: en.leave_rules(s)
+    ):
         await _select_rule(s, await _rule_list(s), name)
         reply = await s.click(en.RULES, en.RL_CALENDAR_COPY, label)
         prompts = [
@@ -626,9 +608,6 @@ async def copy_rule_calendar(s: _Session, name: str, targets: tuple[str, ...]) -
             array=picks,
         )
         return await _press_ok(s, label, screen, en.CC_OK, en.CC_CANCEL)
-    finally:
-        await _close(s, screen, en.CC_CANCEL)
-        await en.leave_rules(s)
 
 
 def _hhmm(value: str) -> tuple[int, int]:
@@ -761,7 +740,7 @@ async def set_rule_day(
         _hhmm(r.end)
     rs = en.RULE_SETTING
     label = f"save rule {rule} ({day})"
-    try:
+    async with _cleanup(lambda: en.leave_rules(s)):
         await en.open_rule(s, rule)
         if not await en.open_rule_day(s, day):
             msg = f"rule {rule}: the iTM does not offer editing {day}"
@@ -790,8 +769,6 @@ async def set_rule_day(
             msg = f"{label}: the rule editor did not close"
             raise ItmCommandError(msg)
         return True
-    finally:
-        await en.leave_rules(s)
 
 
 def same_ranges(
@@ -855,7 +832,7 @@ async def set_room_temperature(
     s.require_writable()
     rt = en.ROOM_TEMP
     label = f"room temperature of {point}"
-    try:
+    async with _cleanup(lambda: en.leave_installer(s)):
         await _open_installer(s, password, en.IN_ROOM_TEMP, rt)
         await s.select_row(rt, en.RT_LIST, _row_named(s.state, rt, en.RT_LIST, point))
         radio = en.RT_OWN if analog_point is None else en.RT_ANALOG
@@ -878,8 +855,6 @@ async def set_room_temperature(
         if reply is not None:
             await s.answer_confirm(rt, reply)
         return await _save_restarting(s, label, rt, en.RT_OK, en.RT_CANCEL)
-    finally:
-        await en.leave_installer(s)
 
 
 async def set_collection_start(s: _Session, password: str, month: str) -> bool:
@@ -892,7 +867,7 @@ async def set_collection_start(s: _Session, password: str, month: str) -> bool:
     """
     s.require_writable()
     cs = en.COLLECT_START
-    try:
+    async with _cleanup(lambda: en.leave_installer(s)):
         await _open_installer(s, password, en.IN_COLLECT, cs)
         _, months = en.collection_from_screen(s.state)
         if months.count(month.strip()) != 1:
@@ -905,8 +880,6 @@ async def set_collection_start(s: _Session, password: str, month: str) -> bool:
         return await _save_restarting(
             s, f"collection start month {month}", cs, en.CM_OK, en.CM_CANCEL
         )
-    finally:
-        await en.leave_installer(s)
 
 
 async def set_conversion(s: _Session, password: str, change: en.ConversionType) -> bool:
@@ -919,7 +892,7 @@ async def set_conversion(s: _Session, password: str, change: en.ConversionType) 
     """
     s.require_writable()
     cv = en.CONVERSION
-    try:
+    async with _cleanup(lambda: en.leave_installer(s)):
         await _open_installer(s, password, en.IN_CONVERSION, cv)
         for key, (_, button) in en.CV_FIELDS.items():
             value = getattr(change, key)
@@ -929,8 +902,6 @@ async def set_conversion(s: _Session, password: str, change: en.ConversionType) 
         return await _save_restarting(
             s, "save energy conversion", cv, en.CV_OK, en.CV_CANCEL
         )
-    finally:
-        await en.leave_installer(s)
 
 
 async def read_installer(s: _Session, password: str) -> en.EnergyInstallerSettings:
@@ -983,6 +954,7 @@ class EnergyMixin(ClientCore):
             lambda s: en.read_energy_navigator(s, wanted, service_password)
         )
 
+    @one_login
     async def set_planned_consumption(  # pylint: disable=too-many-arguments
         self,
         *,
@@ -1004,7 +976,7 @@ class EnergyMixin(ClientCore):
 
         Returns:
         -------
-            The fiscal year as read back in a fresh session; None in a dry run.
+            The fiscal year as read back; None in a dry run.
 
         """
         self._experimental("set the energy navigator's planned consumption")
@@ -1014,6 +986,7 @@ class EnergyMixin(ClientCore):
             return None
         return await self._in_session(lambda s: confirm_planned(s, change))
 
+    @one_login
     async def set_actual_consumption(
         self,
         *,
@@ -1033,7 +1006,7 @@ class EnergyMixin(ClientCore):
 
         Returns:
         -------
-            The fiscal year as read back in a fresh session; None in a dry run.
+            The fiscal year as read back; None in a dry run.
 
         """
         self._experimental("set the energy navigator's actual consumption")
@@ -1046,6 +1019,7 @@ class EnergyMixin(ClientCore):
     async def _energy_names(self, *, group: bool) -> tuple[str, ...]:
         return await self._in_session(lambda s: read_names(s, group=group))
 
+    @one_login
     async def create_energy_type(self, name: str, *, group: bool = False) -> None:
         """Create an energy type (3205), or with group=True an energy group (3207).
 
@@ -1060,6 +1034,7 @@ class EnergyMixin(ClientCore):
             msg = f"{name}: the iTM did not create it"
             raise ItmCommandError(msg)
 
+    @one_login
     async def rename_energy_type(
         self, name: str, new_name: str, *, group: bool = False
     ) -> None:
@@ -1082,6 +1057,7 @@ class EnergyMixin(ClientCore):
             msg = f"{name}: the iTM did not rename it to {new_name}"
             raise ItmCommandError(msg)
 
+    @one_login
     async def delete_energy_type(self, name: str, *, group: bool = False) -> None:
         """Delete an energy type, or with group=True an energy group.
 
@@ -1099,6 +1075,7 @@ class EnergyMixin(ClientCore):
     async def _rule_names(self) -> tuple[str, ...]:
         return await self._in_session(en.read_rules) or ()
 
+    @one_login
     async def create_energy_rule(self, name: str) -> None:
         """Create a management rule (3213), confirmed by the rule list."""
         await self._system_write(lambda s: _ignore(create_rule(s, name)))
@@ -1106,6 +1083,7 @@ class EnergyMixin(ClientCore):
             msg = f"rule {name}: the iTM did not create it"
             raise ItmCommandError(msg)
 
+    @one_login
     async def rename_energy_rule(self, name: str, new_name: str) -> None:
         """Rename a management rule, confirmed by the rule list."""
         await self._system_write(lambda s: _ignore(rename_rule(s, name, new_name)))
@@ -1116,6 +1094,7 @@ class EnergyMixin(ClientCore):
             msg = f"rule {name}: the iTM did not rename it to {new_name}"
             raise ItmCommandError(msg)
 
+    @one_login
     async def delete_energy_rule(self, name: str) -> None:
         """Delete a management rule, confirmed by the rule list."""
         await self._system_write(lambda s: _ignore(delete_rule(s, name)))
@@ -1123,6 +1102,7 @@ class EnergyMixin(ClientCore):
             msg = f"rule {name}: the iTM did not delete it"
             raise ItmCommandError(msg)
 
+    @one_login
     async def copy_energy_rule(self, name: str, new_name: str) -> None:
         """Copy a management rule under a new name, confirmed by the rule editor."""
         await self._system_write(lambda s: _ignore(copy_rule(s, name, new_name)))
@@ -1139,6 +1119,7 @@ class EnergyMixin(ClientCore):
             msg = f"rule {name}: the iTM did not copy it to {new_name}"
             raise ItmCommandError(msg)
 
+    @one_login
     async def copy_energy_rule_calendar(
         self, name: str, targets: Iterable[str]
     ) -> None:
@@ -1166,6 +1147,7 @@ class EnergyMixin(ClientCore):
                 msg = f"rule {target}: the iTM does not show the copy of {name}"
                 raise ItmCommandError(msg)
 
+    @one_login
     async def set_energy_rule_day(
         self, rule: str, day: str, ranges: Iterable[RuleRange]
     ) -> RuleDay | None:
@@ -1179,7 +1161,7 @@ class EnergyMixin(ClientCore):
 
         Returns:
         -------
-            The day as read back in a fresh session; None in a dry run.
+            The day as read back; None in a dry run.
 
         Raises:
         ------
@@ -1220,10 +1202,8 @@ class EnergyMixin(ClientCore):
         try:
             async with self._session() as s:
                 session = s
-                try:
+                async with _cleanup(s.close_menu):
                     await call(s)
-                finally:
-                    await s.close_menu()
         except (SessionEnded, TimeoutError, aiohttp.ClientError) as err:
             if session is None or not session.restarting:
                 raise

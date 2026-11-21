@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING
 
 from ._bases import ClientCore
 from ._screens import clean as _clean
+from ._util import cleanup as _cleanup
 from .exceptions import ItmCommandError
 from .menu import MenuScreen
 
@@ -194,10 +195,8 @@ async def _read_attributes(s: _Session, point: PointRegistration) -> PointAttrib
             f"{what}: no known attributes screen opened ({unknown or reply.dialogs()})"
         )
         raise ItmCommandError(msg)
-    try:
+    async with _cleanup(lambda: _cancel(s, screen, ATTRIBUTE_SCREENS[screen][1], what)):
         return attributes_from_screen(s.state, screen)
-    finally:
-        await _cancel(s, screen, ATTRIBUTE_SCREENS[screen][1], what)
 
 
 async def read_registrations(
@@ -226,18 +225,20 @@ async def read_registrations(
     if REGISTRY not in s.state.screens:
         msg = f"the point registration did not open: {reply.dialogs()}"
         raise ItmCommandError(msg)
-    try:
+
+    async def leave() -> None:
+        # Not while another screen is still open on top of it (an unknown
+        # attributes screen): the session's end discards that instead.
+        if REGISTRY in s.state.screens and not _stray_screens(s.state):
+            await _cancel(s, REGISTRY, RG_CANCEL, "leave the point registration")
+
+    async with _cleanup(leave):
         points = registrations_from_screen(s.state)
         if details:
             points = tuple(
                 [replace(p, attributes=await _read_attributes(s, p)) for p in points]
             )
         return points
-    finally:
-        # Not while another screen is still open on top of it (an unknown
-        # attributes screen): the session's end discards that instead.
-        if REGISTRY in s.state.screens and not _stray_screens(s.state):
-            await _cancel(s, REGISTRY, RG_CANCEL, "leave the point registration")
 
 
 class PointRegistryMixin(ClientCore):  # pylint: disable=too-few-public-methods

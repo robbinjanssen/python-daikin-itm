@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from ._bases import ClientCore, SessionCore
+from ._util import cleanup as _cleanup
+from ._util import one_login
 from .exceptions import ItmCommandError
 from .menu import (
     CG_ADD,
@@ -54,7 +56,7 @@ class ChangeoverSessionMixin(SessionCore):
     async def set_changeover_enabled(self, name: str, *, enabled: bool) -> None:
         """Press Enable or Disable for a group."""
         group = await self._select_changeover_group(name)
-        try:
+        async with _cleanup(lambda: self.close_screen(MenuScreen.CHANGEOVER)):
             if group.enabled == enabled:
                 return
             if enabled and not group.member_count:
@@ -66,8 +68,6 @@ class ChangeoverSessionMixin(SessionCore):
             )
             if reply is not None and reply.dialogs():
                 await self.answer_confirm(MenuScreen.CHANGEOVER, reply)
-        finally:
-            await self.close_screen(MenuScreen.CHANGEOVER)
 
     async def set_changeover_settings(
         self,
@@ -78,7 +78,10 @@ class ChangeoverSessionMixin(SessionCore):
     ) -> None:
         """Pick a group's differential and/or reference method and press OK."""
         await self._select_changeover_group(name)
-        try:
+        async with _cleanup(
+            lambda: self.close_screen(MenuScreen.CHANGEOVER_SETTINGS),
+            lambda: self.close_screen(MenuScreen.CHANGEOVER),
+        ):
             await self.send(MenuScreen.CHANGEOVER, CO_SETTINGS_BUTTON)
             s = MenuScreen.CHANGEOVER_SETTINGS
             if s not in self.state.screens:
@@ -102,14 +105,11 @@ class ChangeoverSessionMixin(SessionCore):
             await self.press_ok(
                 f"save settings of changeover group {name}", s, CS_OK, CLOSE_PART[s]
             )
-        finally:
-            await self.close_screen(MenuScreen.CHANGEOVER_SETTINGS)
-            await self.close_screen(MenuScreen.CHANGEOVER)
 
     async def create_changeover_group(self, name: str) -> None:
         """Press Add, enter the name, OK (the group starts empty, disabled)."""
         await self.open_menu_screen(MB_CHANGEOVER, MenuScreen.CHANGEOVER)
-        try:
+        async with _cleanup(lambda: self.close_screen(MenuScreen.CHANGEOVER)):
             names = [g.name for g in changeover_groups_from_screen(self.state)]
             if name in names:
                 msg = f"changeover group {name!r} exists already"
@@ -132,14 +132,15 @@ class ChangeoverSessionMixin(SessionCore):
                 await self.send(MenuScreen.CHANGEOVER, dialog_id, EventType.CLICK2)
             elif sent.dialogs():
                 await self.answer_confirm(MenuScreen.CHANGEOVER, sent)
-        finally:
-            await self.close_screen(MenuScreen.CHANGEOVER)
 
     async def set_changeover_members(self, name: str, members: tuple[str, ...]) -> None:
         """Make a group's members exactly these (added and removed via Registration)."""
         await self._select_changeover_group(name)
         s = MenuScreen.CHANGEOVER_GROUP
-        try:
+        async with _cleanup(
+            lambda: self.close_screen(MenuScreen.CHANGEOVER_GROUP),
+            lambda: self.close_screen(MenuScreen.CHANGEOVER),
+        ):
             await self.send(MenuScreen.CHANGEOVER, CO_MEMBERS_BUTTON)
             if s not in self.state.screens:
                 msg = f"{name}: the members screen did not open"
@@ -185,14 +186,11 @@ class ChangeoverSessionMixin(SessionCore):
             await self.press_ok(
                 f"save members of changeover group {name}", s, CG_OK, CLOSE_PART[s]
             )
-        finally:
-            await self.close_screen(MenuScreen.CHANGEOVER_GROUP)
-            await self.close_screen(MenuScreen.CHANGEOVER)
 
     async def delete_changeover_group(self, name: str) -> None:
         """Press Delete for a (disabled) group and confirm."""
         group = await self._select_changeover_group(name)
-        try:
+        async with _cleanup(lambda: self.close_screen(MenuScreen.CHANGEOVER)):
             if (
                 group.enabled
                 or self.state.get(MenuScreen.CHANGEOVER, CO_DELETE, "ENABLED") == 0
@@ -204,15 +202,13 @@ class ChangeoverSessionMixin(SessionCore):
             )
             if reply is not None:
                 await self.answer_confirm(MenuScreen.CHANGEOVER, reply)
-        finally:
-            await self.close_screen(MenuScreen.CHANGEOVER)
 
 
 class ChangeoverMixin(ClientCore):
     """ItmClient's auto changeover methods."""
 
     async def _changeover_result(self, name: str) -> ChangeoverGroup | None:
-        """Return the group as read in a fresh session, or None in a dry run."""
+        """Return the group as read back, or None in a dry run."""
         if self.dry_run:
             return None
         for group in await self.fetch_changeover_groups(details=True):
@@ -220,6 +216,7 @@ class ChangeoverMixin(ClientCore):
                 return group
         return None
 
+    @one_login
     async def set_changeover_enabled(
         self,
         name: str,
@@ -234,7 +231,7 @@ class ChangeoverMixin(ClientCore):
 
         Returns:
         -------
-            The group as read back in a fresh session, or None in a dry run.
+            The group as read back, or None in a dry run.
 
         Raises:
         ------
@@ -242,11 +239,8 @@ class ChangeoverMixin(ClientCore):
 
         """
         self._writable()
-        async with self._session() as s:
-            try:
-                await s.set_changeover_enabled(name, enabled=enabled)
-            finally:
-                await s.close_menu()
+        async with self._session() as s, _cleanup(s.close_menu):
+            await s.set_changeover_enabled(name, enabled=enabled)
         result = await self._changeover_result(name)
         if result is not None and result.enabled != enabled:
             verb = "enable" if enabled else "disable"
@@ -254,6 +248,7 @@ class ChangeoverMixin(ClientCore):
             raise ItmCommandError(msg)
         return result
 
+    @one_login
     async def set_changeover_settings(
         self,
         name: str,
@@ -271,19 +266,16 @@ class ChangeoverMixin(ClientCore):
 
         Returns:
         -------
-            The group as read back in a fresh session, or None in a dry run.
+            The group as read back, or None in a dry run.
 
         """
         self._writable()
         if differential is None and reference is None:
             return await self._changeover_result(name)
-        async with self._session() as s:
-            try:
-                await s.set_changeover_settings(
-                    name, differential=differential, reference=reference
-                )
-            finally:
-                await s.close_menu()
+        async with self._session() as s, _cleanup(s.close_menu):
+            await s.set_changeover_settings(
+                name, differential=differential, reference=reference
+            )
         result = await self._changeover_result(name)
         if result is not None and (
             (differential is not None and result.differential != differential)
@@ -293,6 +285,7 @@ class ChangeoverMixin(ClientCore):
             raise ItmCommandError(msg)
         return result
 
+    @one_login
     async def create_changeover_group(
         self,
         name: str,
@@ -318,11 +311,8 @@ class ChangeoverMixin(ClientCore):
 
         """
         self._writable()
-        async with self._session() as s:
-            try:
-                await s.create_changeover_group(name)
-            finally:
-                await s.close_menu()
+        async with self._session() as s, _cleanup(s.close_menu):
+            await s.create_changeover_group(name)
         if self.dry_run:
             return None
         if await self._changeover_result(name) is None:
@@ -336,6 +326,7 @@ class ChangeoverMixin(ClientCore):
             )
         return await self._changeover_result(name)
 
+    @one_login
     async def set_changeover_members(
         self, name: str, members: tuple[str, ...]
     ) -> ChangeoverGroup | None:
@@ -349,21 +340,19 @@ class ChangeoverMixin(ClientCore):
 
         Returns:
         -------
-            The group as read back in a fresh session, or None in a dry run.
+            The group as read back, or None in a dry run.
 
         """
         self._writable()
-        async with self._session() as s:
-            try:
-                await s.set_changeover_members(name, tuple(members))
-            finally:
-                await s.close_menu()
+        async with self._session() as s, _cleanup(s.close_menu):
+            await s.set_changeover_members(name, tuple(members))
         result = await self._changeover_result(name)
         if result is not None and list(result.members) != list(dict.fromkeys(members)):
             msg = f"{name}: the iTM did not take the members: {result.members}"
             raise ItmCommandError(msg)
         return result
 
+    @one_login
     async def delete_changeover_group(self, name: str) -> None:
         """Delete a disabled auto changeover group.
 
@@ -377,11 +366,8 @@ class ChangeoverMixin(ClientCore):
 
         """
         self._writable()
-        async with self._session() as s:
-            try:
-                await s.delete_changeover_group(name)
-            finally:
-                await s.close_menu()
+        async with self._session() as s, _cleanup(s.close_menu):
+            await s.delete_changeover_group(name)
         if not self.dry_run and await self._changeover_result(name) is not None:
             msg = f"{name}: the iTM did not delete the group"
             raise ItmCommandError(msg)
