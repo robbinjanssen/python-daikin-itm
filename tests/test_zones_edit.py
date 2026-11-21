@@ -13,6 +13,7 @@ from daikin_itm.zones_edit import (
     add_zone,
     delete_zone,
     move_zone,
+    read_zone_members,
     set_point_icon,
     set_zone_icon,
     set_zone_member_order,
@@ -206,6 +207,108 @@ async def test_jump_refusals(itm: FakeZonesITM) -> None:
     with pytest.raises(ItmCommandError, match="order screen did not open"):
         await run(itm, set_zone_member_order, "Zone A", (a, c), use_jump=True)
     assert itm.zone("Zone A").points == [a, b, c]
+    assert itm.open_screens == set()
+
+
+async def test_delete_refused_while_disabled(
+    itm: FakeZonesITM, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A zone the iTM keeps the delete button disabled for is not deleted."""
+    original = itm._z_select_row
+
+    def delete_disabled(screen: int, part: int, row: int) -> Any:
+        updates = original(screen, part, row)
+        if screen == 1600:
+            return [*updates, ("UPDATE", 1600, [], [(7, "ENABLED", 0)])]
+        return updates
+
+    monkeypatch.setattr(itm, "_z_select_row", delete_disabled)
+    with pytest.raises(ItmCommandError, match="does not allow deleting 'Zone A'"):
+        await run(itm, delete_zone, "Zone A")
+    assert "Zone A" in names(itm)
+    assert not [r for r in itm.requests if (r["screen"], r["part"]) == (1600, 7)]
+    assert itm.open_screens == set()
+
+
+SCREEN_BUTTONS = {
+    (1600, 8): "the member screen",
+    (1600, 9): "the zone settings screen",
+    (1600, 10): "the move screen",
+    (1700, 2): "the point settings screen",
+}
+
+
+@pytest.mark.parametrize(
+    ("flow", "args", "button"),
+    [
+        (move_zone, ("Zone A", "Building"), (1600, 10)),
+        (read_zone_members, ("Zone A",), (1600, 8)),
+        (set_zone_members, ("Zone A", ()), (1600, 8)),
+        (set_zone_member_order, ("Zone A", ()), (1600, 8)),
+        (set_zone_icon, ("Zone A", 1004), (1600, 9)),
+        (set_point_icon, (None, 2102), (1700, 2)),
+    ],
+)
+async def test_a_screen_that_does_not_open(
+    flow: Callable[..., Awaitable[Any]],
+    args: tuple[Any, ...],
+    button: tuple[int, int],
+    itm: FakeZonesITM,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A button that opens nothing is refused; nothing changes."""
+    original = itm._zones_event
+
+    def open_nothing(ev: dict[str, Any]) -> Any:
+        if (ev["screen"], ev["part"]) == button:
+            return [("UPDATE", button[0], [], [])]
+        return original(ev)
+
+    monkeypatch.setattr(itm, "_zones_event", open_nothing)
+    first = itm.units[0].name
+    args = tuple(first if a is None else a for a in args)
+    with pytest.raises(
+        ItmCommandError, match=f"^{SCREEN_BUTTONS[button]} did not open$"
+    ):
+        await run(itm, flow, *args)
+    assert itm.zone("Zone A") in itm.tree.children
+    assert itm.zone("Zone A").icon == 1000
+    assert itm.point_icons[first] == 2114
+    assert itm.open_screens == set()
+
+
+async def test_members_that_do_not_change(
+    itm: FakeZonesITM, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An add the iTM ignores is refused before OK."""
+    original = itm._z_members_event
+
+    def ignore_add(part: int, event: int) -> Any:
+        if part == 7:
+            return [("UPDATE", 1601, [], [])]
+        return original(part, event)
+
+    monkeypatch.setattr(itm, "_z_members_event", ignore_add)
+    first = itm.units[0].name
+    with pytest.raises(
+        ItmCommandError, match=rf"^Zone A: the members did not become \['{first}'\]$"
+    ):
+        await run(itm, set_zone_members, "Zone A", (first,))
+    assert itm.zone("Zone A").points == []
+    assert not [r for r in itm.requests if (r["screen"], r["part"]) == (1601, 12)]
+    assert itm.open_screens == set()
+
+
+async def test_an_order_that_can_not_be_made(itm: FakeZonesITM) -> None:
+    """A member named twice can't fill both rows: refused before OK."""
+    a, b = (u.name for u in itm.units[:2])
+    assert await run(itm, set_zone_members, "Zone A", (a, b)) is True
+    with pytest.raises(
+        ItmCommandError,
+        match=rf"^Zone A: the order did not become \['{a}', '{a}'\]$",
+    ):
+        await run(itm, set_zone_member_order, "Zone A", (a, a))
+    assert itm.zone("Zone A").points == [a, b]
     assert itm.open_screens == set()
 
 

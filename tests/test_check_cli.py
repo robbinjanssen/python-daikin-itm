@@ -283,6 +283,38 @@ def test_a_failing_read_is_reported_and_the_run_goes_on(
     )
 
 
+def test_long_differences_are_cut_short(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--show cuts a long value and lists only the first differing paths."""
+    vary_fetch_info(
+        monkeypatch,
+        lambda info, n: replace(info, version="v" * 200 + str(n), build=str(n)),
+    )
+    monkeypatch.setattr(check_cli, "SHOWN_LINES", 1)
+    with pytest.raises(SystemExit):
+        check("shared-session", *INFO_ONLY, "--show")
+    out = capsys.readouterr().out
+    shown = "'" + "v" * (check_cli.SHOWN_VALUE_CHARS - 1) + "..."
+    assert f".version: alone | in block | again: {shown} | {shown} | {shown}" in out
+    assert ".build:" not in out
+    assert "    ... 1 more" in out
+
+
+def test_a_long_error_message_is_cut_short(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--show prints at most MESSAGE_CHARS of an error's message."""
+
+    async def broken(_self: ItmClient) -> Any:
+        raise ItmCommandError("x" * 300)
+
+    monkeypatch.setattr(CheckClient, "fetch_info", broken)
+    check("reads", *INFO_ONLY, "--show")
+    message = "x" * check_cli.MESSAGE_CHARS + "..."
+    assert lines(capsys)["fetch_info"].endswith(f"ItmCommandError: {message}")
+
+
 @pytest.mark.parametrize(
     ("failing_call", "stage"), [(1, "alone"), (2, "in block"), (3, "in block again")]
 )
@@ -350,6 +382,10 @@ def test_a_derived_read_finds_its_names_without_its_source(
     monkeypatch.setattr(CheckClient, "fetch_schedules", fetch_schedules)
     check("reads", "--only", "fetch_schedule")
     assert "none found" in lines(capsys)["fetch_schedule"]
+    check("shared-session", "--only", "fetch_schedule")
+    out = lines(capsys)
+    assert out["fetch_schedule"].split() == ["fetch_schedule", "none", "found"]
+    assert "0 reads: 0 same, 0 different, 0 failed" in out["0"]
 
 
 def test_a_derived_read_whose_source_fails(

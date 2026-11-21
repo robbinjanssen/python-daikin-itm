@@ -146,7 +146,8 @@ def test_email_server_repr_hides_the_password() -> None:
     """An EmailServer's repr leaves the password out."""
     server = EmailServer(smtp_address="mail.example.com", password=SECRET)
     assert SECRET not in repr(server)
-    assert "mail.example.com" in repr(server)
+    assert repr(server) == repr(EmailServer(smtp_address="mail.example.com"))
+    assert repr(server) != repr(EmailServer(smtp_address="other.example.com"))
 
 
 async def test_plain_http_warns_once_per_client(
